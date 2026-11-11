@@ -28,6 +28,13 @@ from app.policy.feasible import (
     feasible_set,
     violation_matrix,
 )
+from app.routing.floor_select import (
+    BELOW_QUALITY_FLOOR,
+    CONTEXT_TOO_SMALL,
+    OVER_BUDGET,
+    FloorPick,
+    qualify,
+)
 from app.routing.pricing import price_call
 from app.routing.quality import QualityResolver
 from app.routing.signals import SignalStore
@@ -40,6 +47,16 @@ if TYPE_CHECKING:
 log = logging.getLogger("serving.routing")
 
 _ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
+
+
+def _clamp_to_best_allowed(tier: str, allowed: list[PoolCandidate]) -> str:
+    """`tier`, clamped DOWN to the best tier among `allowed` -- residency
+    beats the risk floor (CLAUDE.md rule 8): a floor above every allowed tier
+    lands on the best allowed one, never on a tier policy excluded."""
+    best_allowed_order = max(_ORDER[c.tier] for c in allowed)
+    if _ORDER[tier] > best_allowed_order:
+        return next(t for t, o in _ORDER.items() if o == best_allowed_order)
+    return tier
 
 
 def complexity_tier(complexity: float, thresholds: dict) -> str:
@@ -173,6 +190,29 @@ class RoutingDecision:
     # a RoutingDecision without going through `_select` (no such caller
     # exists today).
     tier_target: str | None = None
+    # B80: the quality-floor record (spec §4.4/§4.5) -- None when the request
+    # had no floor or the mode is off. Content-free: names, numbers, enums.
+    quality_floor: dict | None = None
+
+    def scoring_record(self) -> dict | None:
+        """`scoring.to_record()`, plus `quality_floor` beside it when set.
+        The ranking part is unchanged, so it stays recomputable offline."""
+        if self.scoring is None:
+            return None
+        record = self.scoring.to_record()
+        if self.quality_floor is not None:
+            record["quality_floor"] = self.quality_floor
+        return record
+
+
+# B80: `RejectedCandidate.code` for the floor branch's own refusals. "over
+# budget" and "below risk floor" stay uncoded, as on today's path.
+_FLOOR_CODES = {BELOW_QUALITY_FLOOR: "quality_floor",
+                CONTEXT_TOO_SMALL: "context_window"}
+# The parenthetical in an unmet (enforce) decision's reason.
+_UNMET_WORDS = {"unmet_no_qualifier": "no qualifying model",
+                "unmet_context": "context window too small",
+                "unmet_budget": OVER_BUDGET}
 
 
 class Router:
@@ -387,16 +427,31 @@ class Router:
                 rejected=tuple((r.name, r.code) for r in rejected),
                 core=core)
 
+        # B80: a quality floor is live only with a floor for this workload and
+        # mode shadow/enforce; otherwise today's tiered path, untouched.
+        if (ctx.quality_floor is not None
+                and ctx.quality_floor_mode in ("shadow", "enforce")):
+            return self._select_floor(ctx, allowed, rejected, circuit_rejections,
+                                      tokens_after, complexity, min_tier, out_tokens)
+        return self._select_tiered(ctx, allowed, rejected, circuit_rejections,
+                                   tokens_after, complexity, min_tier, out_tokens)
+
+    def _select_tiered(self, ctx: ExecutionPolicyContext,
+                       allowed: list[PoolCandidate],
+                       rejected: list[RejectedCandidate],
+                       circuit_rejections: dict[str, RejectedCandidate],
+                       tokens_after: int, complexity: float,
+                       min_tier: str | None, out_tokens: int) -> RoutingDecision:
+        """Today's path, steps 2-5: tier targeting, budget, circuits, score.
+        `allowed` is the non-empty policy-eligible set; `rejected` (mutated)
+        already holds its eligibility rejections."""
         # 2. target tier from complexity + risk floor + escalation, clamped to
         #    the best residency-permitted tier
         targets = [self._complexity_tier(complexity),
                    self._s.routing.risk_floors[ctx.risk_class]]
         if min_tier:
             targets.append(min_tier)
-        target = max(targets, key=lambda t: _ORDER[t])
-        best_allowed_order = max(_ORDER[c.tier] for c in allowed)
-        if _ORDER[target] > best_allowed_order:
-            target = next(t for t, o in _ORDER.items() if o == best_allowed_order)
+        target = _clamp_to_best_allowed(max(targets, key=lambda t: _ORDER[t]), allowed)
         avail = sorted({c.tier for c in allowed}, key=lambda t: _ORDER[t])
         # the clamp above guarantees a match exists; avail[-1] is a defensive fallback
         tier_pick = next((t for t in avail if _ORDER[t] >= _ORDER[target]), avail[-1])
@@ -494,20 +549,7 @@ class Router:
         #    add a candidate back in. `self._signals` is a persistent,
         #    traffic-fed store shared with the Gateway (see app/main.py) --
         #    NOT a fresh one per call.
-        cached_pricing = {}
-        for c, _e in eligible:
-            try:
-                p = (self._reg.price_for(c.name) if self._reg
-                     else self._s.pricing.models[c.name])
-            except KeyError:
-                continue
-            cached_pricing[c.name] = "priced" if p.cached_input is not None else "unpriced"
-
-        result = self._strategy.rank(
-            eligible, ctx=ctx, tokens_after=tokens_after,
-            weights=self._s.routing.weights, quality_resolver=self._quality,
-            signals=self._signals, signals_cfg=self._s.routing.signals,
-            cached_pricing=cached_pricing)
+        result = self._rank(eligible, ctx, tokens_after)
         ordered = result.ordered
         chosen, est = ordered[0].candidate, ordered[0].est_cost_usd
         for sc in ordered[1:]:
@@ -529,3 +571,123 @@ class Router:
             quality_score=chosen_q.value, quality_source=chosen_q.source,
             scoring=result, circuit_bypass=circuit_bypass,
             tier_target=target)
+
+    def _rank(self, eligible: list[tuple[PoolCandidate, float]],
+              ctx: ExecutionPolicyContext, tokens_after: int) -> "RankResult":
+        """Step 5's strategy call over an already-filtered set."""
+        cached_pricing = {}
+        for c, _e in eligible:
+            try:
+                p = (self._reg.price_for(c.name) if self._reg
+                     else self._s.pricing.models[c.name])
+            except KeyError:
+                continue
+            cached_pricing[c.name] = "priced" if p.cached_input is not None else "unpriced"
+
+        return self._strategy.rank(
+            eligible, ctx=ctx, tokens_after=tokens_after,
+            weights=self._s.routing.weights, quality_resolver=self._quality,
+            signals=self._signals, signals_cfg=self._s.routing.signals,
+            cached_pricing=cached_pricing)
+
+    # --- B80: qualify-then-cheapest under a quality floor (spec §4.4) --------
+
+    def _floor_choose(self, pick: FloorPick, ctx: ExecutionPolicyContext,
+                      circuit_rejections: dict[str, RejectedCandidate],
+                      tokens_after: int):
+        """The cheapest qualifier after the open-circuit drop, score breaking
+        ties. If every qualifier is open, bypass the breaker WITHIN the
+        qualifiers (never leaves them). Returns `(scored, result, open_dropped,
+        bypass)`; `scored` is the chosen ScoredCandidate."""
+        qualifiers = pick.qualifiers
+        open_dropped: list[RejectedCandidate] = []
+        bypass = False
+        if circuit_rejections:
+            closed = [(c, e) for c, e in qualifiers if c.name not in circuit_rejections]
+            if closed:
+                open_dropped = [circuit_rejections[c.name] for c, _e in qualifiers
+                                if c.name in circuit_rejections]
+                qualifiers = closed
+            else:
+                bypass = True
+        result = self._rank(qualifiers, ctx, tokens_after)
+        # `ordered` is best-first, so its index is the score tie-break.
+        scored = min(enumerate(result.ordered),
+                     key=lambda i_sc: (i_sc[1].est_cost_usd, i_sc[0]))[1]
+        return scored, result, open_dropped, bypass
+
+    def _select_floor(self, ctx: ExecutionPolicyContext,
+                      allowed: list[PoolCandidate],
+                      rejected: list[RejectedCandidate],
+                      circuit_rejections: dict[str, RejectedCandidate],
+                      tokens_after: int, complexity: float,
+                      min_tier: str | None, out_tokens: int) -> RoutingDecision:
+        """Mode shadow/enforce with a floor. Qualifiers are a subset of
+        `allowed` (rule 3) at or above the hard floor `max(risk_floor,
+        min_tier)` clamped to the best allowed tier exactly as today's target
+        is (rule 8). Enforce + met: the cheapest qualifier. Anything else:
+        today's decision, with the floor record attached."""
+        floor, mode, workload = ctx.quality_floor, ctx.quality_floor_mode, ctx.workload
+        hard_tiers = [self._s.routing.risk_floors[ctx.risk_class]]
+        if min_tier:
+            hard_tiers.append(min_tier)
+        hard = _clamp_to_best_allowed(max(hard_tiers, key=lambda t: _ORDER[t]), allowed)
+        pick = qualify(
+            allowed, floor=floor, workload=workload, hard_tier=hard,
+            prompt_tokens=tokens_after, output_tokens=out_tokens,
+            max_cost_usd=ctx.max_cost_usd,
+            est_cost=lambda c: self._est_cost(c, tokens_after, out_tokens),
+            lower=lambda name: self._quality.resolve_lower(name, workload))
+        choice = (self._floor_choose(pick, ctx, circuit_rejections, tokens_after)
+                  if pick.status == "met" else None)
+
+        def record(chosen_name: str, status: str, shadow=None) -> dict:
+            lower, source = pick.bounds[chosen_name]
+            return {
+                "floor": floor, "mode": mode, "workload": workload, "status": status,
+                "chosen_lower": lower, "chosen_lower_source": source,
+                "bounds": {n: [lb, src] for n, (lb, src) in pick.bounds.items()},
+                "shadow_choice": shadow.candidate.name if shadow else None,
+                "shadow_est_cost_usd": shadow.est_cost_usd if shadow else None,
+            }
+
+        if mode == "enforce" and choice is not None:
+            scored, result, open_dropped, bypass = choice
+            chosen = scored.candidate
+            rejected = list(rejected)
+            rejected.extend(
+                RejectedCandidate(name=c.name, provider=c.provider, tier=c.tier,
+                                  display_name=c.display_name,
+                                  reason=pick.rejections[c.name],
+                                  code=_FLOOR_CODES.get(pick.rejections[c.name]))
+                for c in allowed if c.name in pick.rejections)
+            rejected.extend(open_dropped)
+            rejected.extend(
+                RejectedCandidate(name=sc.candidate.name, provider=sc.candidate.provider,
+                                  tier=sc.candidate.tier,
+                                  display_name=sc.candidate.display_name,
+                                  reason="higher cost", code="higher_cost")
+                for sc in result.ordered if sc is not scored)
+            lower, source = pick.bounds[chosen.name]
+            reason = (f"quality floor {floor:.2f} (workload {workload}): cheapest "
+                      f"qualifying, lower bound {lower:.2f} ({source})")
+            if bypass:
+                reason += "; circuit bypass: every qualifying candidate is open"
+            return RoutingDecision(
+                chosen=chosen, est_cost_usd=scored.est_cost_usd, reason=reason,
+                rejected=rejected,
+                quality_score=scored.quality.value, quality_source=scored.quality.source,
+                scoring=result, circuit_bypass=bypass, tier_target=chosen.tier,
+                quality_floor=record(chosen.name, "met"))
+
+        decision = self._select_tiered(ctx, allowed, list(rejected), circuit_rejections,
+                                       tokens_after, complexity, min_tier, out_tokens)
+        if mode == "enforce":
+            decision.reason = (f"quality floor {floor:.2f} unmet "
+                               f"({_UNMET_WORDS[pick.status]}): {decision.reason}")
+            decision.quality_floor = record(decision.chosen.name, pick.status)
+        else:
+            decision.quality_floor = record(
+                decision.chosen.name, f"shadow_{pick.status}",
+                shadow=choice[0] if choice is not None else None)
+        return decision
