@@ -106,6 +106,65 @@ Residency runs **first** and wins: a high-risk `onprem_only` request floors to t
 *allowed* (on-prem) tier and sets `require_verification` — it is never promoted to a cloud
 tier to satisfy the risk floor.
 
+### The quality-floor path (B80, off by default)
+
+Everything above is the **length-tier path**. For a request that has a workload with a
+quality floor, and whose effective mode is `enforce`, the router takes a different path
+and prompt length stops deciding suitability. Length still drives the cost estimate and
+context fit. With the mode `off`, no workload, or no floor for the workload, the
+length-tier path above runs unchanged. Configuration and precedence:
+[`per-app-config.md`](../reference/per-app-config.md) (`quality_floors`).
+
+On the floor path the router, in order:
+
+1. Starts from the same eligible set (`feasible_set`), so residency, regions, retention
+   and allow-lists have already run. A floor cannot widen it (rule 3).
+2. Computes the **hard tier floor**: `max(risk_floors[risk_class], escalation_min_tier)`,
+   clamped down to the best allowed tier exactly as the target is above. Residency beats
+   the risk floor here too (rule 8): a high-risk `onprem_only` request is never lifted to
+   cloud to satisfy a floor.
+3. Keeps the **qualifiers**: eligible candidates at or above the hard tier whose
+   calibrated lower bound for the workload is at least the floor. A model with no
+   calibrated bound never qualifies.
+4. Drops qualifiers whose declared context window cannot hold the prompt plus the expected
+   output (a model with no declared window is assumed to fit), then those whose estimated
+   cost exceeds the request's `max_cost_usd`.
+5. Drops open circuits among the qualifiers. If every qualifier is open, it bypasses the
+   breaker **within the qualifiers**; it never steps outside them.
+6. Picks the qualifier with the **lowest estimated cost**, whatever its tier. The usual
+   score only breaks ties. Estimated cost uses post-compression tokens, as everywhere else.
+
+Every eligible model that was not picked is listed as rejected with a reason: `below
+quality floor` (bound under the floor, or unknown), `below risk floor`, `context window
+too small`, `over budget`, `circuit_open` or `higher cost`.
+
+**Statuses.** The decision carries a `floor_status`:
+
+| `floor_status` | Meaning |
+|---|---|
+| `met` | Enforced, and a qualifier was picked. The route reason is `quality_floor`. |
+| `unmet_no_qualifier` | No eligible model had a bound that clears the floor at or above the hard tier. |
+| `unmet_context` | Qualifiers existed, but none fit the context. |
+| `unmet_budget` | Qualifiers fit, but all exceed the request's cost cap. |
+| `shadow_met`, `shadow_unmet_no_qualifier`, `shadow_unmet_context`, `shadow_unmet_budget` | Mode `shadow`: the same computation, recorded but not acted on. |
+
+**Fallback.** On any `unmet_*` status the request is routed by the length-tier path above
+and the decision reason is prefixed `quality floor 0.80 unmet (...)`. A floor never
+rejects a request that the tiered path could serve. In `shadow` the decision is always
+the tiered one; the would-be choice and its estimated cost are recorded beside it
+(`shadow_choice`, `shadow_est_cost_usd`).
+
+**Failover and escalation** call the selection again with the failed model excluded or a
+raised tier floor. A failed qualifier is replaced by the next-cheapest qualifier, and an
+escalation raises the hard tier floor. A pinned model is the only eligible candidate; if
+it does not qualify the status is `unmet_no_qualifier` and the pin is served.
+
+**Where the bounds come from.** Only calibration sets an admin has applied
+([`quality-calibration.md`](../reference/quality-calibration.md) §11). Published quality and
+tier defaults never supply a bound, and nothing is learned online.
+
+What gets recorded: [`routing-observability.md`](../reference/routing-observability.md) §6.
+
 ---
 
 ## Part 2 — what the router does NOT key on: modality and model capability

@@ -233,7 +233,16 @@ probe cost.
 > of agentic workloads. The same review revised **B73**. Ranked: B80 and B81 first, then
 > B82, B73, B83, B84. None is designed yet; each needs a spec before code.
 
-## B80 — FEATURE: quality floor as a hard routing limit (cheapest eligible model whose lower quality bound clears it)  🔴 OPEN
+## B80 — FEATURE: quality floor as a hard routing limit (cheapest eligible model whose lower quality bound clears it)  ✅ RESOLVED (2026-11-10, feat/b80-quality-floor)
+
+> **Resolved.** Evidence: `app/routing/quality_floor.py` and `app/routing/floor_select.py`
+> with `Router._select_floor` in `app/routing/router.py`; bounds stored via
+> `app/apps/calibration_sets.py::validate_bounds` and `model_quality_bounds`; per-app
+> `quality_floors` / `quality_floor_mode` in `app/api/admin_routes.py`; offline arm in
+> `app/eval/floor_fit.py` and `scripts/floor_fit.py`. Docs:
+> `docs/reference/per-app-config.md`. Built as written in the Shape below, off by default
+> (modes `off | shadow | enforce`), not the `routing.tier_targeting` switch named in the
+> 2026-11-10 extension. B99 stays open.
 
 **Why.** Quality is one weighted term in step-6 scoring, so the router trades it against
 cost and never guarantees it. Measured (arXiv v1 §7): on a benchmark at ceiling the router

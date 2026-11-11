@@ -938,6 +938,85 @@ a full outage for all applications, not just aliased ones:
 ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS model_aliases JSON;
 ```
 
+## `quality_floors` and `quality_floor_mode` -- cheapest model that clears a quality floor
+
+A quality floor says: for this workload, a model must have a calibrated quality **lower
+bound** of at least this value before it may serve. Among the eligible models that clear
+it, the router picks the cheapest, whatever its tier. It is **off by default**. How the
+router uses it: [`docs/architecture/routing-tier-selection.md`](../architecture/routing-tier-selection.md)
+(the quality-floor path). What it records: [`routing-observability.md`](./routing-observability.md)
+§6. Where the bounds come from: [`quality-calibration.md`](./quality-calibration.md) §11.
+
+A floor is **placement-neutral and protection-neutral**. It only chooses among models the
+request may already use, after residency, regions, retention, allow-lists and the risk
+floor have run. It never makes a model eligible, never reaches a provider `onprem_only`
+excluded, and never lifts a high-risk request above the best allowed tier. A model with no
+calibrated bound for the workload never clears a floor.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `quality_floors` | `{workload: number} \| null` | This app's floor per workload, each in `(0, 1]`. Workload keys are the lower-case workload slug (`^[a-z0-9][a-z0-9._-]{0,63}$`, the same tag a request carries). `null` = no app floors; the deployment's apply. |
+| `quality_floor_mode` | `off \| shadow \| enforce \| null` | `off`: no floor is applied for this app. `shadow`: compute what the floor would choose and record it, but route as today. `enforce`: route by the floor. `null` = inherit the deployment `mode`. |
+
+**Deployment side.** `config/routing.yaml` owns the deployment default and the per-workload
+floors:
+
+```yaml
+quality_floors:
+  mode: "off"          # off | shadow | enforce; quote it, a bare off is a YAML boolean
+  workloads:
+    claims: 0.80
+    extraction: 0.70
+```
+
+The config lint refuses to boot on `QUALITY_FLOOR_MODE_UNKNOWN`,
+`QUALITY_FLOOR_WORKLOAD_INVALID` (not a valid lower-case workload slug) and
+`QUALITY_FLOOR_OUT_OF_RANGE` (not a finite number in `(0, 1]`). The block is part of
+`routing_policy_version`, so changing it changes that hash.
+
+**Precedence.**
+
+- **Floor: raise-only.** The effective floor for an (app, workload) is the **larger** of the
+  deployment floor and the app floor. An app may add a floor for a workload the deployment
+  does not list. An app value *below* the deployment floor is accepted but has no effect;
+  it is not an error, so raising the deployment floor later never breaks a saved policy.
+- **Mode: not raise-only.** The app's `quality_floor_mode`, else the deployment `mode`. The
+  mode cannot widen eligibility, so an app may set `enforce` under a `shadow` deployment
+  (a pilot) or `off` under an `enforce` one.
+- A request with no workload, or whose workload has no floor, or an effective mode of
+  `off`, routes exactly as it does without this feature.
+
+**Validation (422, named message).** `quality_floor_mode` not one of the three values;
+`quality_floors` not a non-empty map (clear it with `reset: ["quality_floors"]`); a
+workload key that is not a lower-case slug; a floor that is not a finite number in
+`(0, 1]` (a boolean is refused). Like every field here, a PUT carrying `quality_floors`
+**replaces** the whole map, and `reset: ["quality_floors", "quality_floor_mode"]` returns
+both to inherit.
+
+**Version.** Set values are folded into `app_policy_version`, so changing a floor or mode
+changes the version; an app that sets neither keeps its hash.
+
+**Example.** The deployment floors `claims` at 0.80 in mode `shadow`. This app enforces,
+raises `claims` and adds a floor of its own for `summaries`:
+
+```json
+{"quality_floor_mode": "enforce",
+ "quality_floors": {"claims": 0.90, "summaries": 0.60}}
+```
+
+`claims` requests need a lower bound of 0.90 (the larger of 0.80 and 0.90); `summaries`
+requests need 0.60. Every other app stays in `shadow`. A value of `0.70` for `claims`
+would change nothing: the deployment's 0.80 wins.
+
+**Fallback, never reject.** When no eligible model qualifies, the request is routed as
+today and the response and trace say why (`floor_status`, see the architecture note). A
+floor never turns a servable request into a rejection.
+
+**Deploy.** Two nullable columns on `app_policies`. Run the `ALTER`s in
+[`docs/guides/admin-setup.md`](../guides/admin-setup.md) (the "Per-app quality floors (B80)"
+paragraph) **before rolling the image**: the policy row is read on every request, so an
+unmigrated table fails every `/v1/*` request.
+
 ## Model eligibility is two-sided
 
 Worth restating here because it is asked as a policy question and answered in two places:

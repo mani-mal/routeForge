@@ -545,27 +545,53 @@ and `force_registry_mismatch` (default `false`).
 A validation failure (unsupported schema, a `set_id` that doesn't match the file's own
 content hash, an unknown model, a unit `workload` that is not null or a lower-case
 workload slug, an out-of-range score, duplicate `(model, workload)` units, no recommended
-units at all, or a registry-version mismatch without `force_registry_mismatch`) is `422`
+units and no lower bound, a recommended or `no_change` unit whose `ci_low` is non-finite,
+outside `[0, 1]` or above its `mean`, or a registry-version mismatch without
+`force_registry_mismatch`) is `422`
 and writes nothing. Re-applying an already-applied `set_id` is `409`. A dry run previews
 each recommended unit's current effective quality/source and proposed score, whether a
 `customer` row would still win (`customer_wins`), and any more specific existing rows
-that will keep winning for their workload (`shadowed_by`), without writing anything; an
-apply writes one `model_quality` row per recommended unit, refreshes this replica's
+that will keep winning for their workload (`shadowed_by`), without writing anything. A
+dry run also returns `bounds`, the list of calibrated lower bounds (`{model, workload,
+lower, ci_level}`) an apply would store for the quality-floor router, one per
+`recommended` or `no_change` unit that carries a `ci_low`. An apply writes one
+`model_quality` row per recommended unit plus one `model_quality_bounds` row per bound
+(a file of only `no_change` units with `ci_low` is a valid bounds-only set), refreshes this replica's
 routing quality snapshot immediately, and returns `{"set_id", "applied", "refreshed",
 "registry_version_match", "forced"}`. Apply and revert each log one JSON audit line.
 
 ## `GET /admin/quality/calibrations` (admin-only)
 
-Lists applied calibration sets: `[{"set_id", "applied_at", "units"}, ...]`, newest first.
+Lists applied calibration sets: `[{"set_id", "applied_at", "units", "bounds"}, ...]`,
+newest first. `units` counts score rows, `bounds` lower-bound rows; a bounds-only set has
+`units: 0`. A set applied before bounds existed shows `bounds: 0`: revert it and re-apply
+the same file to give it bounds.
 
 ## `DELETE /admin/quality/calibrations/{set_id}` (admin-only)
 
-Reverts one applied set (deletes its `model_quality` rows and refreshes this replica's
-snapshot immediately). `404` if `set_id` is not an applied set. Other sets and any
+Reverts one applied set (deletes its `model_quality` and `model_quality_bounds` rows and
+refreshes this replica's snapshot immediately) and returns `{"set_id", "deleted"}`, where
+`deleted` counts score rows plus bound rows. `404` if `set_id` is not an applied set. Other sets and any
 `customer` row are untouched.
 
 Full field reference, the estimator, the replay diff, precedence and the refresh
 behaviour: [`quality-calibration.md`](./quality-calibration.md).
+
+## Quality floors on the admin API and the response (B80)
+
+Quality-floor routing is off by default. Reference:
+[`per-app-config.md`](./per-app-config.md) `quality_floors`.
+
+- **Per-app policy.** `PUT /admin/applications/{id}/policy` accepts `quality_floors`
+  (`{workload: number in (0, 1]}`) and `quality_floor_mode` (`off | shadow | enforce`);
+  `null` or `reset` means inherit. A malformed value is `422`. The policy read returns both.
+- **`GET /admin/me`.** The `deployment` envelope gains `quality_floors`:
+  `{"mode": "off", "workloads": {"claims": 0.8}}`, the deployment default mode and floors,
+  so a client can show an app's value beside the one it can only raise.
+- **Chat completion response.** `policy.quality_floor` carries the quality-floor record of
+  the served router hop (floor, mode, workload, status, the chosen model's lower bound and
+  its source, every eligible candidate's bound); `null` when no floor decided the request.
+  Shape: [`routing-observability.md`](./routing-observability.md) §6.
 
 ---
 

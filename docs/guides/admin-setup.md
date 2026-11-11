@@ -80,7 +80,8 @@ curl -c cookies.txt http://<host>:<port>/admin/login \
     "default_capture_io": "redacted",
     "reject_stream_requests": true,
     "allow_app_passthrough": true,
-    "allow_app_pii_downgrade": true
+    "allow_app_pii_downgrade": true,
+    "quality_floors": {"mode": "off", "workloads": {}}
   }
 }
 ```
@@ -93,6 +94,7 @@ curl -c cookies.txt http://<host>:<port>/admin/login \
 | `reject_stream_requests` | `server.reject_stream_requests` | Whether inbound `stream: true` is refused for an app that never opted in. |
 | `allow_app_passthrough` | `policy.allow_app_passthrough` | Deployment **ceiling**: `false` and no app may resolve to `policy_mode: passthrough`. |
 | `allow_app_pii_downgrade` | `policy.allow_app_pii_downgrade` | Deployment **ceiling**: `false` and no app may set `pii_detection` to `off`/`regex`. |
+| `quality_floors` | `routing.quality_floors` in `config/routing.yaml` | `{mode, workloads}`: the deployment default floor mode and per-workload floors an app's `quality_floor_mode` and `quality_floors` inherit or can only raise (B80). |
 
 The `deployment` block exists because a per-app field left `null` inherits a deployment
 default, and a control (or a script) that renders that as a bare "global default" says
@@ -290,6 +292,8 @@ curl -b cookies.txt -X PUT \
 | `pii_score_threshold` | float \| null | `[0.0, 1.0]`. Scored entities below this confidence are dropped before redaction. Never applies to `US_SSN`; never drops unscored (regex / custom-recognizer) hits. To remove a stored floor entirely, name it in `reset`; `0` is a different thing — a floor that passes every score. |
 | `pii_exempt_patterns` | list[str] \| null | Regexes `fullmatch`ed against a detected entity's **value**, whatever type it was given — the type-independent complement to the denylist. Max 25 patterns, 200 chars each, each must compile under Python `re`. Never exempts `US_SSN`. |
 | `stream_mode` | str \| null | `off \| verified_then_stream \| stream_unverified \| incremental_verify`. `null`/`off` = reject inbound `stream:true`. `stream_unverified` is refused for `onprem_only` apps at write time; `onprem_only`/`require_verification` requests always fall back to the verified path at runtime. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
+| `quality_floors` | object \| null | `{workload: floor}`, each floor in `(0, 1]`: the app's minimum calibrated quality lower bound per workload. **Raise-only** against the deployment floor. `null` = none. Replaces the whole map. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
+| `quality_floor_mode` | str \| null | `off \| shadow \| enforce`. `null` = inherit `routing.quality_floors.mode` (default `off`). |
 | `reset` | list[str] \| null | Policy field names to write back to `NULL` ("inherit the deployment default"), applied **after** the merge — the only way to clear a field, since `null` in the body means "leave it alone". An unknown name is a 422 (never silently ignored), and naming a field here *and* sending a value for it in the same request is a 422 contradiction. Every clamp above is judged on the **post-reset** effective state, so a reset that would produce a forbidden posture is refused whole. |
 
 > **The PUT merges — `null` does not clear; `reset` does.** The body is persisted with

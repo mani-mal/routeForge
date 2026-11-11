@@ -73,6 +73,10 @@ it replays as it always did.
 
 Everything a routing decision reads — settings, the onboarded pool, per-app policy,
 quality overrides and the current signals — as one content-free JSON document (§7).
+It also includes the calibrated lower bounds the quality-floor router reads, under
+`quality.bounds` as `[{"model", "workload", "lower", "set_id"}, ...]` (B80;
+`workload` may be `null`, a model-wide bound). A snapshot taken before B80 has no
+`quality.bounds` and loads as an empty set; re-export it to forecast a floor.
 That includes `settings.serving_policy`: the deployment's four posture values
 `compile_policy` reads (`pii_detection`, `allow_app_pii_downgrade`, `default_policy_mode`,
 `allow_app_passthrough`, with any `SP_*` env overrides already applied). Every app is
@@ -125,6 +129,7 @@ never silently simulate "no change" (`app/eval/proposal.py::_validate_keys`).
     }
   },
   "providers": {"bedrock": {"enabled": true}},
+  "routing": {"quality_floors": {"mode": "shadow", "workloads": {"claims": 0.85}}},
   "endpoints": {
     "add": [
       {"slug": "local-mid-2", "provider": "onprem", "tier": "mid",
@@ -140,6 +145,21 @@ never silently simulate "no change" (`app/eval/proposal.py::_validate_keys`).
   "prices": {"local-mid": {"input": 0.4, "output": 1.2, "cached_input": null}}
 }
 ```
+
+**`routing.quality_floors`** (B80) is the one thing a proposal may change under `routing`;
+any other `routing` key is an unknown-key load error. It takes `mode` (`off | shadow |
+enforce`) and `workloads` (`{workload: floor in (0, 1]}`), merged over the snapshot's own
+`settings.routing.quality_floors` (a key you omit keeps its value, and `workloads`
+replaces the whole map). The result is validated with the config lint, so a bad mode,
+slug or floor is a proposal load error (exit `2`) naming `routing.quality_floors`. A
+proposal cannot set per-app floors; replay uses each app's own stored `quality_floors`
+and `quality_floor_mode` from the snapshot. See
+[`per-app-config.md`](./per-app-config.md) `quality_floors`.
+
+The replay runs the real router, so the forecast shows the route, cost and rejection
+effect of a floor change. It uses the lower bounds in the snapshot (`quality.bounds`,
+below). A model with no bound never qualifies, so a floor on a workload with no applied
+calibration falls back to the length-tier path in the replay, as it would live.
 
 An empty proposal — `{"schema": "routeforge.policy-proposal/v1"}` — is valid and must
 predict zero change in every row (spec §9.1).

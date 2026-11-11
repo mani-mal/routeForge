@@ -219,9 +219,12 @@ four report **where their value came from**. Source of truth:
 **Per router hop, never collapsed.** A failover or confidence escalation
 produces a second hop with a different eligible set and different signal state;
 each hop emits its own record. A hop whose backend call *failed* also carries
-one (its `chosen` is `null`, because nothing was served, but the failed
-candidate is recoverable as `scoring.candidates[0].name` — the strategy sorts
-best-first and the router takes `ordered[0]`). Without that, a failed
+one (its `chosen` is `null`, because nothing was served; the model the gateway
+actually tried is on the record as `attempted`. Before B80 it was recoverable as
+`scoring.candidates[0].name`, because the router always took the top-scored candidate.
+Under an enforced quality floor the tried model is the cheapest qualifier, which need not
+be the top-scored one, so read `attempted` and fall back to `candidates[0]` only for a
+record written before the field existed). Without that, a failed
 candidate's pre-failure provenance would be lost permanently, and failover is
 exactly where availability matters.
 
@@ -634,6 +637,52 @@ mean chosen cost in that scenario). An operator trades outage-time latency again
 post-recovery cost through `cooldown_s` and `max_cooldown_s`.
 
 ---
+
+## 6. The quality-floor record (B80)
+
+Present only when a request decided under a quality floor in mode `shadow` or `enforce`
+(see [`per-app-config.md`](./per-app-config.md) `quality_floors`). With the mode `off`, no
+workload or no floor, nothing below is emitted and the record is as before. The record
+is ids, numbers and enums only, so like `sp.scoring` it is emitted regardless of
+`capture_io`.
+
+| Surface | Carries |
+|---|---|
+| **Trace** — `sp.scoring.quality_floor`, on each router hop's span, beside the ranking | the full record below, including every eligible candidate's bound |
+| **Trace** — `sp.quality_floor_status` | the hop's `status` alone, a fixed enum, so a trace search can filter without parsing `sp.scoring` |
+| **HTTP response** — `policy.quality_floor` | the served hop's full record; `null` when no router ran (a semantic-cache hit) or that hop decided under no floor |
+| **Outcome row** — `route_reason` | `quality_floor` when an enforced floor was met (see [`routing-outcomes.md`](./routing-outcomes.md)) |
+
+```json
+{"floor": 0.8, "mode": "enforce", "workload": "claims", "status": "met",
+ "chosen_lower": 0.84, "chosen_lower_source": "calibrated",
+ "bounds": {"qwen3-8b": [0.84, "calibrated"], "local-mid": [null, null]},
+ "shadow_choice": null, "shadow_est_cost_usd": null}
+```
+
+- `floor` is the effective floor (the larger of the deployment and app values), `mode` the
+  effective mode.
+- `status` is one of `met`, `unmet_no_qualifier`, `unmet_context`, `unmet_budget`, or the
+  same four prefixed `shadow_` (`shadow_met`, ...). See
+  [`routing-tier-selection.md`](../architecture/routing-tier-selection.md).
+- `chosen_lower` and `chosen_lower_source` are the served model's lower bound and where
+  it came from. The source is `calibrated`, or `null` with a `null` bound when the model
+  has none (possible on an `unmet_*` fallback).
+- `bounds` maps **every eligible candidate** to `[lower, source]`, `[null, null]` when it
+  has no calibrated bound. A model absent from it was not eligible.
+- `shadow_choice` and `shadow_est_cost_usd` are filled only in `shadow` mode, when a
+  qualifier existed: the model the floor would have chosen and its estimated cost. The
+  request was routed by the tiered path regardless.
+
+`sp.scoring` itself is unchanged: it stays ordered by score and remains sufficient to
+recompute the ranking offline. Under an enforced floor the served model is chosen by cost
+among the qualifiers, so it is **not necessarily `candidates[0]`**. Read the decision's
+chosen model, not the first scoring entry. The decision reason names the floor, for
+example `quality floor 0.80 (workload claims): cheapest qualifying, lower bound 0.84
+(calibrated)`, or `quality floor 0.80 unmet (no qualifying model): ...` on a fallback.
+Rejected candidates carry the reasons listed in the architecture note.
+
+Prometheus is unchanged: the decision counter still carries only `tier` and `escalated`.
 
 ## Quick verification checklist
 
