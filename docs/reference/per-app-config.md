@@ -162,7 +162,7 @@ falls back to. A rejected write applies nothing at all. Codes are from
 | `PASSTHROUGH_FORBIDDEN` | `policy_mode: passthrough`, or `model_input: raw`, or `client_output: raw`, while `allow_app_passthrough` is false | lift the deployment ceiling, or stay protected |
 | `PII_DOWNGRADE_FORBIDDEN` | a per-app `pii_detection` of `off`/`regex` while `allow_app_pii_downgrade` is false | lift the ceiling, or use the narrow levers (`pii_entity_denylist` etc.), which this ceiling does not gate |
 | `CAPTURE_FULL_NEEDS_OWN_PROJECT` | `capture_io: full` with no provisioned per-app Langfuse project | attach the app's own project first, or use `redacted` |
-| `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` | `capture_io: full` on an `onprem_only` app that has not declared `model_input: raw` **and** `client_output: raw` | declare the posture (`policy_mode: passthrough` resolves both), or use `redacted`/`off` |
+| `CAPTURE_FULL_NEEDS_NO_PROTECTION` | `capture_io: full` on an app — **at any residency** — that has not declared a no-protection posture: `model_input: raw` **and** `client_output: raw`, **or** `pii_detection: off` set by the app (or by its `passthrough` preset). Replaced the `onprem_only`-only `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` on 2026-11-11 (B31); the code was never on the wire (the 422 carries the message only) | declare the posture (`policy_mode: passthrough` resolves both data axes; or `pii_detection: off`), or use `redacted`/`off` |
 | `CAPTURE_REDACTED_NEEDS_A_DETECTOR` | `capture_io: redacted` with `pii_detection` resolving to `off` | set `pii_detection` to `regex` or `presidio`, or use `off`/`full` |
 | `STREAM_UNVERIFIED_FORBIDDEN_ONPREM` | `stream_mode: stream_unverified` on an `onprem_only` app | use `verified_then_stream` or `incremental_verify` |
 | `STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT` | `stream_mode: stream_unverified` with an **explicitly set** `client_output: redact` | use `incremental_verify` or `verified_then_stream`, or set `client_output: raw` |
@@ -196,8 +196,10 @@ consumer its own view of the data, and each is a deliberate contract change:
    `redact`, whatever the model was shown.
 
 Every other combination behaves exactly as it did. In particular these stay **rejected**:
-`onprem_only + enforced + capture_io: full`; `capture_io: full` with no own Langfuse
-project; `capture_io: redacted` with no detector; `stream_unverified + onprem_only`.
+`capture_io: full` without a declared no-protection posture (at any residency since B31,
+2026-11-11; before that, only `onprem_only` apps were checked); `capture_io: full` with no
+own Langfuse project; `capture_io: redacted` with no detector; `stream_unverified +
+onprem_only`.
 
 ### Recipes
 
@@ -456,7 +458,7 @@ off does not turn RouteForge into a proxy — it is still the router and the met
   `app_policy_version` stamp — so a customer's conformance probe detects the change
   instead of silently passing on a stale result.
 - **Raw capture stays tenant-isolated.** `capture_io: "full"` still requires the app's
-  own provisioned Langfuse project. `passthrough` relaxes the *residency* condition on
+  own provisioned Langfuse project. `passthrough` satisfies the *posture* condition on
   `full`, never the own-project one: one customer's raw data must never land in
   another's traces or in the shared project.
 - **`capture_io: "redacted"` needs a detector, not a posture.** A `passthrough` app that
@@ -615,21 +617,22 @@ request body value if provided, else the app's stored policy, else its default):
   projects independently, so the rule is exactly "is there a detector", nothing more.
 - An unrecognized value is a 422, never a silent fallback to `off`.
 
-  **Net envelope for an `onprem_only` app:** while the app is in the `enforced`
-  posture, `pii_detection: "off"` may only be paired with `capture_io: "off"` — the
-  other two capture modes are each rejected by their own clamp. (`pii_detection: "regex"`
-  is not subject to this `redacted` restriction — see above.) No telemetry I/O is
-  captured for `off` + `off`, so there is no egress path for the unsanitized prompt, and
-  the runtime cannot widen it: `_set_io` returns early on `"off"`, and the fail-closed
-  downgrade in `app/obs/export.py` only ever steps `full` down to `redacted`, never `off`
-  up.
+  **Net envelope, at any residency:** with `pii_detection: "off"`, `capture_io` may be
+  `"off"`, or `"full"` into the app's **own** Langfuse project — `redacted` is refused
+  (no detector to redact with). (`pii_detection: "regex"` is not subject to this
+  `redacted` restriction — see above.) No telemetry I/O is captured for `off` + `off`, so
+  there is no egress path for the unsanitized prompt, and the runtime cannot widen it:
+  `_set_io` returns early on `"off"`, and the fail-closed downgrade in
+  `app/obs/export.py` only ever steps `full` down to `redacted`, never `off` up.
 
-  *Amended by PR #34.* The `full` half of that envelope is a property of the
-  **`enforced` posture**, not of `onprem_only` itself. An `onprem_only` app the
-  operator has explicitly placed in `policy_mode: "passthrough"` — a declared
-  no-protection posture — may use `capture_io: "full"` into **its own** Langfuse
-  project. See the `capture_io` clamp under [`policy_mode`](#policy_mode--the-protection-posture)
-  above. The own-project condition is never relaxed by anything.
+  *Amended by PR #34, and again by B31 (2026-11-11).* Raw capture keys on the
+  **protection posture**, never on residency. An app's own `pii_detection: "off"` is a
+  declared no-protection posture — nothing is redacted — so it may use `capture_io:
+  "full"` into **its own** Langfuse project at any residency, `onprem_only` included;
+  so may an app in `policy_mode: "passthrough"`. An app with a detector running and
+  either data axis at `redact` may not, at any residency. See the `capture_io` clamp
+  under [`policy_mode`](#policy_mode--the-protection-posture) above. The own-project
+  condition is never relaxed by anything.
 
 ### Operator-gated raw eval capture (`pii_detection=off` + `capture_io=full`)
 
@@ -639,17 +642,26 @@ exception to "telemetry is redacted on egress" (CLAUDE.md rule 2), approved by t
 product owner — not a bug. Every one of these must hold, and each is enforced
 independently:
 
-- **An `onprem_only` app must first declare `policy_mode: "passthrough"`.** For an
-  `onprem_only` app still in the `enforced` posture the clamp rejects the write
-  outright, whether or not detection is downgraded — the gate is running, so residency
-  beats eval convenience (CLAUDE.md rule 8). *Before PR #34, `onprem_only` was used as
-  a proxy for "maximum protection" and `full` was refused for on-prem apps
-  unconditionally. Removing that proxy is the whole point of `policy_mode`: placement
-  and protection are separate axes, and an app whose operator has explicitly declared a
-  no-protection posture is coherent with raw capture at any residency. `passthrough`
-  changes nothing about placement — `onprem_only` stays absolute in either posture.*
-  Independently of all this, an `onprem_only` app may take the detection downgrade with
-  `capture_io="off"` in either posture.
+- **The app must have declared a no-protection posture — at any residency.** That is
+  `model_input: raw` **and** `client_output: raw` (what `policy_mode: "passthrough"`
+  resolves to), **or** `pii_detection: "off"` set by the app itself or by its
+  `passthrough` preset (a detector that is off only because the *deployment* default is
+  off is not the app's declaration). One predicate defines it:
+  `app/policy/compile.py::has_no_protection_posture`. An app with a detector running
+  and either data axis at `redact` is refused (`CAPTURE_FULL_NEEDS_NO_PROTECTION`).
+  *History: before PR #34, `full` was refused for `onprem_only` apps unconditionally —
+  residency as a proxy for "maximum protection". PR #34 replaced the proxy with the
+  posture for `onprem_only` apps only, which left an `enforced` non-`onprem_only` app
+  free to hold `full` (B31). Since 2026-11-11 the posture rule applies everywhere:
+  placement and protection are separate axes, and residency has no bearing on it.*
+- **Rows saved before B31.** An app saved earlier with `capture_io: full` and no
+  declared posture is **treated as `redacted` until its policy is re-saved.**
+  `compile_policy` denies the axis to its protective end (`telemetry_io: redacted`,
+  source `ceiling`) — every request still runs, the trace and the console's `display`
+  carry a redacted copy, and raw I/O is never exported. The admin `GET` shows the stored
+  `capture_io: "full"` beside `effective.telemetry_io: "redacted"`, and the console says
+  so under the capture control. The next policy write for that app is judged on the
+  same rule, so it must either declare a posture or change `capture_io`.
 - **Raw I/O only ever reaches the app's own provisioned Langfuse project**, never the
   shared/default project. `capture_io=full` is rejected (422) unless
   `load_app_langfuse(app)` resolves — the app must have its own project, either
@@ -664,8 +676,8 @@ independently:
   content under a `redacted` label — that was counterexample CE-1, and it shipped once.
 - **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
   `false` cannot reach this combination either, same as any other PII downgrade.
-- **Still blocked:** `onprem_only` + `enforced` + `full`
-  (`CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`); `full` with no own Langfuse project
+- **Still blocked:** `full` without a declared no-protection posture, at any residency
+  (`CAPTURE_FULL_NEEDS_NO_PROTECTION`); `full` with no own Langfuse project
   (`CAPTURE_FULL_NEEDS_OWN_PROJECT`); `pii_detection` resolving to `off` +
   `capture_io=redacted` (`CAPTURE_REDACTED_NEEDS_A_DETECTOR` — `regex` and `presidio` +
   `redacted` are both allowed, in either posture); either deployment ceiling off

@@ -119,12 +119,13 @@ them; `null` on any field means "inherit / no restriction."
 ```
 
 > For an `onprem_only` app in the default `enforced` posture the write-time floors reject
-> `capture_io: full` and `stream_mode: stream_unverified` — those guarantees can't be waived
-> per-app. `pii_detection: off|regex` **is** permitted at `onprem_only` (detection and
-> residency are independent axes), but only alongside `capture_io: "off"`, so there is no
-> egress path for an unsanitized prompt. An app that genuinely has nothing to protect
-> declares `policy_mode: "passthrough"` instead — which unlocks `capture_io: full` into its
-> **own** Langfuse project while leaving `onprem_only` absolute. See
+> `capture_io: full` (as they do at any residency) and `stream_mode: stream_unverified` —
+> those guarantees can't be waived per-app. `pii_detection: off|regex` **is** permitted at
+> `onprem_only` (detection and residency are independent axes); `off` is itself a declared
+> no-protection posture, so it pairs with `capture_io: "off"` or with `"full"` into the
+> app's **own** Langfuse project. An app that genuinely has nothing to protect can also
+> declare `policy_mode: "passthrough"` — which unlocks `capture_io: full` into its own
+> project while leaving `onprem_only` absolute. See
 > [`../reference/per-app-config.md`](../reference/per-app-config.md).
 
 ### App C — `research-agent` (a client-driven agent loop, cloud + frontier)

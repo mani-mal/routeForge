@@ -2568,11 +2568,11 @@ api container by every compose bundle) and set the field to that name. Related
 trap on the same form, already handled well: the slug must equal the endpoint's
 served model name, and the probe says so explicitly.
 
-## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps
+## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps  ✅ RESOLVED (2026-11-11)
 
 **Severity:** medium (spec/code mismatch — either the rule overstates what is enforced,
 or the `capture_io=full` clamp is missing a condition)
-**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Open.**
+**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 CLAUDE.md rule 2 says raw capture (`capture_io="full"`) requires "the app to be in a
 declared no-protection posture." `app/api/admin_routes.py`'s clamp (`~648-661`) enforces
@@ -2587,6 +2587,8 @@ enforces, or the clamp is missing a residency-independent posture check. This is
 *why* the `docs/guides/faq.md` line fixed elsewhere in this same review read as plausible
 before the fix — the code really does let an `enforced` app hold `capture_io=full` once
 it is not `onprem_only`.
+
+**Resolved:** 2026-11-11. Raw capture now needs a declared no-protection posture at every residency. `app/policy/compile.py::has_no_protection_posture` defines it once: `model_input` and `client_output` both `raw`, or `pii_detection: off` set by the app or its `passthrough` preset. `compile_policy` denies a `full` without it to `redacted` (`capture_full_refused`), and `validate_effective` refuses the write with `CAPTURE_FULL_NEEDS_NO_PROTECTION`, which replaces the onprem-only `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` (the code was never on the wire). `_finalize` (`app/api/routes.py`) now reads capture from the compiled policy, so a row saved before this change is served as `redacted` until re-saved, never failed and never exported raw. Side effect, per the ruling: `onprem_only` + `pii_detection: off` + `full` (own project) is now legal. Golden table contract updated. The console capture control uses the same predicate and flags a stored `full` served as `redacted`. Tests: `tests/test_admin_api.py::test_b31_*`, `tests/test_capture_io.py::test_b31_*`, `tests/test_policy_golden_table.py`.
 
 ## B26 — Catch-all exception handler in the request path logs nothing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
 

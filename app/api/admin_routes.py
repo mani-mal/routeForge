@@ -675,7 +675,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             resetting `policy_mode` on an onprem_only + passthrough +
             capture_io=full app reverts the posture to the deployment default
             (normally `enforced`) and leaves an ENFORCED onprem_only app storing
-            raw I/O, exactly what `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`
+            raw I/O, exactly what `CAPTURE_FULL_NEEDS_NO_PROTECTION`
             exists to forbid (CLAUDE.md rules 2/8). Routed through here, the
             compiled policy resolves to `enforced` — hence `model_input:
             redact` — and that write is refused, whole, like any other.

@@ -122,8 +122,10 @@ def test_manual_langfuse_creds_enable_full_capture(client):
         "host": "http://airgap:3000", "public_key": "pk", "secret_key": "sk",
         "project_id": "proj_air"})
     assert r.status_code == 200, r.text
-    # Now full is permitted (residency default is not onprem_only).
-    r = client.put(f"/admin/applications/{app_id}/policy", json={"capture_io": "full"})
+    # Now full is permitted for an app that declares the no-protection
+    # posture (B31: required at every residency).
+    r = client.put(f"/admin/applications/{app_id}/policy",
+                   json={"capture_io": "full", "policy_mode": "passthrough"})
     assert r.status_code == 200, r.text
 
 
@@ -215,10 +217,11 @@ def test_policy_pii_detection_downgrade_allowed_for_onprem_only_with_capture_off
 
 
 def test_policy_pii_downgrade_rejected_for_onprem_only_with_capture_redacted(client):
-    # (b2) the envelope: an onprem_only app may run detection off only while
-    # capture_io is "off". "redacted" telemetry reuses the gate's sanitized
-    # prompt — raw when detection is off — so it stays a 422, and the message
-    # must not offer 'full' as an alternative (unreachable for onprem_only).
+    # (b2) the envelope: an onprem_only app running detection off may not
+    # capture "redacted" telemetry — there is no detector to redact with — so
+    # it stays a 422. Detection off is itself a declared no-protection posture
+    # (B31), so 'full' into the app's own project IS reachable at onprem_only,
+    # and the message offers it.
     _login(client)
     client.post("/admin/applications", json={"id": "pii-onprem-cap",
                                              "name": "PiiOnpremCap",
@@ -227,7 +230,20 @@ def test_policy_pii_downgrade_rejected_for_onprem_only_with_capture_redacted(cli
                    json={"pii_detection": "off", "capture_io": "redacted"})
     assert r.status_code == 422
     assert "capture_io" in r.text.lower()
-    assert "full" not in r.text.lower()
+    assert "capture_io='full' with the app's own langfuse project" in r.text.lower()
+
+
+def test_redacted_refusal_does_not_offer_full_without_a_declared_posture(client):
+    # The other half of `_capture_alternatives`: detection off only because the
+    # app sent no detector of its own is not a declaration by the app, so
+    # 'full' is not offered. Reached here through passthrough + an explicit
+    # model_input=redact (preset detection off counts as declared -> offered).
+    _login(client)
+    client.post("/admin/applications", json={"id": "cap-alt", "name": "CapAlt"})
+    r = client.put("/admin/applications/cap-alt/policy",
+                   json={"policy_mode": "passthrough", "capture_io": "redacted"})
+    assert r.status_code == 422
+    assert "capture_io='full'" in r.text
 
 
 def test_policy_pii_detection_downgrade_rejected_when_capture_enabled(client):
@@ -440,20 +456,68 @@ def test_policy_raw_capture_allowed_for_non_onprem_app_with_own_langfuse(client)
     assert got["policy"]["capture_io"] == "full"
 
 
+def _own_project_app(client, app_id: str) -> None:
+    client.post("/admin/applications", json={"id": app_id, "name": app_id})
+    r = client.put(f"/admin/applications/{app_id}/langfuse", json={
+        "host": f"https://{app_id}-langfuse:3000", "public_key": "pk",
+        "secret_key": "sk", "project_id": f"proj_{app_id}"})
+    assert r.status_code == 200, r.text
+
+
+def test_b31_full_capture_refused_for_enforced_non_onprem_app(client):
+    # B31: raw capture needs a declared no-protection posture at ANY residency,
+    # not only onprem_only. Own project present, so it is the posture -- not
+    # the project -- that refuses this.
+    _login(client)
+    _own_project_app(client, "b31-enforced")
+    r = client.put("/admin/applications/b31-enforced/policy",
+                   json={"residency": "any", "policy_mode": "enforced",
+                         "pii_detection": "presidio", "capture_io": "full"})
+    assert r.status_code == 422, r.text
+    assert "no-protection posture" in r.text
+    got = client.get("/admin/applications/b31-enforced").json()
+    assert (got["policy"] or {}).get("capture_io") is None    # nothing persisted
+
+
+def test_b31_full_capture_allowed_for_passthrough_non_onprem_app(client):
+    _login(client)
+    _own_project_app(client, "b31-pt")
+    r = client.put("/admin/applications/b31-pt/policy",
+                   json={"residency": "any", "policy_mode": "passthrough",
+                         "capture_io": "full"})
+    assert r.status_code == 200, r.text
+    assert r.json()["effective"]["telemetry_io"] == "full"
+
+
+def test_b31_full_capture_allowed_for_pii_off_non_onprem_app(client):
+    _login(client)
+    _own_project_app(client, "b31-piioff")
+    r = client.put("/admin/applications/b31-piioff/policy",
+                   json={"residency": "private_cloud_ok", "pii_detection": "off",
+                         "capture_io": "full"})
+    assert r.status_code == 200, r.text
+    assert r.json()["effective"]["telemetry_io"] == "full"
+
+
 def test_policy_raw_capture_still_blocked_cases(client, monkeypatch):
     # Task 9 Part B: raw capture (pii off + capture full) stays blocked for:
     # onprem_only, no own Langfuse, capture_io=redacted, and operator flag off.
     _login(client)
 
-    # onprem_only + full -> 422
+    # onprem_only + enforced (detector on) + full -> 422. onprem_only +
+    # pii_detection=off + full is now LEGAL: detection off is a declared
+    # no-protection posture, and the posture -- not residency -- is what raw
+    # capture keys on (B31, CLAUDE.md rule 2a).
     client.post("/admin/applications", json={"id": "raw-onp", "name": "RawOnp",
                                               "default_residency": "onprem_only"})
     client.put("/admin/applications/raw-onp/langfuse", json={
         "host": "https://raw-onp-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_raw_onp"})
+    r = client.put("/admin/applications/raw-onp/policy", json={"capture_io": "full"})
+    assert r.status_code == 422
     r = client.put("/admin/applications/raw-onp/policy",
                    json={"pii_detection": "off", "capture_io": "full"})
-    assert r.status_code == 422
+    assert r.status_code == 200, r.text
 
     # full + no own Langfuse -> 422
     client.post("/admin/applications", json={"id": "raw-nolf", "name": "RawNoLf"})
@@ -493,7 +557,8 @@ def test_policy_effective_capture_full_bypass_closed(client):
         "host": "https://eff-full-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_eff_full"})
     assert client.put("/admin/applications/eff-full/policy",
-                      json={"capture_io": "full"}).status_code == 200
+                      json={"capture_io": "full",
+                            "policy_mode": "passthrough"}).status_code == 200
     r = client.put("/admin/applications/eff-full/policy", json={"pii_detection": "off"})
     assert r.status_code == 200, r.text
     assert r.json()["policy"]["capture_io"] == "full"
@@ -544,15 +609,12 @@ def test_policy_effective_pii_reevaluates_on_capture_only_put(client):
     assert got["policy"]["capture_io"] == "off"
 
 
-def test_policy_effective_pii_reevaluates_on_residency_only_put(client):
-    # Fix round 1, secondary case, re-pointed at the guard that still exists:
-    # a stored pii=off + capture=full app must not be flippable to onprem_only
-    # via a PUT that never mentions capture_io. The capture_io=='full' clamp
-    # keys on the EFFECTIVE capture (stored 'full'), so the residency-only
-    # write is judged on it and rejected — rule 8, residency beats eval.
-    #
-    # (Tightening residency while capture is 'off' is now legal and desirable;
-    # see test_policy_pii_downgrade_can_tighten_residency_when_capture_off.)
+def test_policy_effective_capture_reevaluates_on_pii_only_put(client):
+    # The effective-value guard, re-pointed after B31: a stored pii=off +
+    # capture=full app may be tightened to onprem_only (placement never bears
+    # on the capture verdict any more -- rule 2a), but turning its detector
+    # back on WITHOUT mentioning capture_io removes the declared posture, so
+    # that write is judged on the stored 'full' and refused.
     _login(client)
     client.post("/admin/applications", json={"id": "eff-pii-onprem", "name": "EffPiiOnprem"})
     assert client.put("/admin/applications/eff-pii-onprem/langfuse", json={
@@ -562,10 +624,13 @@ def test_policy_effective_pii_reevaluates_on_residency_only_put(client):
                       json={"pii_detection": "off", "capture_io": "full"}).status_code == 200
     r = client.put("/admin/applications/eff-pii-onprem/policy",
                    json={"residency": "onprem_only"})
+    assert r.status_code == 200, r.text
+    r = client.put("/admin/applications/eff-pii-onprem/policy",
+                   json={"pii_detection": "presidio"})
     assert r.status_code == 422, r.text
-    assert "onprem" in r.text.lower()
+    assert "no-protection posture" in r.text
     got = client.get("/admin/applications/eff-pii-onprem").json()
-    assert got["policy"]["residency"] != "onprem_only"
+    assert got["policy"]["pii_detection"] == "off"
 
 
 def test_policy_pii_downgrade_can_tighten_residency_when_capture_off(client):
@@ -615,7 +680,7 @@ def test_onprem_only_cannot_reach_full_even_with_manual_creds(client):
     assert r.status_code == 200, r.text
     r = client.put("/admin/applications/onprem-app/policy", json={"capture_io": "full"})
     assert r.status_code == 422
-    assert "residency" in r.text.lower() or "onprem" in r.text.lower()
+    assert "no-protection posture" in r.text
 
 
 # --- policy_mode (enforced | passthrough) -----------------------------------
@@ -647,11 +712,11 @@ def test_policy_mode_passthrough_unlocks_full_capture_for_onprem_app(client):
     assert client.put("/admin/applications/pt-full/langfuse", json={
         "host": "https://pt-full-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_pt_full"}).status_code == 200
-    # enforced (the default) -> still refused, residency beats eval
+    # enforced (the default) -> still refused: no declared posture
     r = client.put("/admin/applications/pt-full/policy",
                    json={"residency": "onprem_only", "capture_io": "full"})
     assert r.status_code == 422
-    assert "onprem" in r.text.lower()
+    assert "no-protection posture" in r.text
     # declared passthrough -> permitted
     r = client.put("/admin/applications/pt-full/policy",
                    json={"residency": "onprem_only", "policy_mode": "passthrough",
@@ -852,7 +917,7 @@ def test_policy_reset_of_policy_mode_cannot_strand_raw_capture_on_an_onprem_app(
     r = client.put("/admin/applications/rst-posture/policy",
                    json={"reset": ["policy_mode"]})
     assert r.status_code == 422, r.text
-    assert "onprem" in r.text.lower()
+    assert "no-protection posture" in r.text
     # Fail closed: the app is still in the declared, coherent posture — the
     # rejected write left no half-applied state behind.
     got = client.get("/admin/applications/rst-posture").json()["policy"]
@@ -883,12 +948,12 @@ def test_policy_reset_of_policy_mode_allowed_once_raw_capture_is_dropped(client)
     assert got["residency"] == "onprem_only"   # placement untouched (rule 2a)
 
 
-def test_policy_reset_of_residency_reevaluates_the_capture_clamp(client):
-    # The same effective-value reasoning on the OTHER axis: a policy row that
-    # overrides residency to "any" can hold capture_io='full' while enforced.
-    # Resetting `residency` hands the app back to its default_residency —
-    # onprem_only — so the write is judged on onprem_only + enforced + full and
-    # refused (rule 8: residency beats eval).
+def test_policy_reset_of_residency_does_not_change_the_capture_verdict(client):
+    # Before B31 a residency reset could flip the capture verdict, because the
+    # posture rule applied to onprem_only alone. It now applies at every
+    # residency, so placement has no bearing on it (rule 2a): an `any`-pinned
+    # passthrough + full app reset back to its onprem_only default stays legal,
+    # and an enforced app could never have held `full` in the first place.
     _login(client)
     client.post("/admin/applications", json={"id": "rst-residency", "name": "RstResidency",
                                              "default_residency": "onprem_only"})
@@ -896,13 +961,16 @@ def test_policy_reset_of_residency_reevaluates_the_capture_clamp(client):
         "host": "https://rst-residency-langfuse:3000", "public_key": "pk",
         "secret_key": "sk", "project_id": "proj_rst_residency"}).status_code == 200
     assert client.put("/admin/applications/rst-residency/policy",
-                      json={"residency": "any", "capture_io": "full"}).status_code == 200
+                      json={"residency": "any", "capture_io": "full"}).status_code == 422
+    assert client.put("/admin/applications/rst-residency/policy",
+                      json={"residency": "any", "capture_io": "full",
+                            "policy_mode": "passthrough"}).status_code == 200
     r = client.put("/admin/applications/rst-residency/policy",
                    json={"reset": ["residency"]})
-    assert r.status_code == 422, r.text
-    assert "onprem" in r.text.lower()
+    assert r.status_code == 200, r.text
     got = client.get("/admin/applications/rst-residency").json()["policy"]
-    assert got["residency"] == "any"
+    assert got["residency"] is None
+    assert got["capture_io"] == "full"
 
 
 def test_policy_reset_of_pii_detection_is_never_a_downgrade(client):

@@ -81,6 +81,29 @@ def _wire_app_tracer(monkeypatch):
     return mem, provider
 
 
+def force_full_capture_with_enforced_client(monkeypatch) -> None:
+    """Make the EXPORT boundary see `capture_io: full` for an app whose
+    compiled policy is otherwise `enforced` (client output redacted).
+
+    Since B31 no stored policy reaches that combination -- raw capture needs a
+    declared no-protection posture, and a row that lacks one compiles to
+    `redacted`. These tests guard the plumbing underneath it anyway (defence in
+    depth): if `full` ever coincides with a redacting client posture, the raw
+    pre-verify values reach ONLY the app's own trace, never the client body or
+    `display`. Patched on `app.api.routes` alone, so the pipeline still runs
+    the app's real `enforced` posture."""
+    import dataclasses
+
+    import app.api.routes as routes_mod
+    real = routes_mod.compile_policy
+
+    def _full(app_policy, settings):
+        eff = real(app_policy, settings)
+        return dataclasses.replace(eff, protection=dataclasses.replace(
+            eff.protection, telemetry_io="full"))
+    monkeypatch.setattr(routes_mod, "compile_policy", _full)
+
+
 def _output_value_for(mem, request_id: str) -> str:
     for span in mem.get_finished_spans():
         if span.name == "serving.request" and \
@@ -106,8 +129,8 @@ def _make_app(client, app_id: str, *, capture_io: str, with_langfuse: bool) -> s
     pr = client.put(f"/admin/applications/{app_id}/policy",
                     json={"capture_io": capture_io})
     # Would 422 for capture_io="full" if the app weren't genuinely
-    # full-eligible (non-onprem residency + own Langfuse project) --
-    # app/api/admin_routes.py::set_policy.
+    # full-eligible (own Langfuse project + declared no-protection posture)
+    # -- app/policy/compile.py::validate_effective.
     assert pr.status_code == 200, pr.text
     return token
 
@@ -117,7 +140,8 @@ def test_full_export_stores_pre_verify_raw_completion(client, monkeypatch):
     _leaky_backend(monkeypatch, leaked)
     mem, provider = _wire_app_tracer(monkeypatch)
 
-    token = _make_app(client, "raw-full", capture_io="full", with_langfuse=True)
+    force_full_capture_with_enforced_client(monkeypatch)
+    token = _make_app(client, "raw-full", capture_io="redacted", with_langfuse=True)
     r = client.post("/v1/chat/completions",
                     headers={"Authorization": f"Bearer {token}"},
                     json={"model": "auto",

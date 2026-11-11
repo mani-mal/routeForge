@@ -48,6 +48,7 @@ from app.obs.redact import redacted_copy
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
+from app.policy.compile import compile_policy
 from app.policy.context import requestable_models
 from app.policy.enums import STREAM_MODES
 
@@ -1095,7 +1096,11 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         # The raw body prompt is redacted inside export_trace for `redacted`
         # mode — routes.py never decides what leaves; the exporter path does.
         # Per-app capture_io (B14) overrides the global default; null = inherit.
-        capture_io = app_policy.capture_io or s.serving.observability.langfuse.capture_io
+        # Read off the COMPILED policy, not the stored column: `compile_policy`
+        # denies a `full` the app has no declared no-protection posture for to
+        # `redacted` (B31), so a row saved before that rule applied at every
+        # residency is served redacted -- never failed, never exported raw.
+        capture_io = compile_policy(app_policy, s).protection.telemetry_io
         # NO residency clamp here any more (design §2.6, CE-1). It used to turn
         # `full` into `redacted` for ANY onprem_only app whatever its
         # policy_mode -- and the `redacted` path then re-exported the gate's
@@ -1104,7 +1109,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         # that did not protect. Placement and protection are separate axes
         # (CLAUDE.md rule 2a); `residency` decides where compute may run and
         # nothing else. What `full` still requires -- the app's own Langfuse
-        # project, and a declared no-protection posture for an onprem_only app
+        # project, and a declared no-protection posture (at any residency, B31)
         # -- is checked once, at write time, by `validate_effective`
         # (app/policy/compile.py), and enforced again independently at the
         # export boundary by `export_trace`/`resolve_capture_io`, which is

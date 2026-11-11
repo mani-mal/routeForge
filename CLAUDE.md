@@ -66,7 +66,9 @@ guarantees.
    **only** to that app's **own** provisioned Langfuse project. It requires the
    deployment ceiling to permit it (`allow_app_pii_downgrade` for
    `pii_detection=off`, `allow_app_passthrough` for `policy_mode=passthrough`) and
-   the app to be in a declared no-protection posture. The shared project never
+   the app to be in a declared no-protection posture (`model_input` and
+   `client_output` both `raw`, or its own `pii_detection=off`) at any residency.
+   The shared project never
    receives raw I/O; the exporter fails closed to `redacted` if the app's project
    is missing.
 
