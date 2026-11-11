@@ -2143,10 +2143,10 @@ identity.
 score-level pin, so a future reader does not retire the identity test believing the
 older oracle covers it.
 
-## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape
+## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape  ✅ RESOLVED (2026-11-11)
 
 **Severity:** low (API-surface decision, deliberately deferred; benign today)
-**Found:** 2026-09-19, P2a Task 2 ruling. **Open — needs a decision, not a fix.**
+**Found:** 2026-09-19, P2a Task 2 ruling. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 P2a threads the provider-reported cached prompt-token count through to the response so
 the meter can persist it. It is exposed as a **flat** key:
@@ -2170,6 +2170,8 @@ shape later is a breaking change for anything that starts reading the flat key.
 deprecated duplicate for one release), or document the flat key as intentional. See the
 `consumer-contract-tests` skill — this is exactly the class of wire-shape drift it exists
 to catch.
+
+**Resolved:** 2026-11-11. Decided: emit the nested shape and keep the flat key as a deprecated duplicate. `_wire_usage` (`app/api/routes.py`), the one chokepoint for the non-stream body and the stream terminal usage frame, now adds `usage.prompt_tokens_details.cached_tokens` when the provider reported a count, and omits `prompt_tokens_details` entirely when it did not (no null; B75). `cached_prompt_tokens` stays, documented as deprecated in `docs/reference/api-reference.md`, to be removed in a later release. `completion_tokens_details.reasoning_tokens` is not emitted: the count exists only on `GenerationResult` (it feeds the outcome row), not on the response `usage`, and the ruling was not to widen the plumbing. Consumer-contract tests (SDK-validated): `tests/test_openai_compat.py::test_usage_*`, `tests/test_stream_include_usage.py::test_terminal_usage_frame_*`.
 
 ## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist  ✅ RESOLVED (2026-11-11)
 

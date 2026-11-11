@@ -79,7 +79,9 @@ A standard `ChatCompletion` **plus routeForge-specific fields**:
       "message": { "role": "assistant", "content": "…" },
       "finish_reason": "stop" }
   ],
-  "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168 },
+  "usage": { "prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168,
+             "prompt_tokens_details": { "cached_tokens": 64 },  // only when the provider reported it
+             "cached_prompt_tokens": 64 },                      // DEPRECATED duplicate, see notes
 
   // ---- routeForge extensions ----
   "trace":  [ /* DecisionRecord, VerificationRecord, CompressionRecord, MemoryRecord, CacheRecord */ ],
@@ -123,6 +125,16 @@ Notes:
   `raw_tool_calls`: popped before serialization, **never** a key on this response body
   or on `display.output`. It reaches telemetry only when the app is configured
   `capture_io: "full"`, and only into that app's own Langfuse project.
+- **`usage`** follows OpenAI's shape. When the serving provider reports how many prompt
+  tokens it served from its own prompt cache, the count is in
+  `usage.prompt_tokens_details.cached_tokens`, exactly where OpenAI puts it. When the
+  provider reports nothing (or no provider was called, e.g. a semantic-cache hit),
+  `prompt_tokens_details` is **omitted** rather than sent as `null` or a guessed `0`.
+  **Deprecated:** the flat `usage.cached_prompt_tokens` key is still sent beside it (`0`
+  when unreported) for clients that started reading it before the nested shape existed
+  (B43, 2026-11-11). It will be removed in a later release; read
+  `prompt_tokens_details.cached_tokens` instead. The same rules apply to a stream's
+  terminal usage frame.
 - `model` is the slug; `model_display` is the human-readable name.
 - `object` and `created` are **always** emitted, on every response shape (direct,
   cache hit and streaming). The `openai` SDK's `ChatCompletion` model
@@ -276,12 +288,13 @@ exactly as OpenAI does. The stream then ends with one extra frame, after the
 `finish_reason` frame and before `data: [DONE]`, whose `choices` array is empty:
 
 ```
-data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":0}}
+data: {"id":"req-…","object":"chat.completion.chunk","created":…,"model":"…","choices":[],"usage":{"prompt_tokens":53,"completion_tokens":8,"total_tokens":61,"cached_prompt_tokens":32,"prompt_tokens_details":{"cached_tokens":32}}}
 data: [DONE]
 ```
 
 The numbers are RouteForge's own accounting, the same `usage` object a non-streamed
-response carries (including the `cached_prompt_tokens` extension). The frame is
+response carries (`prompt_tokens_details.cached_tokens` when the provider reported a
+prompt-cache count, plus the deprecated flat `cached_prompt_tokens`). The frame is
 emitted in every `stream_mode`. Without `include_usage: true` the stream is
 unchanged and carries no usage frame. A stream that ends early (client disconnect)
 or fails at the backend has no usage frame. Agent clients that size their context

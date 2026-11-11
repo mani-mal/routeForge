@@ -658,12 +658,22 @@ def _opt_int(v: object) -> int | None:
 
 
 def _wire_usage(usage):
-    """B75: the client-facing usage keeps its pre-B75 wire value. An unreported
-    cached count (None, kept internally and in usage_records) goes out as 0 --
-    strict clients may reject null on a number field."""
-    if isinstance(usage, dict) and usage.get("cached_prompt_tokens", 0) is None:
+    """The client-facing `usage` object: the ONE place its wire shape is set,
+    for the non-stream body and the stream's terminal usage frame alike.
+
+    B43: a known provider prompt-cache count goes out in OpenAI's nested shape,
+    `prompt_tokens_details.cached_tokens` -- the shape RouteForge itself reads
+    upstream. The flat `cached_prompt_tokens` is still sent beside it,
+    DEPRECATED, to be removed in a later release. An unreported count (None,
+    B75: unknown is not 0) emits no `prompt_tokens_details` at all rather than
+    a null a strict client might reject, and the flat key keeps its pre-B75
+    wire value, 0."""
+    if not isinstance(usage, dict) or "cached_prompt_tokens" not in usage:
+        return usage
+    cached = usage["cached_prompt_tokens"]
+    if cached is None:
         return {**usage, "cached_prompt_tokens": 0}
-    return usage
+    return {**usage, "prompt_tokens_details": {"cached_tokens": int(cached)}}
 
 
 def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
