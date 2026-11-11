@@ -1,8 +1,11 @@
 import logging
+import math
 import sys
 
 from app.config.loader import load_settings
-from app.config.schema import PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings
+from app.config.schema import (
+    QUALITY_FLOOR_MODES, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
+)
 from app.policy.enums import (
     ONPREM_PROVIDER, POLICY_MODES, RISK_CLASS, SENSITIVITY, TIERS,
 )
@@ -151,6 +154,19 @@ def lint_settings(s: Settings) -> list[str]:
     # busy-loop or never refresh. Single-owned in routing.yaml.
     if s.routing.quality_refresh_s <= 0:
         errs.append(f"QUALITY_REFRESH_NOT_POSITIVE {s.routing.quality_refresh_s}")
+
+    # B80 quality floors: closed mode set, floors finite in (0, 1], workload
+    # keys must already match the outcomes workload grammar (never normalised).
+    qf = s.routing.quality_floors
+    if qf.mode not in QUALITY_FLOOR_MODES:
+        errs.append(f"QUALITY_FLOOR_MODE_UNKNOWN {qf.mode} "
+                    f"(allowed: {', '.join(QUALITY_FLOOR_MODES)})")
+    from app.apps.outcomes import _WORKLOAD_RE  # lazy: avoid import cycle
+    for wl, floor in qf.workloads.items():
+        if not _WORKLOAD_RE.fullmatch(wl):
+            errs.append(f"QUALITY_FLOOR_WORKLOAD_INVALID {wl}")
+        if not (math.isfinite(floor) and 0.0 < floor <= 1.0):
+            errs.append(f"QUALITY_FLOOR_OUT_OF_RANGE {wl} {floor}")
 
     # `availability` is the renamed scoring weight (was `capacity`); a
     # routing.yaml with neither key is a boot failure, not a silent 0 weight.

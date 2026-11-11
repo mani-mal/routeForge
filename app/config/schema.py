@@ -1,7 +1,7 @@
 import datetime
 import logging
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.prompts.store import PromptArtifact
 
@@ -111,6 +111,28 @@ class BreakerCfg(BaseModel):
     max_cooldown_s: float = 300.0
 
 
+QUALITY_FLOOR_MODES = ("off", "shadow", "enforce")
+
+
+class QualityFloorsCfg(BaseModel):
+    """B80 quality-floor routing: deployment default mode and per-workload
+    floors (calibrated quality lower bound, in (0, 1]). Validated by the
+    config lint, not here, so a bad value is a named boot failure."""
+    mode: str = "off"
+    workloads: dict[str, float] = {}
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _yaml_bool_mode(cls, v):
+        # YAML 1.1 reads bare `off`/`on` as booleans. `off` is what the
+        # operator meant; `on` becomes "on" so lint names it as unknown.
+        if v is False:
+            return "off"
+        if v is True:
+            return "on"
+        return v
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -154,6 +176,7 @@ class RoutingCfg(BaseModel):
     # QualityResolver snapshot. Single-owned here; the config lint rejects a
     # non-positive value (QUALITY_REFRESH_NOT_POSITIVE).
     quality_refresh_s: float = 60.0
+    quality_floors: QualityFloorsCfg = QualityFloorsCfg()
 
     @model_validator(mode="before")
     @classmethod

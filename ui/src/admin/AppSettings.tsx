@@ -129,7 +129,8 @@ const STEP_FIELDS: Record<number, (keyof AdminPolicy)[]> = {
   2: ["residency", "allowed_providers", "allowed_tiers", "allowed_models"],
   3: ["policy_mode", "pii_detection", "pii_score_threshold", "pii_entity_denylist", "pii_exempt_patterns"],
   4: ["capture_io"],
-  5: ["stream_mode", "compression_enabled", "max_rpm", "max_spend_usd_per_day", "monthly_budget_usd", "max_cost_usd_per_request"],
+  5: ["stream_mode", "compression_enabled", "max_rpm", "max_spend_usd_per_day", "monthly_budget_usd", "max_cost_usd_per_request",
+    "quality_floors", "quality_floor_mode"],
 };
 
 // Order-insensitive comparison, so re-toggling a chip back to where it started
@@ -383,7 +384,97 @@ function deliverySummary(p: AdminPolicy, dep: DeploymentEnvelope | null): string
   if (p.max_rpm) limits.push(`${p.max_rpm} rpm`);
   if (p.max_spend_usd_per_day) limits.push(`$${p.max_spend_usd_per_day}/day`);
   if (p.max_cost_usd_per_request) limits.push(`$${p.max_cost_usd_per_request}/request`);
-  return [stream, headroom, limits.length ? limits.join(" · ") : "no limits"].join(" · ");
+  const mode = p.quality_floor_mode ?? dep?.quality_floors?.mode ?? null;
+  const nFloors = Object.keys(p.quality_floors ?? {}).length;
+  const floors = mode && mode !== "off" || nFloors
+    ? `quality floor ${p.quality_floor_mode ? mode : `${mode ?? "off"} (inherited)`}${nFloors ? `, ${nFloors} app floor${nFloors > 1 ? "s" : ""}` : ""}`
+    : null;
+  return [stream, headroom, ...(floors ? [floors] : []), limits.length ? limits.join(" · ") : "no limits"].join(" · ");
+}
+
+// B80: per-workload floors. An app can only RAISE a deployment floor, so a
+// value at or below it is accepted but inert; say so rather than let the
+// operator believe it is doing something. Server validation (422) surfaces
+// under Save like every other field.
+function QualityFloorTable({ idPrefix, appFloors, deploymentFloors, onChange }: {
+  idPrefix: string;
+  appFloors: Record<string, number> | null;
+  deploymentFloors: Record<string, number>;
+  onChange: (f: Record<string, number> | null) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  // Raw text per row while editing: a number input reports "" for transient
+  // states ("0.", "-"), which must not drop the row or send a bad number.
+  const [raw, setRaw] = useState<Record<string, string>>({});
+  const app = appFloors ?? {};
+  // Raw text is only an overlay on the prop: it is shown while it still
+  // parses to the prop's value (or to nothing yet, e.g. "0."/"-"), and dropped
+  // the moment the parent supplies a different value (reload, app switch).
+  // Deriving it avoids any reset effect, which would clobber text mid-typing.
+  const shown = (w: string): string | number => {
+    const r = raw[w];
+    if (r === undefined) return app[w] ?? "";
+    const n = r.trim() === "" ? NaN : Number(r);
+    return !Number.isFinite(n) || n === app[w] ? r : app[w] ?? "";
+  };
+  const workloads = [...new Set([...Object.keys(deploymentFloors), ...Object.keys(app)])].sort();
+  function setFloor(w: string, text: string) {
+    setRaw((r) => ({ ...r, [w]: text }));
+    const n = text.trim() === "" ? NaN : Number(text);
+    // Send a number only when the text parses to a finite value; otherwise
+    // keep the last value and the row, and let Save show the server's 422.
+    if (Number.isFinite(n)) onChange({ ...app, [w]: n });
+  }
+  function removeFloor(w: string) {
+    const next = { ...app };
+    delete next[w];
+    setRaw((r) => { const { [w]: _gone, ...rest } = r; return rest; });
+    onChange(Object.keys(next).length ? next : null);
+  }
+  return (
+    <div className="py-2 border-b border-edge/60">
+      <div className="text-xs text-gray-500 mb-1">workload floors</div>
+      {workloads.length === 0 && (
+        <p className={hintCls}>No floors configured for this deployment or app.</p>
+      )}
+      <table className="text-sm">
+        <tbody>
+          {workloads.map((w) => {
+            const dep = deploymentFloors[w];
+            const val = app[w];
+            const inert = val !== undefined && dep !== undefined && val < dep;
+            return (
+              <tr key={w}>
+                <td className="pr-3 font-mono text-xs text-gray-300">{w}</td>
+                <td className="pr-3 text-xs text-gray-500">deployment {dep !== undefined ? dep : "—"}</td>
+                <td className="pr-3">
+                  <input id={`${idPrefix}-${w}`} aria-label={`app floor for ${w}`} type="number"
+                    min={0.01} max={1} step="0.01" value={shown(w)}
+                    onChange={(e) => setFloor(w, e.target.value)}
+                    className={`${inputCls} w-20`} placeholder="inherit" />
+                </td>
+                <td className="pr-3">
+                  {val !== undefined && (
+                    <button type="button" aria-label={`remove app floor for ${w}`}
+                      onClick={() => removeFloor(w)}
+                      className="text-xs text-gray-400 underline">remove</button>
+                  )}
+                </td>
+                <td className="text-xs text-frontier">{inert ? "has no effect: below the deployment floor" : ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="mt-2 flex items-center gap-2">
+        <input aria-label="add workload floor" value={draft} placeholder="workload (lower case)"
+          onChange={(e) => setDraft(e.target.value)} className={`${inputCls} w-44`} />
+        <button type="button" disabled={!draft.trim() || draft.trim() in app}
+          onClick={() => { onChange({ ...app, [draft.trim()]: 0.8 }); setDraft(""); }}
+          className="text-xs text-gray-300 underline disabled:opacity-40">add</button>
+      </div>
+    </div>
+  );
 }
 
 // --- sample-value tester (unchanged behaviour) ------------------------------
@@ -1054,6 +1145,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       compression_enabled: null, capture_io: null,
       pii_detection: null, stream_mode: null, policy_mode: null,
       pii_entity_denylist: null, pii_score_threshold: null, pii_exempt_patterns: null,
+      quality_floors: null, quality_floor_mode: null,
     });
   const [modelsText, setModelsText] = useState((app.policy?.allowed_models ?? []).join(", "));
   const [busy, setBusy] = useState(false);
@@ -1830,6 +1922,27 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
             onChange={(e) => setP({ ...p, max_cost_usd_per_request: e.target.value ? Number(e.target.value) : null })}
             className={`${inputCls} w-24`} />
         </Row>
+
+        <Row label="quality floor" htmlFor={`${uid}-qfmode`}
+          hint="off ignores floors; shadow records what enforcing would do; enforce routes to the cheapest model whose quality lower bound meets the floor">
+          <select id={`${uid}-qfmode`} value={p.quality_floor_mode ?? ""}
+            onChange={(e) => setP({
+              ...p,
+              quality_floor_mode: (e.target.value || null) as AdminPolicy["quality_floor_mode"],
+            })}
+            className={selectCls}>
+            <option value="">inherit{deployment?.quality_floors ? ` — ${deployment.quality_floors.mode}` : ""}</option>
+            <option value="off">off</option>
+            <option value="shadow">shadow</option>
+            <option value="enforce">enforce</option>
+          </select>
+        </Row>
+
+        <QualityFloorTable
+          idPrefix={`${uid}-qf`}
+          appFloors={p.quality_floors ?? null}
+          deploymentFloors={deployment?.quality_floors?.workloads ?? {}}
+          onChange={(f) => setP({ ...p, quality_floors: f })} />
 
         {saveFor(5)}
       </Step>

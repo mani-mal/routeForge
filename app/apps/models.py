@@ -225,6 +225,13 @@ class AppPolicy(Base):
     # Added after the table shipped: a deployed DB needs the ALTER in
     # docs/reference/per-app-config.md.
     model_aliases: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # B80 per-app quality floors {workload -> floor in (0, 1]} and floor mode
+    # (off | shadow | enforce). Null = inherit the deployment's. Raise-only:
+    # the effective floor is the max of the two, never a lower app value. Added
+    # after the table shipped: a deployed DB needs the ALTERs in
+    # docs/guides/admin-setup.md, run before rolling the image.
+    quality_floors: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    quality_floor_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 
@@ -502,6 +509,24 @@ class ModelQuality(Base):
         DateTime(timezone=True), default=utcnow)
     eval_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class ModelQualityBound(Base):
+    """Calibrated LOWER credible bound on a (model, workload) quality, written
+    by a calibration apply beside the `model_quality` score rows (B80). The
+    quality-floor router reads it; it never feeds the ranking score. NEW table
+    -> create_all, no migration. Ids, enums and numbers only -- content-free."""
+
+    __tablename__ = "model_quality_bounds"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(100), index=True)
+    task_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lower: Mapped[float] = mapped_column(Float)
+    ci_level: Mapped[float] = mapped_column(Float)
+    set_id: Mapped[str] = mapped_column(String(64), index=True)
+    calibrated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
 
 
 class OnboardedModel(Base):

@@ -9,9 +9,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 import re
 import time
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
@@ -20,17 +22,21 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
-from app.apps.calibration_sets import CalibrationError, validate_recommendation
+from app.apps.calibration_sets import (
+    CalibrationError, validate_bounds, validate_recommendation,
+)
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.models import AppToken, OutcomeFeedback, RoutingOutcome
+from app.apps.outcomes import _WORKLOAD_RE
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
 from app.apps.secret_box import (decrypt_or_none, encrypt_required,
                                   endpoint_key_encryption_problem)
-from app.apps.policy import AppPolicyView, alias_pairs, policy_view_from
+from app.apps.policy import AppPolicyView, alias_pairs, floor_pairs, policy_view_from
 from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_service_credential, new_token
 from app.api.routes import _sanitize_session_id
+from app.config.schema import QUALITY_FLOOR_MODES
 from app.policy.compile import (TELEMETRY_IOS, PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
 from app.policy.effective import PROTECTED_ENTITIES
@@ -86,7 +92,9 @@ def _policy_dict(p) -> dict | None:
             "pii_entity_denylist": p.pii_entity_denylist,
             "pii_score_threshold": p.pii_score_threshold,
             "pii_exempt_patterns": p.pii_exempt_patterns,
-            "model_aliases": p.model_aliases}
+            "model_aliases": p.model_aliases,
+            "quality_floors": p.quality_floors,
+            "quality_floor_mode": p.quality_floor_mode}
 
 
 _INVALID_ENV_MASK = "(invalid: not an env var name \u2014 edit to fix)"
@@ -282,6 +290,11 @@ class PolicyIn(BaseModel):
     # the whole map (not a per-key merge); clear it with `reset`. Validated
     # against the registry in `_validate_model_aliases`.
     model_aliases: dict[str, str] | None = None
+    # B80 per-app quality floors {workload -> floor} and floor mode. Raise-only
+    # against the deployment's floors; validated in `_validate_quality_floors`.
+    # Typed loosely so a bad shape is our 422 naming the field, not pydantic's.
+    quality_floors: Any = None
+    quality_floor_mode: str | None = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
     # plenty of callers depend on. That left no way to put a field BACK to NULL
@@ -519,6 +532,12 @@ async def me(request: Request, admin_id: str = Depends(require_admin)) -> dict:
             "reject_stream_requests": s.serving.reject_stream_requests,
             "allow_app_passthrough": s.serving.allow_app_passthrough,
             "allow_app_pii_downgrade": s.serving.allow_app_pii_downgrade,
+            # B80: the deployment's floors, so the settings page can show an
+            # app value beside the one it can only raise.
+            "quality_floors": {
+                "mode": s.routing.quality_floors.mode,
+                "workloads": dict(s.routing.quality_floors.workloads),
+            },
         },
     }
 
@@ -895,6 +914,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             raise HTTPException(
                 422, "max_cost_usd_per_request must be > 0. Omit it, or name it in "
                 "`reset`, to inherit the deployment's budgets.default_max_spend_usd.")
+        _validate_quality_floors(body.quality_floors, body.quality_floor_mode)
         if body.pii_exempt_patterns is not None:
             if len(body.pii_exempt_patterns) > MAX_EXEMPT_PATTERNS:
                 raise HTTPException(
@@ -976,6 +996,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             require_no_retention=_merged("require_no_retention"),
             trajectory_mode=_merged("trajectory_mode"),
             model_aliases=alias_pairs(_merged("model_aliases")),
+            quality_floors=floor_pairs(_merged("quality_floors")),
+            quality_floor_mode=_merged("quality_floor_mode"),
         )
         # An app's own provisioned Langfuse project is the one condition the
         # compiler cannot see: it is DB state, not policy. Raw capture requires
@@ -1236,6 +1258,32 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # request body.
 
 _ALIAS_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def _validate_quality_floors(floors, mode) -> None:
+    """422 on a malformed per-app floor map or mode. Same rules as the
+    deployment lint: mode in QUALITY_FLOOR_MODES, workload keys fullmatch
+    `_WORKLOAD_RE` (never lower-cased), floors finite and in (0, 1]."""
+    if mode is not None and mode not in QUALITY_FLOOR_MODES:
+        raise HTTPException(
+            422, f"quality_floor_mode {mode!r} is not one of "
+            f"{', '.join(QUALITY_FLOOR_MODES)}. Name it in `reset` to inherit.")
+    if floors is None:
+        return
+    if not isinstance(floors, dict) or not floors:
+        raise HTTPException(
+            422, "quality_floors must be a non-empty map of workload to floor. "
+            "Omit it, or name it in `reset`, to inherit.")
+    for workload, floor in floors.items():
+        if not isinstance(workload, str) or not _WORKLOAD_RE.fullmatch(workload):
+            raise HTTPException(
+                422, f"quality_floors workload {workload!r} must match "
+                f"{_WORKLOAD_RE.pattern} (lower case)")
+        if (isinstance(floor, bool) or not isinstance(floor, (int, float))
+                or not math.isfinite(floor) or not 0 < floor <= 1):
+            raise HTTPException(
+                422, f"quality_floors[{workload!r}] must be a number > 0 and <= 1, "
+                f"got {floor!r}")
 
 
 def _validate_model_aliases(aliases: dict[str, str], known: set[str]) -> None:
@@ -1898,6 +1946,7 @@ async def apply_calibration(
         recommended = validate_recommendation(
             rec, registry=registry, current_registry_version=current_registry_version,
             force_registry_mismatch=force_registry_mismatch)
+        bounds = validate_bounds(rec, registry=registry)
     except CalibrationError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -1927,6 +1976,7 @@ async def apply_calibration(
             "set_id": set_id,
             "registry_version_match": version_match,
             "units": units,
+            "bounds": bounds,
         }
 
     async with request.app.state.db.session() as session:
@@ -1934,7 +1984,8 @@ async def apply_calibration(
             applied = await store.write_calibration_set(
                 session, set_id=set_id,
                 units=[{"model": u["model"], "workload": u.get("workload"),
-                        "score": u["mean"]} for u in recommended])
+                        "score": u["mean"]} for u in recommended],
+                bounds=bounds)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         await session.commit()
@@ -1943,7 +1994,7 @@ async def apply_calibration(
     refreshed = await refresh_quality(request.app)
     _audit_calibration({
         "event": "quality_calibration_applied", "set_id": set_id,
-        "units": applied, "forced": forced,
+        "units": applied, "bounds": len(bounds), "forced": forced,
         "registry_version_match": version_match, "admin_id": admin_id})
     return {"set_id": set_id, "applied": applied, "refreshed": refreshed,
             "registry_version_match": version_match, "forced": forced}
@@ -1954,7 +2005,7 @@ async def list_calibrations(request: Request, _: str = Depends(require_admin)) -
     async with request.app.state.db.session() as session:
         sets = await store.list_calibration_sets(session)
     return [{"set_id": s["set_id"], "applied_at": _iso(s["applied_at"]),
-             "units": s["units"]} for s in sets]
+             "units": s["units"], "bounds": s["bounds"]} for s in sets]
 
 
 @admin_router.delete("/quality/calibrations/{set_id}")

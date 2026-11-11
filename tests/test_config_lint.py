@@ -333,6 +333,50 @@ def test_quality_refresh_nonpositive_is_caught(value):
         enforce(s)
 
 
+# --- B80 quality_floors ----------------------------------------------------
+
+def test_quality_floor_mode_unknown_is_named():
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors.mode = "on"
+    assert any(e.startswith("QUALITY_FLOOR_MODE_UNKNOWN") for e in lint_settings(s))
+
+
+@pytest.mark.parametrize("value", [0.0, 1.5, float("nan")])
+def test_quality_floor_out_of_range_is_named(value):
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors.workloads = {"claims": value}
+    errs = lint_settings(s)
+    assert any(e.startswith("QUALITY_FLOOR_OUT_OF_RANGE claims") for e in errs)
+
+
+@pytest.mark.parametrize("key", ["Claims", "a b"])
+def test_quality_floor_workload_invalid_is_named(key):
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors.workloads = {key: 0.8}
+    assert any(e.startswith(f"QUALITY_FLOOR_WORKLOAD_INVALID {key}")
+               for e in lint_settings(s))
+
+
+def test_default_routing_yaml_has_quality_floors_off():
+    qf = load_settings().routing.quality_floors
+    assert qf.mode == "off" and qf.workloads == {}
+
+
+def test_quality_floor_mode_yaml_bare_off_means_off():
+    from app.config.schema import QualityFloorsCfg
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors = QualityFloorsCfg(mode=False)
+    assert s.routing.quality_floors.mode == "off"
+    assert not any(e.startswith("QUALITY_FLOOR_") for e in lint_settings(s))
+
+
+def test_quality_floor_mode_yaml_bare_on_is_named():
+    from app.config.schema import QualityFloorsCfg
+    s = copy.deepcopy(load_settings())
+    s.routing.quality_floors = QualityFloorsCfg(mode=True)
+    assert any(e.startswith("QUALITY_FLOOR_MODE_UNKNOWN on") for e in lint_settings(s))
+
+
 # --- B90: risk-class names ---------------------------------------------------
 
 def test_risk_floor_unknown_class_is_caught():

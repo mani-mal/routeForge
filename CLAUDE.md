@@ -204,7 +204,10 @@ effect before anyone applies it — see `docs/reference/policy-simulator.md`. Si
 empty feasible set's 422 names the minimal conflicting core — the smallest set of
 requirements no available endpoint meets together, with endpoint state kept separate and
 remediation hints that never relax a security requirement — see
-`docs/reference/conflicting-core.md`.
+`docs/reference/conflicting-core.md`. Since B80, an opt-in quality-floor path
+(`routing.yaml` `quality_floors`, raise-only per app) picks the cheapest eligible model whose
+calibrated quality lower bound clears a per-workload floor, and falls back to tier routing,
+never to rejection, when none does — see `docs/reference/per-app-config.md`.
 
 ## Configuration — everything switchable at startup
 

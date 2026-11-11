@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, fields as dc_fields
 from pydantic import ValidationError
 
 from app.apps.db import Database
-from app.apps.policy import AppPolicyView
+from app.apps.policy import AppPolicyView, floor_pairs
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView, effective_rules
 from app.apps.registry import ModelRegistry
 from app.apps.snapshot import SERVING_POLICY_FIELDS
@@ -118,6 +118,7 @@ def validate_snapshot(doc: dict) -> None:
 # The keys each nested snapshot container must carry -- exactly what
 # `build_settings`/`build_scenario`/`FrozenSignals` index.
 _PROVIDER_KEYS = ("enabled", "region", "prompt_retention", "accepts_raw_sensitive")
+_BOUND_KEYS = ("model", "workload", "lower", "set_id")
 _ONBOARDED_KEYS = ("slug", "display_name", "provider", "tier", "quality",
                    "price_input", "price_output", "price_cached_input",
                    "enabled", "allowed_app_ids", "region", "prompt_retention",
@@ -230,6 +231,23 @@ def _validate_structure(doc: dict) -> None:
             missing = [k for k in _QUALITY_KEYS if k not in q]
             if missing:
                 raise SnapshotError(qwhere, f"missing key(s) {missing}")
+
+    # B80: an export from before quality floors has no `bounds` -- that is
+    # an empty set, never an error.
+    for i, b in enumerate(_need_list(quality.get("bounds", []), "quality.bounds")):
+        bwhere = f"quality.bounds[{i}]"
+        _need_dict(b, bwhere)
+        missing = [k for k in _BOUND_KEYS if k not in b]
+        if missing:
+            raise SnapshotError(bwhere, f"missing key(s) {missing}")
+        if not isinstance(b["model"], str) or not b["model"]:
+            raise SnapshotError(f"{bwhere}.model", "must be a non-empty string")
+        if b["workload"] is not None and not isinstance(b["workload"], str):
+            raise SnapshotError(f"{bwhere}.workload", "must be null or a string")
+        if not isinstance(b["set_id"], str):
+            raise SnapshotError(f"{bwhere}.set_id", "must be a string")
+        if not _is_number(b["lower"]) or not (0.0 <= b["lower"] <= 1.0):
+            raise SnapshotError(f"{bwhere}.lower", "must be a number in [0, 1]")
 
     for model, row in _need_dict(doc["signals"], "signals").items():
         swhere = f"signals.{model}"
@@ -428,6 +446,8 @@ def _app_policy_view(policy: dict, app_id: str) -> AppPolicyView:
             raise SnapshotError(f"apps.{app_id}.policy.{key}", "unknown field")
         if key in _SET_FIELDS and value is not None:
             converted[key] = frozenset(value)
+        elif key == "quality_floors":
+            converted[key] = floor_pairs(value)
         else:
             converted[key] = value
     return AppPolicyView(**converted)
@@ -507,6 +527,8 @@ async def build_scenario(doc: dict, *, base: Settings) -> Scenario:
             overrides.setdefault((entry["model"], entry["workload"]), []).append(
                 QualityScore(entry["score"], "calibrated", entry["set_id"]))
         quality.set_overrides(overrides)
+        quality.set_bounds({(b["model"], b["workload"]): (float(b["lower"]), b["set_id"])
+                            for b in doc["quality"].get("bounds", [])})
 
         signals = FrozenSignals(settings.routing.signals, doc["signals"],
                                 assumptions.latency_ms)

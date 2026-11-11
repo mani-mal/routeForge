@@ -35,6 +35,7 @@ const REASON_LABEL: Record<string, string> = {
   escalation: "confidence escalation",
   placement: "placement rule",
   risk_floor: "risk floor",
+  quality_floor: "quality floor",
   length_tier: "request length",
   only_eligible: "only eligible model",
   other: "other",

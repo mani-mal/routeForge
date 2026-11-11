@@ -290,3 +290,29 @@ def test_requirements_cannot_widen_anything():
     assert set(ctx_narrowed.allowed_providers) <= set(ctx_base.allowed_providers)
     assert set(ctx_narrowed.allowed_models) <= set(ctx_base.allowed_models)
     assert ctx_narrowed.onprem_only == ctx_base.onprem_only
+
+
+# --- B80: quality floors in the policy view ---------------------------------
+
+def test_version_unchanged_when_unset():
+    base = AppPolicyView(residency="any")
+    explicit = AppPolicyView(residency="any", quality_floors=None, quality_floor_mode=None)
+    assert base.version() == explicit.version()
+
+
+def test_version_changes_when_floor_set():
+    base = AppPolicyView(residency="any").version()
+    floors = AppPolicyView(residency="any", quality_floors=(("claims", 0.8),)).version()
+    mode = AppPolicyView(residency="any", quality_floor_mode="shadow").version()
+    assert len({base, floors, mode}) == 3
+
+
+def test_quality_floors_view_is_hashable_sorted_and_round_trips():
+    from app.apps.policy import floor_pairs
+    from app.apps.snapshot import policy_dict
+    from app.eval.scenario import _app_policy_view
+    assert floor_pairs({"b": 0.5, "a": 0.9}) == (("a", 0.9), ("b", 0.5))
+    assert floor_pairs(None) is None
+    view = AppPolicyView(residency="any", quality_floors=floor_pairs({"b": 0.5, "a": 0.9}))
+    hash(view)
+    assert _app_policy_view(policy_dict(view), "x") == view

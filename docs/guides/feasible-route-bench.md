@@ -584,3 +584,49 @@ applies without an admin reading the diff first.
 |---|---|
 | `0` | ok |
 | `1` | load error: the file cannot be read, or a line has an unrecognised or missing schema |
+
+## 10. Scoring quality-floor routing (`router_floor`)
+
+The `router_floor` arm answers: if quality floors had been on, what would the router have
+chosen, and how did that compare on quality, coverage and cost? The arm is the real router
+with floors in `enforce` mode and a set of calibrated lower bounds. Floor values are your
+deployment's own (`routing.quality_floors.workloads` in `config/routing.yaml`); the
+harness invents none. Configuration and behaviour:
+[`per-app-config.md`](../reference/per-app-config.md) `quality_floors`.
+
+To avoid grading bounds on the cases they were learnt from, the suite is split 50/50 with
+a seed, stratified by the `workload` tag. Bounds are fitted on one half and every arm is
+scored on the other (held-out) half.
+
+```bash
+# 1. a normal sweep, with its matrix.jsonl
+uv run python scripts/feasible_bench.py ... --out results/run1
+
+# 2. fit lower bounds on the calibration half (offline: no network, no database)
+uv run python scripts/floor_fit.py \
+    --matrix results/run1/matrix.jsonl --suite eval/suites/starter.jsonl \
+    --seed 0 --out bounds.json
+
+# 3. score every arm on the held-out half, with the router_floor arm added
+uv run python scripts/feasible_bench.py ... --floor-bounds bounds.json \
+    --floor-split heldout --out results/run2
+```
+
+`floor_fit.py` runs the real calibration estimator with its default gates
+([`quality-calibration.md`](../reference/quality-calibration.md)); a unit the gates call
+`insufficient` gets no bound, and an unknown bound never clears a floor. Its exit codes:
+`0` ok, `1` load error.
+
+| Flag | Effect |
+|---|---|
+| `--floor-bounds FILE` | adds the `router_floor` arm, using a `routeforge.floor-bounds/v1` file. The file must have been fitted on this suite (its `suite_hash` is checked); a missing or different one is exit 1 |
+| `--floor-split heldout` | scores every arm on the held-out half only. Required with `--floor-bounds`, unless `--floor-allow-unsplit` |
+| `--split-seed N` | with `--floor-split`: must equal the seed the bounds were fitted with (the default). A different seed would score a different half, so it is refused |
+| `--floor-allow-unsplit` | scores every case, calibration half included. The result is flagged in the report as **not a held-out result**; do not quote it as one. Contradicts `--floor-split` |
+
+The comparison lands in the `router_floor` section of `metrics.json` and in `report.md`,
+next to the existing `router`, `cheapest`, `fixed` and best-quality arms. A candidate
+overlay (`--candidate`) cannot change `quality_floors`: it has no way to supply the
+bounds, so the key is refused with that explanation. A result where the floor arm does not
+beat the others is reported as it is.
+

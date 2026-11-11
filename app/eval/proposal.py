@@ -19,8 +19,11 @@ import hashlib
 import json
 import math
 
+from pydantic import ValidationError
+
+from app.config.lint import lint_settings
 from app.config.loader import load_settings
-from app.config.schema import Settings
+from app.config.schema import QualityFloorsCfg, Settings
 from app.eval.scenario import ALL_APPS, SnapshotError, _app_policy_view, build_settings
 from app.policy.compile import (_OPERATOR_NAME, PolicyViolation, compile_policy,
                                 resolve_residency)
@@ -31,7 +34,11 @@ _SCHEMA_PREFIX = "routeforge.policy-proposal/"
 _SCHEMA_MAJOR = "v1"
 
 _TOP_KEYS = frozenset({"schema", "title", "apps", "providers", "endpoints", "prices",
-                       "workload", "capacity"})
+                       "workload", "capacity", "routing"})
+#: B80: the one routing key a proposal may edit -- forecasting a quality-floor
+#: change is the point; scoring weights and tiers stay out of reach.
+_ROUTING_EDIT_KEYS = frozenset({"quality_floors"})
+_QUALITY_FLOORS_KEYS = frozenset({"mode", "workloads"})
 _APP_EDIT_KEYS = frozenset({
     "residency", "allowed_regions", "require_no_retention", "allowed_tiers",
     "allowed_providers", "allowed_models", "max_cost_usd_per_request",
@@ -171,6 +178,12 @@ def _validate_keys(doc: dict) -> None:
 
     for slug, limits in _opt_dict(doc, "capacity", "capacity").items():
         _check_keys(limits, _CAPACITY_LIMIT_KEYS, f"capacity.{slug}")
+
+    routing = _opt_dict(doc, "routing", "routing")
+    _check_keys(routing, _ROUTING_EDIT_KEYS, "routing")
+    if "quality_floors" in routing:
+        _check_keys(_opt_dict(routing, "quality_floors", "routing.quality_floors"),
+                    _QUALITY_FLOORS_KEYS, "routing.quality_floors")
 
 
 def load_proposal(path: str) -> tuple[dict, str]:
@@ -670,8 +683,26 @@ def apply_proposal(snapshot: dict, proposal: dict, *, base: Settings | None = No
                 + (" (this proposal removes it)" if slug in removed else ""))
         validate_capacity_limits(f"capacity.{slug}", limits)
 
+    # -- routing.quality_floors (B80) --
+    floors_edit = (proposal.get("routing") or {}).get("quality_floors")
+    floors_out = None
+    if floors_edit is not None:
+        floors_out = {**settings.routing.quality_floors.model_dump(mode="json"),
+                      **copy.deepcopy(floors_edit)}
+        try:
+            trial = settings.model_copy(update={"routing": settings.routing.model_copy(
+                update={"quality_floors": QualityFloorsCfg.model_validate(floors_out)})})
+        except ValidationError as exc:
+            raise ProposalError("routing.quality_floors", str(exc)) from exc
+        bad = [v for v in lint_settings(trial) if v.startswith("QUALITY_FLOOR")]
+        if bad:
+            raise ProposalError("routing.quality_floors", "; ".join(bad))
+
     # -- everything validated; apply on a deep copy, in spec order --
     out = copy.deepcopy(snapshot)
+
+    if floors_out is not None:
+        out["settings"]["routing"]["quality_floors"] = floors_out
 
     apps_out = {a["application_id"]: a for a in out["apps"]}
     for app_id, edit in app_edits.items():

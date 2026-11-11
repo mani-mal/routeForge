@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import logging
 import re
 
 from app.apps.outcomes import _WORKLOAD_RE
@@ -22,6 +23,14 @@ _SCHEMA_RE = re.compile(r"^routeforge\.quality-recommendation/v(\d+)(?:\.\d+)?$"
 _SUPPORTED_SCHEMA_MAJORS = {1}
 
 STATUS_RECOMMENDED = "recommended"
+STATUS_NO_CHANGE = "no_change"
+log = logging.getLogger("serving.apps")
+_BOUND_STATUSES = (STATUS_RECOMMENDED, STATUS_NO_CHANGE)
+
+# Credible level assumed when a file does not state one. Restated here rather
+# than imported from app/eval (serving must never import app/eval); it is the
+# level app/eval/calibration.py writes at `options.ci_level`.
+_DEFAULT_CI_LEVEL = 0.90
 
 
 class CalibrationError(ValueError):
@@ -54,6 +63,65 @@ def _valid_workload(w: object) -> bool:
     return w is None or (isinstance(w, str) and _WORKLOAD_RE.fullmatch(w) is not None)
 
 
+def _ci_level(rec: dict) -> float:
+    options = rec.get("options")
+    level = options.get("ci_level") if isinstance(options, dict) else None
+    if _is_number(level) and math.isfinite(level) and 0.0 < level < 1.0:
+        return float(level)
+    return _DEFAULT_CI_LEVEL
+
+
+def validate_bounds(rec: dict, *, registry) -> list[dict]:
+    """Lower bounds a recommendation carries: one `{model, workload, lower,
+    ci_level}` for every `recommended` or `no_change` unit with a numeric
+    `ci_low`. Raises `CalibrationError` for a non-finite `ci_low`, one outside
+    [0, 1] or above the unit's `mean`, an unknown model, an invalid workload,
+    or a duplicate `(model, workload)`. A unit without `ci_low` carries no
+    bound and is skipped."""
+    units = rec.get("units")
+    if not isinstance(units, list):
+        raise CalibrationError("recommendation.units must be a list")
+    level = _ci_level(rec)
+    pool_names = {c.name for c in registry.effective_pool()}
+    out: list[dict] = []
+    seen: set[tuple[str, str | None]] = set()
+    for u in units:
+        if not isinstance(u, dict) or u.get("status") not in _BOUND_STATUSES:
+            continue
+        low = u.get("ci_low")
+        if low is None:
+            continue
+        model = u.get("model")
+        if (u.get("status") == STATUS_NO_CHANGE and isinstance(model, str)
+                and model not in pool_names):
+            # A no_change unit changes nothing, so a model since removed from
+            # the pool must not refuse the whole apply (recommended still does).
+            log.warning("skipping bound for no_change unit: model %r not in the pool",
+                        model)
+            continue
+        if not isinstance(model, str) or model not in pool_names:
+            raise CalibrationError(f"unit names an unknown model: {model!r}")
+        workload = u.get("workload")
+        if not _valid_workload(workload):
+            raise CalibrationError(
+                f"unit for model {model!r} has an invalid workload: {workload!r} "
+                f"(must be null or a lower-case workload slug of at most 64 chars)")
+        if not _is_number(low) or not math.isfinite(low) or not (0.0 <= low <= 1.0):
+            raise CalibrationError(
+                f"unit ci_low out of [0, 1] for model {model!r}: {low!r}")
+        mean = u.get("mean")
+        if not _is_number(mean) or not math.isfinite(mean) or low > mean:
+            raise CalibrationError(
+                f"unit ci_low {low!r} exceeds its mean {mean!r} for model {model!r}")
+        if (model, workload) in seen:
+            raise CalibrationError(
+                f"duplicate bound for model {model!r}, workload {workload!r}")
+        seen.add((model, workload))
+        out.append({"model": model, "workload": workload,
+                    "lower": float(low), "ci_level": level})
+    return out
+
+
 def validate_recommendation(rec: dict, *, registry, current_registry_version: str,
                             force_registry_mismatch: bool = False) -> list[dict]:
     """Validate a `recommendation.json` payload against the live registry
@@ -65,7 +133,7 @@ def validate_recommendation(rec: dict, *, registry, current_registry_version: st
     is in `registry.effective_pool()`; its workload is `None` or a valid
     lower-case workload slug; its score is a finite value in [0, 1]; no two
     recommended units share a `(model, workload)`; at least one unit is
-    recommended (an empty set would apply as a no-op that can be neither
+    recommended or carries a lower bound (an empty set would apply as a no-op that can be neither
     409-blocked nor reverted); the recommendation's `registry_version`
     matches `current_registry_version` unless `force_registry_mismatch` is
     set.
@@ -113,7 +181,9 @@ def validate_recommendation(rec: dict, *, registry, current_registry_version: st
         seen.add((model, workload))
         recommended.append(u)
 
-    if not recommended:
+    # A file of only `no_change` units is still a bounds-only set; it is empty
+    # (and refused) only when it carries no bound either.
+    if not recommended and not validate_bounds(rec, registry=registry):
         raise CalibrationError("no recommended units")
 
     rec_version = rec.get("registry_version")

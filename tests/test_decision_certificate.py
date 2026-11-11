@@ -520,3 +520,86 @@ def test_export_omits_checks_when_absent(mem_provider):
     assert "sp.checks" not in root.attributes
     assert "sp.placement" not in root.attributes
     assert "sp.endpoint_registry_version" not in root.attributes
+
+
+# --- B80: the quality floor on the response and the trace -------------------
+
+def _floor_settings():
+    from app.config.schema import QualityFloorsCfg
+    s = _settings()
+    routing = s.routing.model_copy(update={"quality_floors": QualityFloorsCfg(
+        mode="enforce", workloads={"claims": 0.8})})
+    return s.model_copy(update={"routing": routing})
+
+
+def _floor_pipeline(settings) -> Pipeline:
+    """`_pipeline` with a quality resolver carrying calibrated lower bounds:
+    local-8b (cheap) is below the 0.8 `claims` floor, local-32b (mid) clears it."""
+    from app.routing.quality import QualityResolver
+    det = make_detector(settings.serving.pii_detection)
+    registry = make_test_registry(settings)
+    quality = QualityResolver(settings, registry=registry)
+    quality.set_bounds({("local-8b", "claims"): (0.5, "set-1"),
+                        ("local-32b", "claims"): (0.9, "set-1")})
+    co = settings.serving.context_optimization
+    gate = Gate(settings, det, registry=registry)
+    gateway = Gateway(settings, _DeterministicLiteLLM(settings),
+                      Router(settings, registry=registry, quality_resolver=quality),
+                      registry)
+    return Pipeline(settings, gate, det, gateway, co_cfg_provider=lambda: co,
+                    ccr=CCRStore(3600), registry=registry)
+
+
+def test_policy_block_carries_quality_floor():
+    pipe = _floor_pipeline(_floor_settings())
+    req = ChatRequest(messages=[Message(role="user", content=_BENIGN)])
+    out = asyncio.run(pipe.run("req-1", "acme", req, workload="claims"))
+    qf = out["policy"]["quality_floor"]
+    assert out["model"] == "local-32b"
+    assert qf["status"] == "met" and qf["mode"] == "enforce"
+    assert qf["floor"] == 0.8 and qf["workload"] == "claims"
+    assert qf["chosen_lower"] == 0.9
+    # The same dict the served router hop recorded -- never re-derived.
+    served = [r for r in out["trace"] if r.get("step") == "router" and r.get("chosen")][-1]
+    assert qf == served["scoring"]["quality_floor"]
+    json.dumps(qf)   # content-free: ids, enums, numbers
+
+
+def test_policy_block_quality_floor_is_none_without_a_floor():
+    pipe = _floor_pipeline(_floor_settings())
+    req = ChatRequest(messages=[Message(role="user", content=_BENIGN)])
+    out = asyncio.run(pipe.run("req-1", "acme", req))       # no workload -> no floor
+    assert "quality_floor" in out["policy"]
+    assert out["policy"]["quality_floor"] is None
+    assert out["model"] == "local-8b"
+
+
+def test_cache_hit_policy_block_quality_floor_is_none():
+    from tests.test_semantic_cache_pipeline import _base_settings
+    from tests.test_semantic_cache_pipeline import _pipeline as _cache_pipeline
+
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    pipe, _cache = _cache_pipeline(_DeterministicLiteLLM(settings), settings, registry)
+    req = ChatRequest(messages=[Message(role="user", content=_BENIGN)])
+    asyncio.run(pipe.run("req-miss", "acme", req))
+    out = asyncio.run(pipe.run("req-hit", "acme", req))
+    assert out["cost"]["cache_saved_usd"] > 0.0
+    assert "quality_floor" in out["policy"] and out["policy"]["quality_floor"] is None
+
+
+def test_export_stamps_quality_floor_status_on_the_hop_span(mem_provider):
+    sample = _cert_sample()
+    sample["trace"][0]["scoring"] = {**_SAMPLE_SCORING, "quality_floor": {
+        "floor": 0.8, "mode": "enforce", "workload": "claims", "status": "met"}}
+    export_mod.export_trace(**sample)
+    otel._provider.force_flush()
+    hop = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.route")
+    assert hop.attributes["sp.quality_floor_status"] == "met"
+
+
+def test_export_omits_quality_floor_status_without_a_floor(mem_provider):
+    export_mod.export_trace(**_cert_sample())
+    otel._provider.force_flush()
+    hop = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.route")
+    assert "sp.quality_floor_status" not in hop.attributes

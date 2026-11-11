@@ -207,8 +207,8 @@ async def refresh_quality(app: FastAPI) -> bool:
     AFTER the apply's own refresh and put the pre-apply snapshot back.
 
     Returns True when the new snapshot was installed. On ANY failure the last
-    good snapshot stays in place (quality only reorders; a stale snapshot is
-    always safe), a warning is logged, and False is returned -- it never
+    good snapshot stays in place (bounds now select across tiers; a stale
+    snapshot is still safe because selection never leaves the feasible set), a warning is logged, and False is returned -- it never
     raises. Must run on the real serving loop, never in create_app's
     throwaway one."""
     lock = getattr(app.state, "quality_lock", None)
@@ -218,10 +218,15 @@ async def refresh_quality(app: FastAPI) -> bool:
         try:
             async with app.state.db.session() as session:
                 rows = await apps_store.load_quality_overrides(session)
-            app.state.quality.set_overrides({
+                bounds = await apps_store.load_quality_bounds(session)
+            # Build BOTH mappings first, then install back to back: a failure
+            # while building leaves both last-good snapshots untouched.
+            overrides = {
                 key: [QualityScore(score, source, set_id)
                       for source, (score, set_id) in by_source.items()]
-                for key, by_source in rows.items()})
+                for key, by_source in rows.items()}
+            app.state.quality.set_bounds(bounds)
+            app.state.quality.set_overrides(overrides)
             return True
         except Exception:
             logging.getLogger("serving.routing").warning(

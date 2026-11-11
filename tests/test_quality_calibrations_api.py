@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from app.apps import store
 from app.apps.calibration_sets import recommendation_set_id as serving_set_id
-from app.apps.models import RoutingOutcome
+from app.apps.models import ModelQuality, ModelQualityBound, RoutingOutcome
 from app.eval.calibration import build_recommendation
 from app.eval.calibration import recommendation_set_id as eval_set_id
 from app.main import create_app, refresh_quality
@@ -150,7 +150,8 @@ def test_revert_restores_previous_resolution():
 
         revert = c.delete(f"/admin/quality/calibrations/{rec['set_id']}")
         assert revert.status_code == 200, revert.text
-        assert revert.json() == {"set_id": rec["set_id"], "deleted": 1}
+        # one score row + the unit's lower-bound row
+        assert revert.json() == {"set_id": rec["set_id"], "deleted": 2}
         assert c.app.state.quality.resolve("local-8b").source == "tier_default"
 
         listed = c.get("/admin/quality/calibrations")
@@ -237,3 +238,103 @@ def test_serving_and_eval_set_id_implementations_agree():
     rec = _rec("some-registry-version", [_unit("local-8b", mean=0.8),
                                          _unit("local-32b", mean=0.3, workload="claims")])
     assert serving_set_id(rec) == eval_set_id(rec) == rec["set_id"]
+
+
+# --------------------------------------------------------------------------- #
+# B80 Task 4: calibrated lower bounds are stored beside the scores
+# --------------------------------------------------------------------------- #
+def _table_rows(c: TestClient, model) -> list:
+    async def go():
+        async with c.app.state.db.session() as session:
+            return list((await session.execute(select(model))).scalars())
+    return c.portal.call(go)
+
+
+def test_apply_writes_one_score_row_and_two_bound_rows():
+    with _client() as c:
+        _login(c)
+        rec = _rec(_registry_version(c), [
+            _unit("local-8b", mean=0.9),
+            _unit("local-32b", mean=0.8, status="no_change")])
+        r = c.post("/admin/quality/calibrations", json=rec)
+        assert r.status_code == 200, r.text
+        assert r.json()["applied"] == 1
+        assert len(_table_rows(c, ModelQuality)) == 1
+        bounds = _table_rows(c, ModelQualityBound)
+        assert {(b.model_name, b.lower, b.ci_level, b.set_id) for b in bounds} == {
+            ("local-8b", 0.75, 0.9, rec["set_id"]),
+            ("local-32b", 0.75, 0.9, rec["set_id"])}
+
+
+def test_dry_run_lists_bounds_and_writes_nothing():
+    with _client() as c:
+        _login(c)
+        rec = _rec(_registry_version(c), [
+            _unit("local-8b", mean=0.9, workload="claims"),
+            _unit("local-32b", mean=0.8, status="no_change")])
+        r = c.post("/admin/quality/calibrations?dry_run=true", json=rec)
+        assert r.status_code == 200, r.text
+        assert sorted(r.json()["bounds"], key=lambda b: b["model"]) == [
+            {"model": "local-32b", "workload": None, "lower": 0.75, "ci_level": 0.9},
+            {"model": "local-8b", "workload": "claims", "lower": 0.75, "ci_level": 0.9}]
+        assert _table_rows(c, ModelQualityBound) == []
+
+
+def test_all_no_change_file_applies_as_bounds_only_set_listed_and_revertable():
+    with _client() as c:
+        _login(c)
+        rec = _rec(_registry_version(c), [
+            _unit("local-8b", status="no_change"),
+            _unit("local-32b", status="no_change", workload="claims")])
+        r = c.post("/admin/quality/calibrations", json=rec)
+        assert r.status_code == 200, r.text
+        assert r.json()["applied"] == 0
+        assert _table_rows(c, ModelQuality) == []
+        assert len(_table_rows(c, ModelQualityBound)) == 2
+
+        [listed] = c.get("/admin/quality/calibrations").json()
+        assert listed["set_id"] == rec["set_id"]
+        assert listed["units"] == 0 and listed["bounds"] == 2
+
+        assert c.post("/admin/quality/calibrations", json=rec).status_code == 409
+
+        d = c.delete(f"/admin/quality/calibrations/{rec['set_id']}")
+        assert d.status_code == 200, d.text
+        assert d.json()["deleted"] == 2
+        assert _table_rows(c, ModelQualityBound) == []
+        assert c.get("/admin/quality/calibrations").json() == []
+
+
+def test_ci_low_above_mean_is_422():
+    with _client() as c:
+        _login(c)
+        bad = _unit("local-8b", mean=0.6)
+        bad["ci_low"] = 0.7
+        rec = _rec(_registry_version(c), [bad])
+        r = c.post("/admin/quality/calibrations", json=rec)
+        assert r.status_code == 422
+        assert "ci_low" in r.json()["detail"]
+        assert _table_rows(c, ModelQualityBound) == []
+
+
+def test_file_without_ci_low_still_applies_scores_only():
+    with _client() as c:
+        _login(c)
+        u = _unit("local-8b", mean=0.9)
+        del u["ci_low"]
+        rec = _rec(_registry_version(c), [u])
+        r = c.post("/admin/quality/calibrations", json=rec)
+        assert r.status_code == 200, r.text
+        assert r.json()["applied"] == 1
+        assert _table_rows(c, ModelQualityBound) == []
+
+
+def test_ci_level_absent_from_options_defaults_to_point_nine():
+    with _client() as c:
+        _login(c)
+        rec = _rec(_registry_version(c), [_unit("local-8b")])
+        del rec["options"]["ci_level"]
+        rec["set_id"] = serving_set_id(rec)
+        assert c.post("/admin/quality/calibrations", json=rec).status_code == 200
+        [b] = _table_rows(c, ModelQualityBound)
+        assert b.ci_level == 0.9

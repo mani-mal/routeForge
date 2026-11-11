@@ -215,8 +215,10 @@ the posterior `Beta(7.5 + 28.5, 2.5 + 1.5) = Beta(36, 4)`, mean `0.9`, 90% inter
 `[0.81302, 0.964201]` (width 0.151 — under the 0.25 default).
 
 `units` carries **every** unit the estimator computed, whatever its status — the report
-needs the `insufficient` and `no_change` ones too. Only units with `status: "recommended"`
-are acted on by apply.
+needs the `insufficient` and `no_change` ones too. Apply writes a **score** only for units
+with `status: "recommended"`. It also writes a **lower bound** (`ci_low`) for every
+`recommended` **and** `no_change` unit that carries one, which the quality-floor router
+reads (§11). An `insufficient` unit contributes neither.
 
 `set_id` is the first 16 hex characters of the sha256 hash of the file's own canonical
 JSON (sorted keys, compact separators) **with the `set_id` key itself removed** — so it is
@@ -247,10 +249,18 @@ Body: the `recommendation.json` payload, as-is.
    tag shape. `"*"`, upper-case, and non-strings are refused, not normalized;
 5. every such unit's `mean` must be a finite number in `[0, 1]`;
 6. no two recommended units may share a `(model, workload)`;
-7. at least one unit must be `recommended` (`"no recommended units"` otherwise — an empty
-   set would be a no-op that could be neither `409`-blocked nor reverted);
+7. at least one unit must be `recommended`, or carry a lower bound (`"no recommended
+   units"` otherwise — an empty set would be a no-op that could be neither `409`-blocked
+   nor reverted). A file of only `no_change` units with `ci_low` is a valid **bounds-only**
+   set;
 8. the payload's `registry_version` must equal the live `registry.registry_version()`,
    unless the request carries `force_registry_mismatch=true`.
+
+9. every `recommended` or `no_change` unit that has a `ci_low` (B80): `model` must exist
+   in the live registry, `workload` must be `null` or a workload slug as in 4, `ci_low`
+   must be a finite number in `[0, 1]` and no greater than the unit's `mean`, and no two
+   such units may share a `(model, workload)`. A unit without `ci_low` carries no bound
+   and is skipped, not refused.
 
 **Dry run (`dry_run=true`, default `false`) — writes nothing:**
 
@@ -258,8 +268,14 @@ Body: the `recommendation.json` payload, as-is.
 {"set_id": "...", "registry_version_match": true,
  "units": [{"model": "qwen3-8b", "workload": null,
             "current": {"score": 0.5, "source": "tier_default", "set_id": null},
-            "proposed": 0.9, "customer_wins": false, "shadowed_by": []}]}
+            "proposed": 0.9, "customer_wins": false, "shadowed_by": []}],
+ "bounds": [{"model": "qwen3-8b", "workload": null, "lower": 0.81302, "ci_level": 0.9}]}
 ```
+
+`bounds` lists the lower bounds an apply would store (B80), one per `recommended` or
+`no_change` unit with a `ci_low`; `ci_level` is the file's `options.ci_level`, or `0.9`
+when it states none. It is `[]` for a file without `ci_low` values. A bounds-only set has
+an empty `units` and a non-empty `bounds`.
 
 `customer_wins` is `true` when a `customer` declaration will beat this unit after apply —
 computed on exactly §7's order: a `customer (model, workload)` row, or a model-wide
@@ -275,7 +291,8 @@ always empty.
 
 **Apply (`dry_run=false`):** one DB transaction writes a `model_quality` row per
 recommended unit (`source="calibrated"`, `task_class=<workload>` or `NULL` for `*`,
-`score=mean`, `eval_run_id=set_id`, `notes="P2b-3 set"`), then refreshes this replica's
+`score=mean`, `eval_run_id=set_id`, `notes="P2b-3 set"`) and a `model_quality_bounds` row
+per bound (`model_name`, `task_class`, `lower`, `ci_level`, `set_id`; B80), then refreshes this replica's
 quality snapshot at once. Response:
 
 ```json
@@ -283,7 +300,8 @@ quality snapshot at once. Response:
  "registry_version_match": true, "forced": false}
 ```
 
-`forced` is `true` only when `force_registry_mismatch=true` was actually needed (the
+`applied` counts score rows only (0 for a bounds-only set); the bound rows are counted in
+the audit line's `bounds` and in `GET`. `forced` is `true` only when `force_registry_mismatch=true` was actually needed (the
 versions differed). Apply and revert each write **one** audit line on the `serving.admin`
 logger — a compact JSON object of ids, counts and flags only:
 `{"admin_id": "...", "event": "quality_calibration_applied", "forced": false,
@@ -291,16 +309,22 @@ logger — a compact JSON object of ids, counts and flags only:
 `"event": "quality_calibration_reverted"`, `"forced": false`, `units` = rows deleted).
 
 Re-applying the same `set_id` is **not** idempotent: it returns `409` (a `model_quality`
-row with that `eval_run_id` already exists) and writes nothing further.
+row with that `eval_run_id`, or a `model_quality_bounds` row with that `set_id`, already
+exists) and writes nothing further.
 
 ### `GET /admin/quality/calibrations`
 
-Lists applied sets, each `{"set_id": "...", "applied_at": "<ISO-8601>", "units": <n>}`.
+Lists applied sets, newest first, each `{"set_id": "...", "applied_at": "<ISO-8601>",
+"units": <n>, "bounds": <n>}`: `units` counts the set's score rows, `bounds` its lower-bound
+rows. A bounds-only set is listed with `units: 0`. A set applied before B80 shows
+`bounds: 0` (see §11).
 
 ### `DELETE /admin/quality/calibrations/{set_id}`
 
-Deletes every `calibrated` row for that set and refreshes this replica's snapshot at once.
-`{"set_id": "...", "deleted": <n>}`; `404` if no row with that `set_id` exists. Other
+Deletes every `calibrated` score row **and every lower-bound row** for that set and
+refreshes this replica's snapshot at once. `{"set_id": "...", "deleted": <n>}`, where
+`deleted` is score rows plus bound rows; `404` if the set has neither. Bounds-only sets
+revert the same way. Other
 applied sets and every `customer` row are untouched.
 
 ## 7. Precedence and serving
@@ -352,7 +376,7 @@ non-null published `quality`. See `docs/backlog/bugs.md` B54.
 
 The shared `QualityResolver` (`app.state.quality`, one per process, read only by the
 router — the gateway never reads it) holds its override snapshot as a plain
-`(customer, calibrated)` pair of dicts, swapped by reference in one assignment — a
+`(customer, calibrated)` pair of dicts (plus a separate lower-bound map, §11), swapped by reference in one assignment — a
 concurrent `resolve()` always sees either the old snapshot or the new one, never a mix,
 and `resolve()` itself has no awaits. Refreshes are serialized by a lock around the DB
 read *and* the swap, so snapshots install in the order they were read: a slow timed
@@ -420,3 +444,65 @@ because two stored values start affecting routing the moment this ships:
    ```
 
    Every row returned will be scored differently after deploy.
+
+## 11. Lower bounds and quality floors (B80)
+
+The estimator's `ci_low` (the 5th percentile of the Beta posterior at the default
+`ci_level` 0.90) is the **calibrated lower bound** on a model's success rate for a
+workload. The quality-floor router
+([`per-app-config.md`](./per-app-config.md) `quality_floors`) keeps a model only if this
+bound clears the workload's floor. The point score (`mean`) still feeds the ranking score
+as before; the bound never does.
+
+**Where bounds are stored and read.**
+
+- Apply writes one `model_quality_bounds` row per `(model, workload)` for every
+  `recommended` **and** `no_change` unit with a `ci_low`. A `no_change` unit changes no
+  score, but a model whose quality the data confirmed still gets a bound. A new table, so
+  `create_all` makes it; no `ALTER` is needed for it.
+- The resolver keeps bounds in their own map, refreshed with the score overrides (§8). For
+  a model and workload it tries `(model, workload)`, then `(model, *)`, from the newest
+  applied set, and reports the source `calibrated`.
+- **Nothing else supplies a bound.** Published quality, the tier default and `customer`
+  rows do not, and there is no write path for customer bounds. A model with no bound
+  never clears a floor.
+- Revert deletes a set's bound rows together with its score rows.
+- `GET /admin/config-snapshot` carries the applied bounds under `quality.bounds`
+  (`{model, workload, lower, set_id}`), so the policy simulator can replay a floor.
+
+**Operator steps.**
+
+1. Collect outcomes and run `scripts/quality_recommend.py` as in §1. Check that the report
+   shows enough labelled rows per workload; a unit below the estimator's gates is
+   `insufficient` and gets no bound.
+2. `POST /admin/quality/calibrations?dry_run=true` and read the `bounds` list: it is
+   what will be stored.
+3. Apply, then `GET /admin/quality/calibrations` and confirm the set shows `bounds > 0`.
+4. Set `routing.quality_floors.workloads` in `config/routing.yaml` and start with `mode:
+   shadow`. The trace and response then record what the floor would have chosen, without
+   acting. Forecast the change first with `scripts/policy_simulate.py`
+   ([`policy-simulator.md`](./policy-simulator.md)).
+5. Move to `enforce` per app (`quality_floor_mode`) or for the deployment.
+
+**Sets applied before this feature have no bounds.** They stored scores only. To give
+them bounds, **revert** the set (`DELETE`) and **re-apply** the same file; the file must
+still carry `ci_low` (every file `quality_recommend.py` writes does). Re-applying without
+reverting is a `409`. Order matters: re-applying stamps a new `calibrated_at`, and for a
+shared key the newest `calibrated_at` wins (scores and bounds alike), so re-applying an
+older set while a newer one exists makes the older set outrank it and silently changes
+ranking, floor or no floor. Re-apply only the newest set, or re-apply several sets in
+their original oldest-to-newest order. If the registry changed since the first apply, the
+re-apply may need `force_registry_mismatch=true`. Until then, a workload calibrated only by an old set has no bound
+and its floor falls back to the length-tier path with `unmet_no_qualifier`.
+
+**Fitting bounds offline for the benchmark.** `scripts/floor_fit.py` produces a
+`routeforge.floor-bounds/v1` file from a FeasibleRouteBench sweep, using this same
+estimator with its default gates on the calibration half of a seeded 50/50 split
+(stratified by workload). `scripts/feasible_bench.py --floor-bounds` then scores the
+`router_floor` arm on the held-out half. See
+[`feasible-route-bench.md`](../guides/feasible-route-bench.md) §10. Those bounds are never
+applied to a deployment.
+
+**Caveats.** A bound is only as good as its labels: it says the data is consistent with at
+least that success rate, for the traffic the labels came from. It does not cover a
+workload shift, and a floor does not verify any single answer.
