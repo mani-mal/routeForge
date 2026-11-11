@@ -17,7 +17,9 @@ docker compose -f deploy/compose/docker-compose.yml up --build
 - **API:** http://localhost:8080 (`/health`, `/v1/chat/completions`, `/api/*`)
 - **Langfuse:** http://localhost:3000 (login `demo@example.com` / `demodemo`)
 
-Default `inference_backend=mock`, regex PII detection → no GPU, no API keys, offline.
+Defaults: regex PII detection, no on-prem model onboarded yet → no GPU, no API keys, offline.
+Onboard your own OpenAI-compatible endpoint from the console (Infrastructure → Onboard);
+see `docs/guides/onboarding-models.md`.
 Fire the demo traffic from the UI's "Run burst" button, or:
 
 ```bash
@@ -28,12 +30,14 @@ GPU serving path (Phase 9) is behind a profile and off by default:
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml --profile gpu up
-# and set SP_INFERENCE_BACKEND=vllm
 ```
+
+RouteForge does not deploy or select the serving stack; onboard the resulting endpoint
+at runtime.
 
 > First build compiles the API image with the `observability` extra (Langfuse
 > export) — the "< 5 minutes" target assumes images are already built/pulled.
-> For a lean mock-only image build with `--build-arg EXTRAS=""`.
+> For a lean image build with `--build-arg EXTRAS=""`.
 
 ## Single workstation — NVIDIA DGX Spark
 
@@ -58,11 +62,12 @@ helm install serving-plane deploy/helm/serving-plane \
   -f deploy/helm/serving-plane/values-greenlake.yaml
 ```
 
-Every `config/serving.yaml` knob is a Helm value — switch backends without rebuilding:
+Every `config/serving.yaml` knob is a Helm value — switch PII detection, compression
+and providers without rebuilding:
 
 ```bash
 helm upgrade serving-plane deploy/helm/serving-plane \
-  --set servingPlane.inferenceBackend=vllm
+  --set servingPlane.policy.piiDetection=regex
 ```
 
 See `deploy/helm/serving-plane/README.md` for the full values reference. Key GreenLake
