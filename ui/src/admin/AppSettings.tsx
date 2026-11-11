@@ -403,12 +403,22 @@ function QualityFloorTable({ idPrefix, appFloors, deploymentFloors, onChange }: 
   onChange: (f: Record<string, number> | null) => void;
 }) {
   const [draft, setDraft] = useState("");
+  // Raw text per row while editing: a number input reports "" for transient
+  // states ("0.", "-"), which must not drop the row or send a bad number.
+  const [raw, setRaw] = useState<Record<string, string>>({});
   const app = appFloors ?? {};
   const workloads = [...new Set([...Object.keys(deploymentFloors), ...Object.keys(app)])].sort();
-  function setFloor(w: string, raw: string) {
+  function setFloor(w: string, text: string) {
+    setRaw((r) => ({ ...r, [w]: text }));
+    const n = text.trim() === "" ? NaN : Number(text);
+    // Send a number only when the text parses to a finite value; otherwise
+    // keep the last value and the row, and let Save show the server's 422.
+    if (Number.isFinite(n)) onChange({ ...app, [w]: n });
+  }
+  function removeFloor(w: string) {
     const next = { ...app };
-    if (raw === "") delete next[w];
-    else next[w] = Number(raw);
+    delete next[w];
+    setRaw((r) => { const { [w]: _gone, ...rest } = r; return rest; });
     onChange(Object.keys(next).length ? next : null);
   }
   return (
@@ -429,9 +439,16 @@ function QualityFloorTable({ idPrefix, appFloors, deploymentFloors, onChange }: 
                 <td className="pr-3 text-xs text-gray-500">deployment {dep !== undefined ? dep : "—"}</td>
                 <td className="pr-3">
                   <input id={`${idPrefix}-${w}`} aria-label={`app floor for ${w}`} type="number"
-                    min={0.01} max={1} step="0.01" value={val ?? ""}
+                    min={0.01} max={1} step="0.01" value={raw[w] ?? val ?? ""}
                     onChange={(e) => setFloor(w, e.target.value)}
                     className={`${inputCls} w-20`} placeholder="inherit" />
+                </td>
+                <td className="pr-3">
+                  {val !== undefined && (
+                    <button type="button" aria-label={`remove app floor for ${w}`}
+                      onClick={() => removeFloor(w)}
+                      className="text-xs text-gray-400 underline">remove</button>
+                  )}
                 </td>
                 <td className="text-xs text-frontier">{inert ? "has no effect: below the deployment floor" : ""}</td>
               </tr>

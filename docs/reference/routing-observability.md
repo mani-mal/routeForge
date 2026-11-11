@@ -642,7 +642,7 @@ post-recovery cost through `cooldown_s` and `max_cooldown_s`.
 
 Present only when a request decided under a quality floor in mode `shadow` or `enforce`
 (see [`per-app-config.md`](./per-app-config.md) `quality_floors`). With the mode `off`, no
-workload or no floor, nothing below is emitted and the record is as before. The record
+workload or no floor, decisions are identical and none of the record below is emitted; two keys are additive: the response `policy` block always carries `"quality_floor": null`, and every DecisionRecord gains an `attempted` key (null except on failed gateway hops). The record
 is ids, numbers and enums only, so like `sp.scoring` it is emitted regardless of
 `capture_io`.
 

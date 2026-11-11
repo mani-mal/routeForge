@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import logging
 import re
 
 from app.apps.outcomes import _WORKLOAD_RE
@@ -23,6 +24,7 @@ _SUPPORTED_SCHEMA_MAJORS = {1}
 
 STATUS_RECOMMENDED = "recommended"
 STATUS_NO_CHANGE = "no_change"
+log = logging.getLogger("serving.apps")
 _BOUND_STATUSES = (STATUS_RECOMMENDED, STATUS_NO_CHANGE)
 
 # Credible level assumed when a file does not state one. Restated here rather
@@ -90,6 +92,13 @@ def validate_bounds(rec: dict, *, registry) -> list[dict]:
         if low is None:
             continue
         model = u.get("model")
+        if (u.get("status") == STATUS_NO_CHANGE and isinstance(model, str)
+                and model not in pool_names):
+            # A no_change unit changes nothing, so a model since removed from
+            # the pool must not refuse the whole apply (recommended still does).
+            log.warning("skipping bound for no_change unit: model %r not in the pool",
+                        model)
+            continue
         if not isinstance(model, str) or model not in pool_names:
             raise CalibrationError(f"unit names an unknown model: {model!r}")
         workload = u.get("workload")

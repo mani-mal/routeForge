@@ -487,7 +487,12 @@ as before; the bound never does.
 **Sets applied before this feature have no bounds.** They stored scores only. To give
 them bounds, **revert** the set (`DELETE`) and **re-apply** the same file; the file must
 still carry `ci_low` (every file `quality_recommend.py` writes does). Re-applying without
-reverting is a `409`. Until then, a workload calibrated only by an old set has no bound
+reverting is a `409`. Order matters: re-applying stamps a new `calibrated_at`, and for a
+shared key the newest `calibrated_at` wins (scores and bounds alike), so re-applying an
+older set while a newer one exists makes the older set outrank it and silently changes
+ranking, floor or no floor. Re-apply only the newest set, or re-apply several sets in
+their original oldest-to-newest order. If the registry changed since the first apply, the
+re-apply may need `force_registry_mismatch=true`. Until then, a workload calibrated only by an old set has no bound
 and its floor falls back to the length-tier path with `unmet_no_qualifier`.
 
 **Fitting bounds offline for the benchmark.** `scripts/floor_fit.py` produces a

@@ -13,8 +13,7 @@ from dataclasses import dataclass
 
 from app.config.schema import PoolCandidate
 
-# Same order as app/routing/router.py::_ORDER. Not imported from there: the
-# router imports this module, so the reverse import would be circular.
+# The one tier ordering; app/routing/router.py imports it as `_ORDER`.
 _TIER_ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 
 BELOW_QUALITY_FLOOR = "below quality floor"

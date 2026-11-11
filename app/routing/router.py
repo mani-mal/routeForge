@@ -29,6 +29,7 @@ from app.policy.feasible import (
     violation_matrix,
 )
 from app.routing.floor_select import (
+    _TIER_ORDER as _ORDER,
     BELOW_QUALITY_FLOOR,
     CONTEXT_TOO_SMALL,
     OVER_BUDGET,
@@ -46,7 +47,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("serving.routing")
 
-_ORDER = {"cheap": 0, "mid": 1, "frontier": 2}
 
 
 def _clamp_to_best_allowed(tier: str, allowed: list[PoolCandidate]) -> str:

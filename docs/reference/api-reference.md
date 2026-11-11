@@ -565,7 +565,10 @@ routing quality snapshot immediately, and returns `{"set_id", "applied", "refres
 Lists applied calibration sets: `[{"set_id", "applied_at", "units", "bounds"}, ...]`,
 newest first. `units` counts score rows, `bounds` lower-bound rows; a bounds-only set has
 `units: 0`. A set applied before bounds existed shows `bounds: 0`: revert it and re-apply
-the same file to give it bounds.
+the same file to give it bounds. Re-apply only the newest set, or several sets in their
+original oldest-to-newest order: the newest `calibrated_at` wins per key, so re-applying an
+older set while a newer one exists makes it outrank the newer one. A changed registry may
+need `force_registry_mismatch=true`.
 
 ## `DELETE /admin/quality/calibrations/{set_id}` (admin-only)
 
