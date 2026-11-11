@@ -21,7 +21,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
-from app.apps.calibration_sets import CalibrationError, validate_recommendation
+from app.apps.calibration_sets import (
+    CalibrationError, validate_bounds, validate_recommendation,
+)
 from app.apps.langfuse_provision import LangfuseProvisioner, encrypt_secret
 from app.apps.models import AppToken, OutcomeFeedback, RoutingOutcome
 from app.apps.outcomes import _WORKLOAD_RE
@@ -1591,6 +1593,7 @@ async def apply_calibration(
         recommended = validate_recommendation(
             rec, registry=registry, current_registry_version=current_registry_version,
             force_registry_mismatch=force_registry_mismatch)
+        bounds = validate_bounds(rec, registry=registry)
     except CalibrationError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -1620,6 +1623,7 @@ async def apply_calibration(
             "set_id": set_id,
             "registry_version_match": version_match,
             "units": units,
+            "bounds": bounds,
         }
 
     async with request.app.state.db.session() as session:
@@ -1627,7 +1631,8 @@ async def apply_calibration(
             applied = await store.write_calibration_set(
                 session, set_id=set_id,
                 units=[{"model": u["model"], "workload": u.get("workload"),
-                        "score": u["mean"]} for u in recommended])
+                        "score": u["mean"]} for u in recommended],
+                bounds=bounds)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         await session.commit()
@@ -1636,7 +1641,7 @@ async def apply_calibration(
     refreshed = await refresh_quality(request.app)
     _audit_calibration({
         "event": "quality_calibration_applied", "set_id": set_id,
-        "units": applied, "forced": forced,
+        "units": applied, "bounds": len(bounds), "forced": forced,
         "registry_version_match": version_match, "admin_id": admin_id})
     return {"set_id": set_id, "applied": applied, "refreshed": refreshed,
             "registry_version_match": version_match, "forced": forced}
@@ -1647,7 +1652,7 @@ async def list_calibrations(request: Request, _: str = Depends(require_admin)) -
     async with request.app.state.db.session() as session:
         sets = await store.list_calibration_sets(session)
     return [{"set_id": s["set_id"], "applied_at": _iso(s["applied_at"]),
-             "units": s["units"]} for s in sets]
+             "units": s["units"], "bounds": s["bounds"]} for s in sets]
 
 
 @admin_router.delete("/quality/calibrations/{set_id}")

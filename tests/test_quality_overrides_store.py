@@ -202,3 +202,48 @@ def test_delete_calibration_set_unknown_id_returns_zero():
         assert deleted == 0
 
     _run(go())
+
+
+def test_load_quality_bounds_newest_set_wins_per_key():
+    import datetime as dt
+    from app.apps.models import ModelQualityBound
+
+    async def go():
+        db = await _db()
+        async with db.session() as s:
+            await store.write_calibration_set(
+                s, set_id="old", units=[],
+                bounds=[{"model": "local-8b", "workload": None, "lower": 0.5, "ci_level": 0.9},
+                        {"model": "local-8b", "workload": "claims", "lower": 0.4, "ci_level": 0.9}])
+            await s.commit()
+        async with db.session() as s:
+            await store.write_calibration_set(
+                s, set_id="new", units=[],
+                bounds=[{"model": "local-8b", "workload": None, "lower": 0.7, "ci_level": 0.9}])
+            await s.commit()
+        async with db.session() as s:
+            from sqlalchemy import update
+            await s.execute(update(ModelQualityBound).where(
+                ModelQualityBound.set_id == "old").values(
+                calibrated_at=dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)))
+            await s.commit()
+        async with db.session() as s:
+            got = await store.load_quality_bounds(s)
+        assert got == {("local-8b", None): (0.7, "new"),
+                       ("local-8b", "claims"): (0.4, "old")}
+
+    _run(go())
+
+
+def test_write_calibration_set_409_covers_bounds_table():
+    async def go():
+        db = await _db()
+        bounds = [{"model": "local-8b", "workload": None, "lower": 0.5, "ci_level": 0.9}]
+        async with db.session() as s:
+            await store.write_calibration_set(s, set_id="b-only", units=[], bounds=bounds)
+            await s.commit()
+        with pytest.raises(ValueError):
+            async with db.session() as s:
+                await store.write_calibration_set(s, set_id="b-only", units=[], bounds=bounds)
+
+    _run(go())

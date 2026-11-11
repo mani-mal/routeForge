@@ -312,7 +312,7 @@ def test_apply_reports_version_match_and_forced_and_audits(caplog):
             "quality_calibration_reverted"]
         assert lines[1]["forced"] is True and lines[1]["units"] == 1
         assert lines[1]["set_id"] == stale["set_id"]
-        assert lines[2]["units"] == 1
+        assert lines[2]["units"] == 2  # score row + bound row
         assert all(line["admin_id"] for line in lines)
 
 
