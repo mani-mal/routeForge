@@ -262,7 +262,17 @@ non-zero with a named violation on any of:
   check any more;
 - every `model_pool` entry has a price in `pricing.yaml`;
 - no concern owned by two files (no duplicated `max_spend_usd`, thresholds, etc.);
-- one sensitivity enum, used by name wherever sensitivity is matched.
+- one sensitivity enum, used by name wherever sensitivity is matched, and equal to
+  `app/policy/enums.py::SENSITIVITY`;
+- `routing.tiers` is exactly `cheap | mid | frontier` (`TIER_SET_NONCANONICAL`);
+- `onprem` is declared under `serving.providers`, enabled or not
+  (`ONPREM_PROVIDER_MISSING`);
+- `routing.risk_floors` has exactly the `low | medium | high` keys, and every
+  sensitivity rule's `risk_class` is one of them (`RISK_FLOOR_CLASS_*`,
+  `RULE_RISK_CLASS_UNKNOWN`);
+- one owner per concern, by top-level key: a key sitting in a file that does not
+  own it fails the boot (`CONCERN_IN_WRONG_FILE`); a key no file owns only logs a
+  warning (`UNKNOWN_CONFIG_KEY`), so a stale key never takes down a customer's boot.
 
 This turns every drift class into a **boot failure instead of a silent misconfiguration**,
 and keeps working as configs evolve. It is the single highest-leverage guardrail in the
