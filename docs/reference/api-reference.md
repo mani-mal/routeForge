@@ -534,6 +534,23 @@ response text. Line format, columns and an example:
 
 ---
 
+## `POST`/`PUT`/`GET /admin/infra/models` — endpoint API key fields (admin-only)
+
+The full onboarding body is in
+[`onboarding-models.md`](../guides/onboarding-models.md#b-onboard-it); these are the
+key fields (B68), detailed in its section (b3):
+
+| Field | In | Notes |
+|---|---|---|
+| `api_key` | request | The endpoint's bearer token, stored encrypted with `ENCRYPTION_KEY` and never returned. `422` if sent with `api_key_env`, if empty/whitespace, or if no usable `ENCRYPTION_KEY` is configured (nothing is stored). On `PUT`: omitted = keep the stored key; `null` = remove it; a value = replace it, clear `api_key_env` and re-probe. |
+| `api_key_env` | request | Name of an env var in the API container. Sending it removes any stored key. |
+| `api_key_source` | response | `"stored"` \| `"env"` \| `null`. On `GET` rows and the `POST`/`PUT` acks. |
+| `api_key_hint` | response (`GET`) | Last 4 characters of a stored key of 12+ characters; otherwise `null`. |
+
+Neither the key nor its ciphertext appears in any response, the config snapshot,
+traces, outcome rows or logs. A rotated key is used at once by the replica that took the
+write and by every other replica within `routing.quality_refresh_s` (60 s default).
+
 ## `POST /admin/quality/calibrations` (admin-only)
 
 Admin-only, like every route in this section (`401` without the admin session cookie).

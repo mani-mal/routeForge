@@ -21,7 +21,7 @@ onboarding-relevant ones:
 |---|---|---|
 | `DATABASE_URL` | Application/token/policy/usage store | Unset → local SQLite `./routeforge.db`. In a real deploy point at the shared Postgres. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeds the first admin login on first boot | Defaults `admin@routeforge.local` / `changeme` — **override these**. |
-| `ENCRYPTION_KEY` | Fernet key encrypting per-app Langfuse secrets at rest | 32-byte / 64-hex. Unset → secrets stored as plaintext (dev only). |
+| `ENCRYPTION_KEY` | Fernet key encrypting per-app Langfuse secrets and onboarded endpoint API keys at rest | 32-byte / 64-hex. Unset → Langfuse secrets stored as plaintext (dev only); an endpoint `api_key` is **refused** (`422`), never stored in clear. Changing it makes stored endpoint keys undecryptable (re-enter them). |
 | `LANGFUSE_HOST` | Langfuse ingestion host | Needed for any Langfuse feature. |
 | `LANGFUSE_ORG_PUBLIC_KEY` / `LANGFUSE_ORG_SECRET_KEY` | Org-scoped keys that enable **per-app Langfuse project auto-provisioning** | Optional. Absent → all apps share the default project. |
 
@@ -194,6 +194,22 @@ ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS issued_by VARCHAR(64);
 ```
 
 Existing tokens keep all three null: no expiry, no session binding, admin-issued.
+
+### Upgrading `onboarded_models` for stored endpoint keys (B68)
+
+An onboarded endpoint's API key can be given at onboarding time and is stored
+encrypted in a new column (see
+[`onboarding-models.md` (b3)](onboarding-models.md#b3-endpoint-api-keys--two-ways-exactly-one-per-model)).
+`create_all` does not add it to an existing table. **Run this before rolling the
+image** (or run `scripts/migrate_app_policies.py`, which includes it); the
+image's boot-time schema check (B62) names the column if it is missing:
+
+```sql
+ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS api_key_enc TEXT;
+```
+
+Existing rows read `NULL`: no stored key, so each keeps using its
+`api_key_env` (or the provider default) exactly as before.
 
 ### Service credentials (machine-issued, short-lived tokens)
 
