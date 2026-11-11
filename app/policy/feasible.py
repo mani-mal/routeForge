@@ -28,10 +28,11 @@ Stage 7 runs LAST, after every policy stage above it, so that every policy
 reason wins over it and `circuit_open` only ever labels a candidate that is
 otherwise fully policy-eligible. That is what makes the router's use of it
 safe (`app/routing/router.py::select`): the router chooses the target tier
-from the set WITHOUT stage 7 (the breaker never changes the tier), reads this
-stage only to label which of that tier's final candidates are open, and
-bypasses it within the tier when all of them are -- which can only restore
-policy-eligible candidates, never widen placement.
+from the set WITHOUT stage 7 (the breaker never lowers the hard floor), reads
+this stage only to label which of that tier's final candidates are open, and,
+when all of them are, either steps a complexity-raised tier down to a closed
+candidate at or above the hard floor or bypasses it within the tier -- which
+can only use policy-eligible candidates, never widen placement.
 
 The order is load-bearing, not stylistic: placement runs first so an excluded
 cloud model under `onprem_only` always reads "residency" rather than a softer

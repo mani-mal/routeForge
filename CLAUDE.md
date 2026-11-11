@@ -135,7 +135,8 @@ guarantees.
 8. **Residency beats the risk floor.** The residency filter runs before the risk
    floor. A high-risk `onprem_only` request floors to the best *allowed* (on-prem)
    tier and sets `require_verification` — it is **never** lifted to a cloud tier to
-   satisfy the floor. (High-risk + PHI is the hospital persona — the most important case
+   satisfy the floor. Only policy lowers the floor: failover and the circuit breaker never
+   serve a request below its risk/escalation floor. (High-risk + PHI is the hospital persona — the most important case
    to get right; both step 6 routing and step 9 verification obey this.)
 
 ## Architecture — the ten steps

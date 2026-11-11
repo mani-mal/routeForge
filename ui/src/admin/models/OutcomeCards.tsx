@@ -52,7 +52,9 @@ export function OutcomeCards({ data }: { data: MetricsSummary }) {
         value={c.completed.value === null ? insufficientText(c.completed.n) : percent(c.completed.value)}
         insufficient={c.completed.value === null}
         sub="not a quality measure"
-        sub2={`${c.completed.failures ?? 0} failures · ${
+        sub2={`${c.completed.failures ?? 0} failures${
+          c.completed.no_failover ? ` (${c.completed.no_failover} with no failover candidate)` : ""
+        } · ${
           c.completed.policy_rejections === null || c.completed.policy_rejections === undefined
             ? "policy rejections not attributable to a placement"
             : `${c.completed.policy_rejections} policy rejections`

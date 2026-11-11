@@ -464,6 +464,8 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
                          ctx: ExecutionPolicyContext | None = None,
                          s=None, internals: dict | None = None,
                          attempts: tuple[str, ...] = (),
+                         routing_trace: list[dict] | None = None,
+                         no_failover: bool = False,
                          workload: str | None = None,
                          workload_source: str = "none",
                          outcome_session: str | None = None,
@@ -489,7 +491,9 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
     the caller's existing `observe_request` already counted the failure.
 
     It also writes the request's `backend_failed` routing outcome (P2b-2),
-    naming `attempts` -- the candidates the gateway tried, in order."""
+    naming `attempts` -- the candidates the gateway tried, in order -- and,
+    from `routing_trace`, the routing decision behind them (B70 item 2);
+    `no_failover` marks a feasible set of one (B70 item 1)."""
     try:
         cand = next((c for c in request.app.state.registry.effective_pool()
                      if c.name == model), None)
@@ -514,6 +518,7 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
     await _record_failure_outcome(
         request, "backend_failed", tenant=tenant, request_id=request_id,
         started=started, s=s, internals=internals, attempts=attempts,
+        routing_trace=routing_trace, no_failover=no_failover,
         workload=workload, workload_source=workload_source,
         outcome_session=outcome_session,
         requested_alias=requested_alias)
@@ -578,6 +583,8 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
                                   attempts: tuple[str, ...] = (),
                                   rejected: tuple = (),
                                   core=None,
+                                  routing_trace: list[dict] | None = None,
+                                  no_failover: bool = False,
                                   workload: str | None = None,
                                   workload_source: str = "none",
                                   outcome_session: str | None = None,
@@ -589,7 +596,11 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
     reason-free trace `Pipeline.run` stashed in `internals["outcome_trace"]`
     before refusing the response (a model was served; step 9 refused it).
     `core` is a `no_eligible` request's `ConflictingCore` (P3b), stored in
-    its content-free `to_record()` shape."""
+    its content-free `to_record()` shape. `routing_trace` is the
+    reason-free decision trace of a request that reached the router before
+    failing (B70 item 2): the gateway's exception carries it on the buffered
+    path, and a streamed `backend_failed` row falls back to the one
+    `Pipeline.run_stream` stashed in `internals["routing_trace"]`."""
     try:
         s = s if s is not None else request.app.state.settings
         internals = internals or {}
@@ -597,6 +608,8 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
         if status == "verify_failed" and internals.get("outcome_trace") is not None:
             served = {"trace": internals["outcome_trace"],
                       **(internals.get("outcome_usage") or {})}
+        if routing_trace is None and status == "backend_failed":
+            routing_trace = internals.get("routing_trace")
         row = build_failure_outcome(
             status=status, request_id=request_id, application_id=tenant,
             outcome_ctx=internals.get("outcome_ctx") or {},
@@ -607,7 +620,8 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
             requested_alias=requested_alias,
             attempts=tuple(attempts), rejected=tuple(rejected),
             latency_ms=(time.monotonic() - started) * 1000,
-            conflicting_core=_core_record(core), **served)
+            conflicting_core=_core_record(core),
+            routing_trace=routing_trace, no_failover=no_failover, **served)
     except Exception:
         logging.getLogger("serving.obs").warning(
             "outcome record failed request=%s", request_id, exc_info=True)
@@ -635,6 +649,8 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                              started=started, model=_failed_model(exc), s=s,
                              internals=internals,
                              attempts=tuple(getattr(exc, "attempted_models", ())),
+                             routing_trace=getattr(exc, "routing_trace", None),
+                             no_failover=bool(getattr(exc, "no_failover", False)),
                              workload=workload, workload_source=workload_source,
                              outcome_session=outcome_session,
                              requested_alias=requested_alias,
@@ -650,6 +666,8 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
         # A `ContextWindowExceeded` from the gateway names the models it tried,
         # like `BackendUnavailable`; the others carry none.
         attempts=tuple(getattr(exc, "attempted_models", ())),
+        # ... and the routing decisions behind them (B70 item 2).
+        routing_trace=getattr(exc, "routing_trace", None),
         # `NoEligibleCandidate.rejected` is `(name, code)` tuples; the builder
         # takes `{name, code}` mappings (the router trace's shape).
         rejected=tuple({"name": name, "code": code}

@@ -953,7 +953,16 @@ and steps 4–6.
 RouteForge reads what they report. Client hints are validated inputs, never policy. This
 subsumes roadmap item R3 (per-conversation privacy ratchet).
 
-## B71 — Findings from live run 3 (four models, a cloud provider that ran out of quota)  🔴 OPEN
+## B71 — Findings from live run 3 (four models, a cloud provider that ran out of quota)  🟡 PARTLY FIXED
+
+*Fixed 2026-11-11 (fix/b70-failover-risk-floor): items 1-2. Item 6 was already fixed
+(api `0.33.0`). Items 3, 4, 5 and 7 stay open.* The rule: the breaker may lower a
+complexity-raised tier, never the hard floor (`max(risk floor, escalation min_tier)`,
+clamped only by policy). When every member of a tier above the hard floor is open and a
+lower tier at or above the floor has a closed, in-budget candidate, the router serves from
+it and records `tier_downgrade` (cause `circuit_open`) instead of bypassing; otherwise it
+bypasses within the tier as before. Failover after a bypass obeys the same floor (item 2;
+see B70).
 
 **Severity:** medium (no request failed; these are wasted calls, a wrong prior and blind
 spots in what is recorded).
@@ -992,7 +1001,19 @@ spots in what is recorded).
    `onprem_only`. Correct fail-safe direction; the cost is not shown anywhere. *Wanted:*
    count detection-raised placements per entity type in the usage view.
 
-## B70 — Failover and breaker findings from live run 2 (three endpoint names, one outage)  🔴 OPEN
+## B70 — Failover and breaker findings from live run 2 (three endpoint names, one outage)  🟡 PARTLY FIXED
+
+*Fixed 2026-11-11 (fix/b70-failover-risk-floor): items 1-3. Items 4-5 stay open.* The
+rule: a failure on this request is endpoint state, not policy, so it never lowers a request
+below its hard floor. The target tier and the hard floor are computed from the
+policy-eligible set (prior failures included); a same-tier peer, then a higher tier,
+serves; only a tier complexity alone raised may step down, recorded as `tier_downgrade`
+(cause `prior_failure`); with nothing left at or above the floor the request gets the
+exhausted 502 naming the floor. Item 1: a request whose only eligible endpoint failed says
+"no failover candidate" in the 502 and `route_reason: no_failover` on its outcome row.
+Item 2: `backend_failed`/`context_overflow` rows (streamed ones too) record the eligible
+set, `tier_target`, `rejected`, `scoring` and the attempt chain. Item 3: decided -- not
+allowed below the hard floor; allowed (and recorded) for a complexity-raised tier.
 
 **Severity:** medium (two requests failed that a different ordering could have served; the
 rest are record and replay gaps that change numbers the paper reports).

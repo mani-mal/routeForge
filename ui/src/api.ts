@@ -651,6 +651,8 @@ export interface MetricField {
   scope?: string;
   // `completed` extras
   failures?: number;
+  // of `failures`: the only attempted endpoint failed, nothing to fail over to
+  no_failover?: number;
   // null when a placement filter is on: rejections and cancels have no model
   policy_rejections?: number | null;
   excluded?: number | null;

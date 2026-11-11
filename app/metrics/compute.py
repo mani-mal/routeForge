@@ -147,6 +147,10 @@ def _completed(outcomes: list[OutcomeRow], *, attributable: bool = True) -> dict
         "n": n,
         "insufficient": insufficient,
         "failures": sum(1 for o in outcomes if o.status in _FAILURES),
+        # B70 item 1: of those failures, the requests whose only attempted
+        # endpoint failed with nothing left to fail over to.
+        "no_failover": sum(1 for o in outcomes
+                           if o.status in _FAILURES and o.route_reason == "no_failover"),
         # Rejections and cancels carry no model, so a placement-filtered view
         # cannot attribute them: null, not a misleading 0.
         "policy_rejections": (sum(1 for o in outcomes if o.status == "no_eligible")
@@ -282,9 +286,11 @@ def summarize(usage: list[UsageRow], outcomes: list[OutcomeRow],
     sv["total"] = sum(sv.values())
     sv["excluded_rows"] = len(usage) - len(counted)
 
+    # "Why this tier" shares: `no_failover` marks a FAILED request (nothing was
+    # served), so it is counted under `completed.no_failover`, not here.
     reasons: dict[str, int] = defaultdict(int)
     for o in outcomes:
-        if o.route_reason:
+        if o.route_reason and o.route_reason != "no_failover":
             reasons[o.route_reason] += 1
 
     return {
@@ -376,7 +382,9 @@ def app_view(usage: list[UsageRow], outcomes: list[OutcomeRow], feedback: list[F
 
     routed = [o for o in outcomes if attributed_model(o) is not None]
     models = Counter(attributed_model(o) for o in routed)
-    reasons = Counter(o.route_reason for o in routed if o.route_reason)
+    # `no_failover` is a failed request, not a reason for a served tier.
+    reasons = Counter(o.route_reason for o in routed
+                      if o.route_reason and o.route_reason != "no_failover")
     n_reasons = sum(reasons.values())
     return {
         "budget": _month_budget(month_usage, monthly_budget_usd, now),

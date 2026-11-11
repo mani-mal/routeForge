@@ -140,3 +140,10 @@ def test_task_metrics_follow_slice_two():
     v = view([usage(f"r{i}", 1.0) for i in range(20)], os, fb)
     assert v["cost_per_task"]["successful"] == pytest.approx(20 / 15)
     assert v["successful_reported"]["value"] == 0.75 and v["successful_reported"]["n"] == 20
+
+
+def test_no_failover_is_not_a_route_reason_share():
+    os = [outcome("a", reason="failover"),
+          outcome("b", status="backend_failed", reason="no_failover", chosen=None,
+                  attempts=("m",))]
+    assert [r["reason"] for r in view([], os)["route_reasons"]] == ["failover"]

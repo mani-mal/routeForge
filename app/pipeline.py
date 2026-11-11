@@ -5,7 +5,7 @@ import logging
 import time
 from typing import AsyncIterator, Callable, TYPE_CHECKING
 
-from app.apps.outcomes import outcome_context, outcome_trace, reply_shape
+from app.apps.outcomes import decision_trace, outcome_context, outcome_trace, reply_shape
 from app.cache.store import CacheEntry, DeterministicSemanticCache
 from app.config.schema import ContextOptimizationCfg, PoolCandidate, Settings
 from app.errors import PolicyGateError
@@ -1377,6 +1377,10 @@ class Pipeline:
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice,
             params=request.generation_params(), attempt_log=_attempt_log(internals))
+        if internals is not None:
+            # B70 item 2: a streamed backend failure's outcome row keeps the
+            # routing decision (eligible set, tier target) -- reason-free.
+            internals["routing_trace"] = decision_trace(records)
 
         meta: dict = {}
 
