@@ -6,6 +6,10 @@ from __future__ import annotations
 SENSITIVITY = frozenset({"public", "internal", "confidential", "restricted"})
 RISK_CLASS = frozenset({"low", "medium", "high"})
 RESIDENCY = frozenset({"any", "private_cloud_ok", "onprem_only"})
+# Canonical tier names (routing.yaml `tiers` must equal this set; lint-enforced).
+TIERS = ("cheap", "mid", "frontier")
+# The one provider `onprem_only` admits and onboarded rows are forced to.
+ONPREM_PROVIDER = "onprem"
 
 # Per-app override vocabularies (AppPolicy.pii_detection / AppPolicy.stream_mode).
 PII_MODES = ("off", "regex", "presidio")
