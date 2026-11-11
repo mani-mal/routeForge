@@ -407,6 +407,16 @@ function QualityFloorTable({ idPrefix, appFloors, deploymentFloors, onChange }: 
   // states ("0.", "-"), which must not drop the row or send a bad number.
   const [raw, setRaw] = useState<Record<string, string>>({});
   const app = appFloors ?? {};
+  // Raw text is only an overlay on the prop: it is shown while it still
+  // parses to the prop's value (or to nothing yet, e.g. "0."/"-"), and dropped
+  // the moment the parent supplies a different value (reload, app switch).
+  // Deriving it avoids any reset effect, which would clobber text mid-typing.
+  const shown = (w: string): string | number => {
+    const r = raw[w];
+    if (r === undefined) return app[w] ?? "";
+    const n = r.trim() === "" ? NaN : Number(r);
+    return !Number.isFinite(n) || n === app[w] ? r : app[w] ?? "";
+  };
   const workloads = [...new Set([...Object.keys(deploymentFloors), ...Object.keys(app)])].sort();
   function setFloor(w: string, text: string) {
     setRaw((r) => ({ ...r, [w]: text }));
@@ -439,7 +449,7 @@ function QualityFloorTable({ idPrefix, appFloors, deploymentFloors, onChange }: 
                 <td className="pr-3 text-xs text-gray-500">deployment {dep !== undefined ? dep : "—"}</td>
                 <td className="pr-3">
                   <input id={`${idPrefix}-${w}`} aria-label={`app floor for ${w}`} type="number"
-                    min={0.01} max={1} step="0.01" value={raw[w] ?? val ?? ""}
+                    min={0.01} max={1} step="0.01" value={shown(w)}
                     onChange={(e) => setFloor(w, e.target.value)}
                     className={`${inputCls} w-20`} placeholder="inherit" />
                 </td>
