@@ -245,11 +245,14 @@ class Gateway:
                     # and otherwise permanently lost the instant this record
                     # is appended -- no step="router" record is ever emitted
                     # for a candidate that failed. Failover is exactly where
-                    # the availability signal matters, so keep it: the failed
-                    # candidate's name is recoverable as
-                    # `scoring["candidates"][0]["name"]` even though `.chosen`
-                    # is None here.
-                    scoring=decision.scoring.to_record() if decision.scoring else None))
+                    # the availability signal matters, so keep it. The failed
+                    # candidate is named explicitly in `attempted`: under an
+                    # enforced quality floor (B80) `cand` is the cheapest
+                    # qualifier, NOT necessarily `scoring["candidates"][0]`
+                    # (scoring stays score-ranked), so the name is never
+                    # inferred from the scoring order.
+                    scoring=decision.scoring_record(),
+                    attempted=cand.name))
                 failed_models.add(cand.name)
                 failover_attempts += 1
                 if failover_attempts > max_failover:
@@ -275,7 +278,7 @@ class Gateway:
                 hop_index=len(records),
                 quality_score=decision.quality_score,
                 quality_source=decision.quality_source,
-                scoring=decision.scoring.to_record() if decision.scoring else None,
+                scoring=decision.scoring_record(),
                 circuit_bypass=decision.circuit_bypass))
             metrics.observe_routing_decision(cand.tier, escalated=escalations > 0)
 
@@ -340,7 +343,7 @@ class Gateway:
             actual_cost_usd=None, latency_ms=0.0, hop_index=0,
             quality_score=decision.quality_score,
             quality_source=decision.quality_source,
-            scoring=decision.scoring.to_record() if decision.scoring else None,
+            scoring=decision.scoring_record(),
             circuit_bypass=decision.circuit_bypass)
         records: list[DecisionRecord] = [record]
         metrics.observe_routing_decision(cand.tier, escalated=False)

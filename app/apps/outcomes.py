@@ -171,8 +171,8 @@ def outcome_trace(records, vrec) -> list[dict]:
             + [vrec.model_dump(exclude={"reason"})])
 
 
-ROUTE_REASONS = ("failover", "escalation", "placement", "risk_floor", "length_tier",
-                 "only_eligible", "other")
+ROUTE_REASONS = ("failover", "escalation", "quality_floor", "placement", "risk_floor",
+                 "length_tier", "only_eligible", "other")
 
 _TIER_RANK = {"cheap": 0, "mid": 1, "frontier": 2}
 
@@ -184,7 +184,8 @@ def _rank(tier: str | None) -> int | None:
 def derive_route_reason(*, cache_hit: bool, attempts: list[str],
                         chosen_tier: str | None, tier_target: str | None,
                         complexity_tier: str | None, rejected: list[dict],
-                        n_eligible: int | None, served_hops: int = 1) -> str | None:
+                        n_eligible: int | None, served_hops: int = 1,
+                        floor_status: str | None = None) -> str | None:
     """Why the served model is in the tier it is. Content-free enum; first
     match wins. Unknown tier strings compare as not-below / not-above.
 
@@ -194,6 +195,10 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
 
     - `failover`: some attempted model was not served (attempts > served hops).
     - `escalation`: more than one served hop (confidence escalation), no failure.
+    - `quality_floor` (B80): an ENFORCED quality floor was met
+      (`floor_status == "met"`), so the served model is the cheapest
+      qualifier. Shadow and unmet statuses never claim it -- the floor did not
+      pick the model then.
     - `placement`: a placement-rejected candidate sat at or above the length
       tier but below the served tier -- placement, not length, forced the tier up.
     """
@@ -206,6 +211,8 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
         return "failover"
     if served_hops > 1:
         return "escalation"
+    if floor_status == "met":
+        return "quality_floor"
     placement = {RESIDENCY, REGION_NOT_ALLOWED, PROMPT_RETENTION_NOT_ALLOWED,
                  RAW_SENSITIVE_NOT_ACCEPTED}
     chosen_r, tt, ct = _rank(chosen_tier), _rank(tier_target), _rank(complexity_tier)
@@ -244,13 +251,21 @@ def _rejected_rows(rejected) -> list[dict]:
 
 
 def _attempts(trace: list[dict]) -> list[str]:
-    """Every model tried, in hop order: a failed gateway hop's own first-
-    scored candidate name, interleaved with each router hop's served
-    `chosen`, sorted by `hop_index` (defaulting to 0 for a hand-built
-    fixture that omits it -- real trace entries always carry one)."""
+    """Every model tried, in hop order: a failed gateway hop's `attempted`
+    model, interleaved with each router hop's served `chosen`, sorted by
+    `hop_index` (defaulting to 0 for a hand-built fixture that omits it --
+    real trace entries always carry one).
+
+    `attempted` is authoritative: under an enforced quality floor (B80) the
+    tried model is the cheapest qualifier, not necessarily the top-scored
+    one. Only a record written before `attempted` existed falls back to its
+    first-scored candidate, which is what the gateway tried back then."""
     ordered: list[tuple[int, str]] = []
     for e in trace:
         if e.get("step") == "gateway" and e.get("chosen") is None and e.get("scoring"):
+            if e.get("attempted"):
+                ordered.append((e.get("hop_index", 0), e["attempted"]))
+                continue
             candidates = (e.get("scoring") or {}).get("candidates") or []
             if candidates:
                 ordered.append((e.get("hop_index", 0), candidates[0]["name"]))
@@ -416,6 +431,10 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
     cache_hit = any(e.get("step") == "cache" and e.get("hit") for e in trace)
     full_rejected = (first.get("rejected") or []) if first else []
     chosen_tier = chosen_hops[-1].get("chosen_tier") if chosen_hops else None
+    # B80: the floor status of the FIRST served router hop. With more than
+    # one served hop, escalation/failover win the reason anyway.
+    first_floor = (((chosen_hops[0].get("scoring") or {}).get("quality_floor") or {})
+                   if chosen_hops else {})
     return {
         "tier_target": tier_target,
         "eligible": eligible,
@@ -425,7 +444,8 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
             tier_target=tier_target, complexity_tier=complexity_tier,
             rejected=full_rejected,
             n_eligible=len(eligible) if scoring else None,
-            served_hops=len(chosen_hops)),
+            served_hops=len(chosen_hops),
+            floor_status=first_floor.get("status")),
         "attempts": attempts,
         "chosen": chosen,
         "scoring": scoring,

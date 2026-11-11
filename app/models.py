@@ -274,6 +274,12 @@ class DecisionRecord(BaseModel):
     # scored, and inventing terms for them would be exactly the overstatement
     # P2a exists to remove.
     scoring: dict | None = None
+    # B80: on a FAILED gateway hop (`chosen` is None, nothing served), the
+    # model the gateway actually tried. Needed because under an enforced
+    # quality floor the router serves the cheapest qualifier, which is not
+    # necessarily `scoring["candidates"][0]` (scoring stays score-ranked).
+    # A model id only; None on every other record.
+    attempted: str | None = None
     # Step-7 breaker: True when every candidate policy admitted was held open
     # and the router tried one anyway (app/routing/router.py::select).
     circuit_bypass: bool = False

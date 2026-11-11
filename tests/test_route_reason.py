@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from app.apps.outcomes import ROUTE_REASONS, build_ok_outcome, derive_route_reason
 from app.policy.feasible import RESIDENCY
 
@@ -16,8 +18,8 @@ def _d(**kw):
 
 
 def test_vocabulary():
-    assert ROUTE_REASONS == ("failover", "escalation", "placement", "risk_floor", "length_tier",
-                             "only_eligible", "other")
+    assert ROUTE_REASONS == ("failover", "escalation", "quality_floor", "placement",
+                             "risk_floor", "length_tier", "only_eligible", "other")
 
 
 def test_cache_hit_is_null():
@@ -120,3 +122,53 @@ def test_failover_beats_escalation():
 
 def test_missing_scoring_is_not_only_eligible():
     assert _d(n_eligible=None, tier_target="mid", complexity_tier="frontier") == "other"
+
+
+# --- B80: quality floor ----------------------------------------------------
+
+def test_route_reason_quality_floor():
+    # An enforced floor that was met picked the served model: that, not the
+    # length/risk/placement tier logic, is why it sits where it does.
+    assert _d(floor_status="met") == "quality_floor"
+    rej = [{"name": "x", "tier": "cheap", "code": RESIDENCY}]
+    assert _d(floor_status="met", rejected=rej) == "quality_floor"
+    assert len("quality_floor") <= 16   # routing_outcomes.route_reason is String(16)
+
+
+@pytest.mark.parametrize("status", [None, "none", "unmet_no_qualifier", "unmet_context",
+                                    "unmet_budget", "shadow_met",
+                                    "shadow_unmet_no_qualifier"])
+def test_route_reason_quality_floor_only_when_met(status):
+    assert _d(floor_status=status) == "risk_floor"
+
+
+def test_route_reason_failover_and_escalation_beat_quality_floor():
+    assert _d(floor_status="met", attempts=["a", "b"]) == "failover"
+    assert _d(floor_status="met", attempts=["a", "b"], served_hops=2) == "escalation"
+    assert _d(floor_status="met", cache_hit=True) is None
+
+
+def _floor_hop(status):
+    return {"step": "router", "hop_index": 0, "chosen": "m", "chosen_tier": "mid",
+            "tier_target": "mid", "rejected": [],
+            "scoring": {"candidates": [{"name": "n"}, {"name": "m"}],
+                        "quality_floor": {"floor": 0.8, "mode": "enforce",
+                                          "workload": "claims", "status": status}},
+            "latency_ms": 1.0}
+
+
+def test_build_ok_outcome_route_reason_reads_first_served_hop_floor_status():
+    resp = {"trace": [_floor_hop("met")],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1},
+            "cost": {"total_usd": 0.0}, "policy": {}}
+    row = build_ok_outcome(resp, request_id="r", application_id="a",
+                           outcome_ctx={"complexity": 0.2, "complexity_tier": "cheap"},
+                           routing_policy_version="v", workload="claims",
+                           workload_source="client")
+    assert row["route_reason"] == "quality_floor"
+    resp["trace"] = [_floor_hop("shadow_met")]
+    row = build_ok_outcome(resp, request_id="r", application_id="a",
+                           outcome_ctx={"complexity": 0.2, "complexity_tier": "cheap"},
+                           routing_policy_version="v", workload="claims",
+                           workload_source="client")
+    assert row["route_reason"] == "risk_floor"

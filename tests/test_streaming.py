@@ -248,3 +248,62 @@ def test_non_stream_request_with_verified_then_stream_app_is_unaffected(client, 
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("application/json")
     assert r.json()["choices"][0]["message"]["content"] == "a plain answer"
+
+
+# --------------------------------------------------------------------------- #
+# B80 Review Focus 1: a streamed request makes the same floor choice
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("stream_mode", ["verified_then_stream", "stream_unverified"])
+def test_stream_floor_choice_matches_non_stream(monkeypatch, stream_mode):
+    """Same app, workload, floor and bounds: the streamed request (both the
+    verified chunking path and the real `run_stream` token path) must serve
+    the same model under the same `quality_floor.status` as the non-streamed
+    one. local-8b (cheap) is below the `claims` floor and local-32b (mid)
+    clears it, so a benign short prompt would otherwise land on local-8b."""
+    import app.main as main_mod
+    from app.config.schema import QualityFloorsCfg
+    from fastapi.testclient import TestClient
+    from tests._litellm_fake import fake_acompletion, make_streaming_acompletion
+
+    base = main_mod.load_settings()
+    routing = base.routing.model_copy(update={"quality_floors": QualityFloorsCfg(
+        mode="enforce", workloads={"claims": 0.8})})
+    floored = base.model_copy(update={"routing": routing})
+    monkeypatch.setattr(main_mod, "load_settings", lambda: floored)
+    client = TestClient(main_mod.create_app())
+    client.app.state.quality.set_bounds({("local-8b", "claims"): (0.5, "set-1"),
+                                         ("local-32b", "claims"): (0.9, "set-1")})
+
+    token = _make_app(client, f"floor-{stream_mode}".replace("_", "-"),
+                      stream_mode=stream_mode)
+    headers = {"Authorization": f"Bearer {token}", "x-routeforge-workload": "claims"}
+    msg = {"model": "auto", "messages": [{"role": "user", "content": "tell me a story"}]}
+
+    monkeypatch.setattr(litellm_backend, "acompletion", fake_acompletion)
+    r = client.post("/v1/chat/completions", headers=headers, json=msg)
+    assert r.status_code == 200, r.text
+    plain_id = r.json()["id"]
+
+    if stream_mode == "stream_unverified":
+        monkeypatch.setattr(litellm_backend, "acompletion",
+                            make_streaming_acompletion(["a ", "story"]))
+    r = client.post("/v1/chat/completions", headers=headers, json={**msg, "stream": True})
+    assert r.status_code == 200, r.text
+    frames = _parse_sse(r.text)
+    assert frames[-1] == "[DONE]"
+    stream_id = frames[0]["id"]
+
+    _login(client)
+    plain = client.get(f"/api/requests/{plain_id}").json()
+    streamed = client.get(f"/api/requests/{stream_id}").json()
+    if stream_mode == "stream_unverified":   # really took the run_stream path
+        vrec = [t for t in streamed["trace"] if t.get("step") == "verify"]
+        assert vrec and vrec[0]["reason"] == "waived: stream_unverified"
+
+    assert plain["model"] == "local-32b"
+    assert streamed["model"] == plain["model"]
+    assert plain["policy"]["quality_floor"]["status"] == "met"
+    assert (streamed["policy"]["quality_floor"]["status"]
+            == plain["policy"]["quality_floor"]["status"])
+    assert (streamed["policy"]["quality_floor"]["chosen_lower"]
+            == plain["policy"]["quality_floor"]["chosen_lower"])
