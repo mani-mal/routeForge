@@ -130,14 +130,15 @@ def _exhausted(last_error: str, overflow_errors: list[str], failures: int,
                f"(last error: {last_error})")
     no_failover = no_candidate is not None and len(set(attempted)) == 1
     below_floor = getattr(no_candidate, "below_floor", None)
-    if no_failover:
-        message += ("; no failover candidate: the only eligible endpoint"
-                    + (" at or above the request's floor" if below_floor else "")
-                    + " failed"
-                    + ("" if below_floor else
-                       ", and no other candidate fits this request's policy and budget"))
     if below_floor:
+        # The router's reason already says "no failover candidate at or above
+        # the request's <floor> (<tier>): ..." -- say it once.
         message += f"; {no_candidate}"
+        if no_failover:
+            message += " (the only eligible endpoint at or above that floor failed)"
+    elif no_failover:
+        message += ("; no failover candidate: the only eligible endpoint failed, and "
+                    "no other candidate fits this request's policy and budget")
     return BackendUnavailable(message, attempted_models=tuple(attempted),
                               routing_trace=trace, no_failover=no_failover)
 

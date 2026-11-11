@@ -6,7 +6,7 @@ best tier in the POLICY-eligible set (B70: no failure exclusions, no circuits
 -- a failure or an open circuit never lowers the floor)."""
 from __future__ import annotations
 
-from hypothesis import (HealthCheck, event, given, settings as hyp_settings,
+from hypothesis import (HealthCheck, event, example, given, settings as hyp_settings,
                         strategies as st, target)
 
 from app.errors import NoEligibleCandidate
@@ -118,6 +118,8 @@ _BASE = [("cheap", "onprem", 0.1, 0.1, None), ("mid", "onprem", 0.5, 0.5, None),
        min_tier=st.one_of(st.none(), st.sampled_from(_TIERS)),
        mode=st.sampled_from(["off", "shadow", "enforce"]),
        data=st.data())
+@example(extra=[], risk="low", max_cost=1e-4, complexity=0.95, min_tier=None,
+         mode="off", data=None).via("review: prior-failure downgrade then budget fallback")
 def test_failover_and_breaker_never_drop_below_hard_floor(
         extra, risk, max_cost, complexity, min_tier, mode, data):
     """B70/B71: the same invariant over a pool that always has every tier, so
@@ -125,9 +127,12 @@ def test_failover_and_breaker_never_drop_below_hard_floor(
     downgrade causes and the below-floor refusal."""
     rows = _BASE + extra
     names = [f"m{i}" for i in range(len(rows))]
-    bounds = {n: data.draw(_bound) for n in names}
-    exclude = frozenset(data.draw(st.sets(st.sampled_from(names))))
-    circuits = frozenset(data.draw(st.sets(st.sampled_from(names))))
+    if data is None:   # the @example: the frontier failed, nothing open
+        bounds, exclude, circuits = {}, frozenset({"m2"}), frozenset()
+    else:
+        bounds = {n: data.draw(_bound) for n in names}
+        exclude = frozenset(data.draw(st.sets(st.sampled_from(names))))
+        circuits = frozenset(data.draw(st.sets(st.sampled_from(names))))
     status, downgrade = _check(rows, {"onprem", "azure", "bedrock"}, False, risk,
                                max_cost, complexity, 100, min_tier, 0.5, mode,
                                bounds, exclude, circuits)
@@ -173,3 +178,21 @@ def test_enforce_met_path_is_reachable():
     status = _check(rows, {"onprem", "azure"}, False, "low", 1.0, 0.5, 100, None,
                     0.8, "enforce", {"m0": 0.9, "m1": 0.95}, frozenset(), frozenset())[0]
     assert status == "met"
+
+
+def test_prior_failure_downgrade_then_budget_fallback_records_the_served_tier():
+    """Review fix: frontier failed -> stepped down to mid -> mid over budget ->
+    budget fallback to cheap. `tier_downgrade.to` is the SERVED tier."""
+    s = _settings(_BASE)
+    ctx = ExecutionPolicyContext(
+        request_id="r", tenant_id="t", sensitivity="public", onprem_only=False,
+        allowed_providers=frozenset({"onprem", "azure", "bedrock"}),
+        allowed_models=frozenset({"m0", "m1", "m2"}), max_cost_usd=1e-4,
+        max_latency_ms=15000, risk_class="low", require_verification=False,
+        detected_entities=(), redaction_map_id=None)
+    d = Router(s).select(ctx, tokens_after=100, complexity=0.95,
+                         exclude=frozenset({"m2"}))
+    assert d.chosen.tier == "cheap"
+    assert "budget fallback from mid" in d.reason
+    assert d.tier_downgrade == {"from": "frontier", "to": "cheap",
+                                "cause": "prior_failure"}

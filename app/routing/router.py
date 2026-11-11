@@ -286,10 +286,13 @@ class Router:
 
         Candidates are then drawn from what survives `exclude`. If the
         target tier has none, the lowest surviving tier above it serves
-        (escalation on tier exhaustion, as before); failing that, a target
+        first (upward failover -- escalation on tier exhaustion, as before;
+        going up never undercuts a floor); only failing that does a target
         that only COMPLEXITY raised above the hard floor steps down, one tier
         at a time, to the highest surviving tier at or above the hard floor
-        (`tier_downgrade`, cause `prior_failure`). If nothing survives at or
+        (`tier_downgrade`, cause `prior_failure`; `from` is the targeted
+        tier, `to` the tier finally served, after any budget fallback or
+        circuit step-down). If nothing survives at or
         above the hard floor, `NoEligibleCandidate(below_floor=...)` -- the
         gateway turns that into the exhausted 502.
 
@@ -656,9 +659,11 @@ class Router:
                                                display_name=c.display_name,
                                                reason="over budget")
                         for c in allowed if c.tier in relabel and c.name not in fits_names)
-                    tier_downgrade = {
-                        "from": tier_downgrade["from"] if tier_downgrade else tier_pick,
-                        "to": t, "cause": CIRCUIT_OPEN_DOWNGRADE}
+                    # `from` is always the tier targeting picked (never an
+                    # upward-failover or budget-fallback tier); `to` is set
+                    # to the served tier below.
+                    tier_downgrade = {"from": target_pick, "to": t,
+                                      "cause": CIRCUIT_OPEN_DOWNGRADE}
                     tier_pick, eligible = t, fits
 
         # 5. score within the tier (chooses provider/model — cheaper on-prem
@@ -683,6 +688,9 @@ class Router:
         if circuit_bypass:
             reason += "; circuit bypass: every candidate in the target tier is open"
         if tier_downgrade is not None:
+            # A later stage (budget fallback, circuit step-down) may have moved
+            # the tier again after the downgrade: `to` is the SERVED tier.
+            tier_downgrade["to"] = chosen.tier
             reason += (f"; tier downgrade from {tier_downgrade['from']}: "
                        f"{_DOWNGRADE_WORDS[tier_downgrade['cause']]}")
         return RoutingDecision(

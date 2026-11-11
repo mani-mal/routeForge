@@ -177,15 +177,15 @@ def test_budget_fallback_tier_is_computed_before_circuits():
     """Frontier is over budget -> budget fallback to mid, computed before
     circuits. The only mid is open; mid is above the hard floor (low risk:
     cheap) -- only complexity raised the target -- so since B71 item 1 the
-    breaker steps down to the closed cheap model and records it, instead of
-    bypassing within mid."""
+    breaker steps down to the closed cheap model and records it (`from` is the
+    targeted tier, frontier), instead of bypassing within mid."""
     reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid"),
                 "f": _pricey("f", "frontier")})
     d = Router(S, registry=reg).select(_ctx(reg, {"onprem"}, onprem=True), 20, 0.9,
                                         open_circuits=frozenset({"m"}))
     assert d.chosen.name == "a" and d.circuit_bypass is False
     assert "budget fallback from frontier" in d.reason
-    assert d.tier_downgrade == {"from": "mid", "to": "cheap", "cause": "circuit_open"}
+    assert d.tier_downgrade == {"from": "frontier", "to": "cheap", "cause": "circuit_open"}
     assert any(r.name == "m" and r.code == "circuit_open" for r in d.rejected)
 
 

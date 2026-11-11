@@ -363,3 +363,24 @@ def test_run_stream_carries_tier_downgrade_like_run():
     assert records[0].chosen == "m"
     assert records[0].tier_downgrade == {"from": "frontier", "to": "mid",
                                          "cause": "circuit_open"}
+
+
+def test_circuit_step_down_after_upward_failover_records_the_targeted_tier():
+    """Review fix (minor 1): target mid (complexity), mid failed -> upward to
+    frontier, frontier open -> step down to cheap. `from` is the tier
+    targeting picked (mid), never the upward-failover tier."""
+    reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid")})
+    d = Router(S, registry=reg).select(_ctx(reg, _ONPREM_FRONTIER), 20, 0.5,
+                                        exclude=frozenset({"m"}),
+                                        open_circuits=frozenset({FRONTIER}))
+    assert d.chosen.name == "a"
+    assert d.tier_downgrade == {"from": "mid", "to": "cheap", "cause": "circuit_open"}
+
+
+def test_no_failover_502_names_the_floor_once():
+    reg = _reg({"a": _onprem("a")})
+    backend = _FailForModels(S, {FRONTIER})
+    with pytest.raises(BackendUnavailable) as ei:
+        _gw_run(reg, backend, _ctx(reg, _ONPREM_FRONTIER, risk="high"), 0.1)
+    assert str(ei.value).count("no failover candidate") == 1
+    assert "the only eligible endpoint at or above that floor failed" in str(ei.value)

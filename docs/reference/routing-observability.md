@@ -596,9 +596,13 @@ down. A same-tier peer serves first, then the next tier up; failing both, only a
 that complexity alone raised the target over may step down (to the highest surviving tier
 at or above the hard floor; `tier_downgrade` with cause `prior_failure`). If nothing
 survives at or above the hard floor the request fails with the exhausted `502`, whose
-message names the floor; a request whose only eligible endpoint failed says "no failover
-candidate" and its outcome row reads `route_reason: no_failover`
-(`docs/reference/routing-outcomes.md`). The bypass only restores candidates policy
+message names the floor. When exactly one distinct endpoint was attempted and, after it
+failed, the router had no candidate left at or above the floor (including because the
+others were over budget), the 502 says "no failover candidate" and the outcome row reads
+`route_reason: no_failover`; the attempt cap ending the loop (e.g.
+`max_failover_attempts: 0`) does not set it (`docs/reference/routing-outcomes.md`).
+Upward failover comes first: a failed tier's request moves to the next tier UP before any
+step down, since going up never undercuts a floor. The bypass only restores candidates policy
 already admitted: an `onprem_only` request whose on-prem models are all open still never
 reaches cloud. If the set is empty for a policy reason, the request is rejected as before.
 
