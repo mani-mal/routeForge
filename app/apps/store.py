@@ -10,7 +10,7 @@ import os
 import uuid
 
 from sqlalchemy import (
-    String, and_, case, cast, delete, exists, func, or_, select, update,
+    String, and_, case, cast, delete, exists, func, insert, or_, select, update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -445,6 +445,23 @@ async def record_snapshot(session: AsyncSession, *, request_id: str,
         ts=ts or utcnow())
     await session.merge(row)
     return row
+
+
+async def record_snapshots(session: AsyncSession, rows: list[dict]) -> None:
+    """Batch form of `record_snapshot` for the buffered writer (B86), same
+    replace-by-request_id semantics in two statements instead of a SELECT +
+    INSERT per row: delete any existing rows for these ids, then one
+    multi-row INSERT (caller commits). Within the batch the last write for a
+    request_id wins. Each row: request_id, application_id, summary_json,
+    full_json, ts."""
+    if not rows:
+        return
+    latest: dict[str, dict] = {}
+    for row in rows:
+        latest[row["request_id"]] = {**row, "ts": row.get("ts") or utcnow()}
+    await session.execute(
+        delete(RequestSnapshot).where(RequestSnapshot.request_id.in_(list(latest))))
+    await session.execute(insert(RequestSnapshot), list(latest.values()))
 
 
 async def get_snapshot_full(session: AsyncSession, request_id: str) -> dict | None:

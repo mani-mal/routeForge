@@ -37,7 +37,7 @@ boot-time config lint fails otherwise):
   >= 1). The dates are operator-maintained; RouteForge does not verify them. They are part
   of the routing+pricing content hash, so editing a date changes `routing_policy_version`.
 - `config/serving.yaml` — infra switches (`pii_detection`, provider on/off, Langfuse
-  on/off, `reject_stream_requests`). On-prem models are **onboarded at runtime**, not set
+  on/off, `reject_stream_requests`, `auth_cache_ttl_s` — see §3). On-prem models are **onboarded at runtime**, not set
   here — see [`onboarding-models.md`](./onboarding-models.md).
 
 > The **model slugs** live in the `ModelRegistry`: cloud built-ins from `routing.yaml`'s
@@ -173,7 +173,17 @@ curl -b cookies.txt http://<host>:<port>/admin/applications/acme-support/tokens 
 - Token format: `rf_live_<random>`; only its SHA-256 is persisted.
 - Rotation: mint a new token, hand it over, then revoke the old one. No config
   change — the developer just swaps the string.
-- A revoked token → `401` on the next request.
+- A revoked token → `401` on the next request **served by the replica you revoked it
+  on**. Each API process caches a successful token lookup for
+  `server.auth_cache_ttl_s` seconds (`config/serving.yaml`, default `5`), so a revoked
+  token can keep working on **another replica** for up to `auth_cache_ttl_s` seconds.
+  The same bound applies to disabling an app or editing its policy: the replica that
+  took the write applies it at once, the others within one TTL. Set it to `0` to
+  disable the cache (every request then looks the token up in the database).
+  An unknown, revoked or expired token is never cached, so a newly issued token works
+  at once on every replica, and expiry and session binding are checked on every request.
+- The token list's `last_used_at` is updated at most once a minute per token per
+  replica (every request when `auth_cache_ttl_s` is `0`), so it can be up to 60 s old.
 - `expires_in_s` (optional, 1 to 2 592 000 = 30 days): the token is refused with
   `401` from that many seconds after creation, exactly like a revoked token, and
   is listed with `status: "expired"`. Omitted = never expires.

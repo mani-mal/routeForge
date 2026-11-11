@@ -120,8 +120,7 @@ class SnapshotWriter:
 
     async def _write(self, batch: list[dict], *, prune: bool) -> None:
         async with self._db.session() as s:
-            for row in batch:
-                await store.record_snapshot(s, **row)
+            await store.record_snapshots(s, batch)
             if prune:
                 await store.prune_snapshots(s, capacity=self.capacity)
             if batch and self._bridge is not None:

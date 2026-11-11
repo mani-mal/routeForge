@@ -506,3 +506,30 @@ def test_failing_usage_write_still_writes_the_outcome(monkeypatch):
         async def rows(s):
             return (await s.execute(select(RoutingOutcome.request_id))).scalars().all()
         assert rid in _db(c, rows)
+
+
+def test_record_snapshots_replaces_by_request_id():
+    async def go():
+        db = Database("sqlite+aiosqlite://")
+        try:
+            await db.ensure_ready()
+            async with db.session() as s:
+                await store.create_application(s, app_id="a", name="A")
+                await store.record_snapshot(s, request_id="r1", application_id="a",
+                                            summary_json={"v": 0}, full_json={"v": 0})
+                await s.commit()
+            async with db.session() as s:
+                await store.record_snapshots(s, [
+                    {"request_id": "r1", "application_id": "a",
+                     "summary_json": {"v": 1}, "full_json": {"v": 1}},
+                    {"request_id": "r2", "application_id": "a",
+                     "summary_json": {"v": 2}, "full_json": {"v": 2}},
+                    {"request_id": "r2", "application_id": "a",
+                     "summary_json": {"v": 3}, "full_json": {"v": 3}},
+                ])
+                await s.commit()
+            async with db.session() as s:
+                return {rid: await store.get_snapshot_full(s, rid) for rid in ("r1", "r2")}
+        finally:
+            await db.dispose()
+    assert asyncio.run(go()) == {"r1": {"v": 1}, "r2": {"v": 3}}

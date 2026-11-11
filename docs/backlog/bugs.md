@@ -339,7 +339,7 @@ measure (for the same workload), price or latency drift, and external models wor
 shadow trial. It never onboards, disables or promotes anything. Onboarding stays the only
 way a model enters.
 
-## B86 — Request path spends most of its own time in database round trips (key lookup, snapshot write)  🔴 OPEN
+## B86 — Request path spends most of its own time in database round trips (key lookup, snapshot write)  ✅ RESOLVED (2026-11-11, perf/b86-request-db-roundtrips)
 
 **Severity:** medium (latency only; nothing wrong is served or recorded).
 **Found:** 2026-11-06, profiling for the paper (`docs/research/data/paper-revision/e2e_breakdown.py`,
@@ -380,6 +380,46 @@ per request vs about 65 on Postgres), and the Postgres was a WSL2 docker loopbac
   and the existing auth, revocation (`tests/` token/revoke tests), snapshot/console and outcome
   tests still pass. Note any change in the paper (`docs/research/paper/main.tex` §Overhead
   quotes "9–10 statements, 4–5 commits").
+
+**Resolved:** 2026-11-11 (branch `perf/b86-request-db-roundtrips`). Nothing recorded changed,
+only when and how; no schema change.
+
+- **Token cache** (`app/apps/auth_cache.py`, `_authenticate` in `app/api/routes.py`): a
+  per-process LRU (10 000 entries) of token-hash → (application id, policy view, per-app
+  Langfuse, token id, expiry, session binding), TTL `server.auth_cache_ttl_s` in
+  `config/serving.yaml` (default 5; `0` disables it and restores the pre-B86 behaviour;
+  negative is the lint error `AUTH_CACHE_TTL_NEGATIVE`). Only successful lookups are cached;
+  expiry and binding are re-checked on every hit; a cache error falls back to the DB. Any
+  committed write to `applications`, `app_policies` or `app_tokens` (other than the
+  `last_used_at` stamp) through the `Database` clears it in that process (SQLAlchemy session
+  events in `app/apps/db.py`, generation-guarded against a racing lookup). **Another replica
+  can keep honouring a revoked token for up to `auth_cache_ttl_s` seconds.**
+- **`last_used_at`** is stamped at most once per 60 s per token per process (every request
+  with the cache off), so the console's "last used" can be up to 60 s old.
+- **Snapshot write** (`app/apps/snapshot_writer.py`): buffered off the response path, written
+  in one transaction per flush (default every 1 s, `SP_SNAPSHOT_FLUSH_S`) with a two-statement
+  batch upsert, pruned every 100 writes, flushed before this process's console reads and on
+  graceful shutdown. The cross-replica NOTIFY moved into that transaction, so another
+  replica never looks up a snapshot before it exists (checked against a real Postgres).
+- **Usage + outcome** share one session and one commit; if the pair fails before the commit,
+  each is rewritten on its own, so a bad outcome row never costs the usage row (and vice versa).
+
+**Measured** (`e2e_breakdown.py` harness, zero-latency stub backend, regex detection, n=300 per
+prompt, short 62-char and 1.6k-char prompts; mean DB time per request, inclusive of open, ORM,
+SQL, commit and close; origin/main and the branch run back to back on the same machine):
+
+| | statements / commits | DB time per request | ASGI median per request |
+|---|---|---|---|
+| SQLite in-memory, before | 9 / 4 | 27.4–31.5 ms | 27.1–31.9 ms |
+| SQLite in-memory, after | 2 / 1 | 7.8–8.0 ms | 6.9–7.9 ms |
+| Postgres 16.2 (native, loopback; SELECT 1 ≈ 0.4–0.6 ms), before | 10 / 5 | 56.1–58.8 ms | 57.5–57.6 ms |
+| Postgres 16.2, after | 2 / 1 | 8.8–8.9 ms | 9.3–10.1 ms |
+
+The "after" rows are a cached-token request; a lookup still runs once per TTL per token per
+process, and the stamp once a minute. The snapshot write now costs 0.4 ms (Postgres) to
+0.7 ms (SQLite) per snapshot, amortized, off the response path. Paper §Overhead's "9–10
+statements, 4–5 commits" becomes "2 statements, 1 commit" on the request path. Tests:
+`tests/test_b86_request_db_roundtrips.py`.
 
 ## B87 — `is_disabled` treats only on-prem rows as disableable  🔴 OPEN
 

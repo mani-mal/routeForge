@@ -606,38 +606,54 @@ async def _record_outcome(request: Request, row: dict) -> None:
 async def _record_usage_and_outcome(request: Request, usage: dict | None,
                                     outcome: dict | None) -> None:
     """Write a served request's usage row and routing outcome in ONE session
-    and ONE commit (B86). Usage is the durable meter, so the outcome is
-    written inside a savepoint: an outcome that fails to write is rolled back
-    alone and logged, and the usage row still commits. If the usage write or
-    the commit itself fails, that is logged as before and the outcome is
-    retried on its own (as it was written before B86), so neither row's
-    failure silently costs the other. Never raises."""
+    and ONE commit (B86). Usage is the durable meter, so a failure never
+    trades it away: if writing the pair fails before the commit (nothing has
+    been committed), each row is written again on its own, exactly as before
+    B86 -- a bad outcome row cannot cost the usage row, nor the reverse. If
+    the commit itself fails (its outcome is unknown), that is logged as a
+    usage failure, as before, and only the outcome is retried (its primary key
+    is the request id, so a retry cannot duplicate it). Never raises."""
     if usage is None and outcome is None:
         return
     log = logging.getLogger("serving.obs")
-    outcome_done = outcome is None
     try:
         async with request.app.state.db.session() as session:
-            if usage is not None:
-                await store.record_usage(session, **usage)
-                # Flush now, so a failing usage row fails HERE (outer handler,
-                # "usage record failed") and never inside the outcome savepoint.
+            try:
+                if usage is not None:
+                    await store.record_usage(session, **usage)
+                if outcome is not None:
+                    await store.write_outcome(session, outcome)
                 await session.flush()
-            if outcome is not None:
-                try:
-                    async with session.begin_nested():
-                        await store.write_outcome(session, outcome)
-                except Exception:
-                    log.warning("outcome record failed request=%s",
-                                outcome.get("request_id"), exc_info=True)
-                outcome_done = True
-            await session.commit()
+            except Exception:
+                log.warning("combined usage/outcome write failed request=%s; "
+                            "writing each on its own", (usage or outcome).get("request_id"),
+                            exc_info=True)
+                await session.rollback()
+                split = True
+            else:
+                split = False
+                await session.commit()
     except Exception:  # metering must never break serving
         log.exception("usage record failed (swallowed)")
-        if outcome is not None and outcome_done:
-            outcome_done = False   # the commit did not land: retry it alone
-    if not outcome_done:
-        await _record_outcome(request, outcome)
+        if outcome is not None:
+            await _record_outcome(request, outcome)
+        return
+    if split:
+        if usage is not None:
+            await _record_usage(request, usage)
+        if outcome is not None:
+            await _record_outcome(request, outcome)
+
+
+async def _record_usage(request: Request, usage: dict) -> None:
+    """One usage row in its own session (the fallback of
+    `_record_usage_and_outcome`). Logged and swallowed on failure."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.record_usage(session, **usage)
+            await session.commit()
+    except Exception:  # usage metering must never break serving
+        logging.getLogger("serving.obs").exception("usage record failed (swallowed)")
 
 
 def _registry_version(request: Request) -> str | None:
