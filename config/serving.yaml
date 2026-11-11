@@ -91,6 +91,11 @@ policy:
   # `-n1`) pass through, counted on the trace. Never exempts US_SSN, regex or
   # custom-recognizer matches. Detection and message text are unaffected.
   tool_args_min_score: 0.5       # 0.0-1.0; per-app override: tool_args_min_score
+  # The ONLY entity types the bar applies to (the noisy ones seen misfiring on
+  # shell text). Every other type is always redacted inside tool arguments --
+  # Presidio scores real PII low too (PHONE_NUMBER 0.4 without a context word).
+  # Deployment-level only. Never US_SSN (TOOL_ARGS_BAR_TYPE_PROTECTED).
+  tool_args_bar_types: [US_DRIVER_LICENSE, PERSON, LOCATION, NRP, DATE_TIME, URL]
   # sensitivity enum, default_sensitivity, budgets and residency: see policy.yaml
 
 observability:

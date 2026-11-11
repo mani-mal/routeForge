@@ -132,6 +132,13 @@ class Entity(BaseModel):
     # overlapping an SSN or a custom match could carry the whole span below the
     # bar. Read by the bar only; detection, placeholders and types ignore it.
     bar_exempt: bool = False
+    # Set by `dedupe` on a MERGED span when any member of its overlap cluster
+    # was a PROTECTED type (US_SSN) -- the merged span may be TYPED after a
+    # non-protected best member (PHONE_NUMBER 0.75 absorbing US_SSN 0.4).
+    # Narrower than `bar_exempt` (which also covers unscored/custom members):
+    # this one is what FilteredDetector's denylist / threshold / exempt
+    # patterns must never drop. Read via `merge.is_protected`.
+    contains_protected: bool = False
 
 
 class ExecutionPolicyContext(BaseModel):

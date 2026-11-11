@@ -3,6 +3,7 @@ import logging
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.policy.enums import TOOL_ARGS_BAR_TYPES_DEFAULT
 from app.prompts.store import PromptArtifact
 
 
@@ -389,6 +390,11 @@ class ServingCfg(BaseModel):
     # (TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE). Defaulted for the upgrade-safety
     # reason given above.
     tool_args_min_score: float = 0.5
+    # B69: the entity types the tool-argument bar applies to at all. Every
+    # other type is always rewritten inside tool-call arguments. Never a
+    # PROTECTED type (config lint, TOOL_ARGS_BAR_TYPE_PROTECTED).
+    tool_args_bar_types: list = Field(
+        default_factory=lambda: list(TOOL_ARGS_BAR_TYPES_DEFAULT))
     reject_stream_requests: bool
     stream_keepalive_s: float = Field(5.0, gt=0)
     # Derive a stable per-conversation session id (auto-<24 hex>) when the

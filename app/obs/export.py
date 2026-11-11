@@ -417,6 +417,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # skipped match is counted and named here, never silent.
                 root.set_attribute("sp.tool_args_min_score",
                                    float(policy["tool_args_min_score"]))
+                # The entity types the bar applies to (deployment-level);
+                # every other type is always rewritten in tool arguments.
+                root.set_attribute("sp.tool_args_bar_types",
+                                   ",".join(policy.get("tool_args_bar_types") or []))
                 root.set_attribute("sp.tool_arg_redactions",
                                    int(policy.get("tool_arg_redactions") or 0))
                 root.set_attribute("sp.tool_arg_skipped",

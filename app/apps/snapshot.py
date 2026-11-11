@@ -34,7 +34,14 @@ _PROVIDER_FIELDS = ("enabled", "region", "prompt_retention", "accepts_raw_sensit
 #: Not secrets. Without them the simulator would compile every app under the
 #: CLI machine's local posture instead of the deployment's.
 SERVING_POLICY_FIELDS = ("pii_detection", "allow_app_pii_downgrade",
-                         "default_policy_mode", "allow_app_passthrough")
+                         "default_policy_mode", "allow_app_passthrough",
+                         # B69: the tool-argument bar's deployment values, so
+                         # the simulator compiles with this deployment's.
+                         "tool_args_min_score", "tool_args_bar_types")
+#: The subset a snapshot MUST carry. Snapshots exported before B69 lack the
+#: two tool-argument keys; they stay loadable (the simulator then uses the
+#: schema defaults -- the bar is rewriting-only and never affects routing).
+SERVING_POLICY_REQUIRED = SERVING_POLICY_FIELDS[:4]
 _EXCLUDED_POLICY_FIELDS = frozenset({"pii_exempt_patterns"})
 
 
@@ -98,7 +105,7 @@ async def build_config_snapshot(session, *, settings, registry, quality, signals
             "pricing": settings.pricing.model_dump(mode="json"),
             "policy": settings.policy.model_dump(mode="json"),
             "providers": providers,
-            "serving_policy": {k: getattr(settings.serving, k)
+            "serving_policy": {k: _jsonable(getattr(settings.serving, k))
                                for k in SERVING_POLICY_FIELDS},
         },
         "onboarded": sorted(onboarded, key=lambda o: o["slug"]),

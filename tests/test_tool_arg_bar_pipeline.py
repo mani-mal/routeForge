@@ -79,6 +79,8 @@ def test_egress_weak_match_passes_strong_match_redacted(stub_client, monkeypatch
     p = body["policy"]
     assert p["client_output_mode"] == "redact"
     assert p["tool_args_min_score"] == 0.5                   # deployment default
+    assert p["tool_args_bar_types"] == sorted(
+        ["US_DRIVER_LICENSE", "PERSON", "LOCATION", "NRP", "DATE_TIME", "URL"])
     assert (p["tool_arg_redactions"], p["tool_arg_skipped"]) == (1, 1)
     assert p["tool_arg_skipped_types"] == ["US_DRIVER_LICENSE"]
 
@@ -211,12 +213,14 @@ def test_trace_carries_bar_and_counts(mem_provider):
         request_id="req-b69", tenant_id="acme", model="local-8b",
         cost={"total_usd": 0.0, "baseline_usd": 0.0},
         policy={"app_policy_version": "abc", "tool_args_min_score": 0.5,
+                "tool_args_bar_types": ["PERSON", "US_DRIVER_LICENSE"],
                 "tool_arg_redactions": 1, "tool_arg_skipped": 2,
                 "tool_arg_skipped_types": ["DATE_TIME", "US_DRIVER_LICENSE"]},
         trace=[])
     otel._provider.force_flush()
     root = next(s for s in mem_provider.get_finished_spans() if s.name == "serving.request")
     assert root.attributes["sp.tool_args_min_score"] == 0.5
+    assert root.attributes["sp.tool_args_bar_types"] == "PERSON,US_DRIVER_LICENSE"
     assert root.attributes["sp.tool_arg_redactions"] == 1
     assert root.attributes["sp.tool_arg_skipped"] == 2
     assert root.attributes["sp.tool_arg_skipped_types"] == "DATE_TIME,US_DRIVER_LICENSE"
@@ -253,9 +257,19 @@ def test_presidio_shell_flags_survive_an_enforced_app(monkeypatch, command):
     pytest.importorskip("presidio_analyzer")
     client = TestClient(create_app())
     headers = _app(client, "bar-presidio", pii_detection="presidio")
-    args = json.dumps({"command": command})
+    email, phone = "jane.doe@example.com", "212-555-0187"
+    # Keys with no context word: the phone number scores ~0.4 on its own,
+    # below the bar -- it must still be redacted (PHONE_NUMBER is not a
+    # listed type). Without these the test could pass with no detector at all.
+    args = json.dumps({"command": command, "a": email, "b": phone})
     _model_tool_calls(monkeypatch, args)
     body = _ask(client, headers)
-    assert _returned_args(body) == [args]
-    assert body["policy"]["detection_mode"] == "presidio"
-    assert body["policy"]["client_output_mode"] == "redact"
+    (got,) = _returned_args(body)
+    parsed = json.loads(got)
+    assert parsed["command"] == command                   # flag survives byte for byte
+    assert email not in got and phone not in got
+    assert parsed["a"].startswith("REDACTED_") and parsed["b"].startswith("REDACTED_")
+    p = body["policy"]
+    assert p["detection_mode"] == "presidio" and p["client_output_mode"] == "redact"
+    assert p["tool_arg_skipped"] >= 1
+    assert "US_DRIVER_LICENSE" in p["tool_arg_skipped_types"]

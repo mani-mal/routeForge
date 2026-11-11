@@ -36,7 +36,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from app.config.schema import Settings
-from app.policy.enums import PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES
+from app.policy.enums import (PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES,
+                              TOOL_ARGS_BAR_TYPES_DEFAULT)
 from app.policy.trajectory import resolve_trajectory_mode
 
 if TYPE_CHECKING:
@@ -150,8 +151,18 @@ class Protection:
     #: Rewriting only: detection, classification and message text never read
     #: it. `sources["tool_args_min_score"]` names where the resolved axis
     #: value came from (`app_policy` / `deployment_default` / `ceiling` when
-    #: an unparseable stored value denied to 0.0).
+    #: an unparseable stored value denied to 0.0), or `pii_score_threshold`
+    #: when the app's threshold is what raised the effective bar.
     tool_args_min_score: float = 0.0
+    #: B69: the resolved `tool_args_min_score` axis value BEFORE the app's
+    #: `pii_score_threshold` is folded in -- what the save-time monotonicity
+    #: invariant compares, since the effective value above can sit at the
+    #: threshold for both extremes.
+    tool_args_min_score_axis: float = 0.0
+    #: B69: the entity types the bar applies to at all -- the deployment's
+    #: `serving.yaml` `policy.tool_args_bar_types` (deployment-level only, no
+    #: per-app list). Every other type is always rewritten in tool arguments.
+    tool_args_bar_types: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -468,10 +479,16 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         sources["tool_args_min_score"] = _CEILING
     else:
         sources["tool_args_min_score"] = _APP if stored_bar is not None else _DEFAULT
+    bar_axis = bar
     threshold = _get(app_policy, "pii_score_threshold")
     if (isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
-            and 0.0 <= threshold <= 1.0):
-        bar = max(bar, float(threshold))
+            and 0.0 <= threshold <= 1.0 and threshold > bar):
+        bar = float(threshold)
+        sources["tool_args_min_score"] = "pii_score_threshold"
+    # Deployment-level only; the config lint guarantees no PROTECTED type is
+    # in it, and `below_tool_arg_bar` never exempts one regardless.
+    bar_types = frozenset(getattr(deployment.serving, "tool_args_bar_types",
+                                  TOOL_ARGS_BAR_TYPES_DEFAULT) or ())
 
     protection = Protection(
         model_input=model_input,
@@ -482,6 +499,8 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         stream_mode=stream_mode,
         sources=MappingProxyType(dict(sources)),
         tool_args_min_score=bar,
+        tool_args_min_score_axis=bar_axis,
+        tool_args_bar_types=bar_types,
     )
 
     escalate = _get(app_policy, "escalate_residency_on_detection")
@@ -837,7 +856,7 @@ _RESIDENCY_BY_RANK: tuple[str, ...] = tuple(
 #: protection axis alone can never move placement, and (b) to probe that
 #: asking for the strict end never resolves to something less protective than
 #: asking for the loose end.
-_PROTECTION_EXTREMES: tuple[tuple[str, str, str], ...] = (
+_PROTECTION_EXTREMES: tuple[tuple[str, str | float, str | float], ...] = (
     ("model_input", "raw", "redact"),
     ("client_output", "raw", "redact"),
     ("capture_io", "full", "off"),
@@ -859,7 +878,10 @@ _FIELD_TO_PROTECTION_ATTR = {
     "pii_detection": "detection",
     "content_integrity": "content_integrity",
     "stream_mode": "stream_mode",
-    "tool_args_min_score": "tool_args_min_score",
+    # The raw resolved axis, not the effective bar: the effective value folds
+    # in `pii_score_threshold`, which can pin both extremes to the threshold
+    # and make the monotonicity check below compare nothing.
+    "tool_args_min_score": "tool_args_min_score_axis",
 }
 
 #: A fixed, small set of detected-entity signals, ordered from no signal to
@@ -1036,10 +1058,17 @@ def check_invariants(view: "AppPolicyView", deployment: Settings) -> None:
         # ceiling clamps still lands on `strict` (ceilings only ever deny
         # towards the protective end -- see `_resolve`/`_DENY` above), so
         # this holds even for a deployment whose ceilings are locked down.
-        rank = {loose: 0, strict: 1}
-        if loose_value not in rank or strict_value not in rank:
-            continue
-        if rank[strict_value] < rank[loose_value]:
+        if isinstance(loose, float):
+            # A numeric axis (B69's tool-argument bar): lower is stricter.
+            # Compared directly rather than by rank, so no resolved value can
+            # fall outside the pair and be skipped silently.
+            less_protective = float(strict_value) > float(loose_value)
+        else:
+            rank = {loose: 0, strict: 1}
+            if loose_value not in rank or strict_value not in rank:
+                continue
+            less_protective = rank[strict_value] < rank[loose_value]
+        if less_protective:
             raise PolicyViolation(
                 "INVARIANT_PROTECTION_AXIS_NOT_MONOTONIC",
                 f"requesting {axis}={strict!r} (the strict end) resolved to "

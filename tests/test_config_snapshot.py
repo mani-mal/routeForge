@@ -121,6 +121,9 @@ def test_snapshot_carries_live_serving_policy(monkeypatch):
         "allow_app_pii_downgrade": live.allow_app_pii_downgrade,
         "default_policy_mode": live.default_policy_mode,
         "allow_app_passthrough": False,
+        # B69: the tool-argument bar's deployment values.
+        "tool_args_min_score": live.tool_args_min_score,
+        "tool_args_bar_types": list(live.tool_args_bar_types),
     }
 
 

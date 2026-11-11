@@ -12,13 +12,19 @@ from app.models import Entity
 PROTECTED_ENTITIES = frozenset({"US_SSN"})
 
 
+def is_protected(e: Entity) -> bool:
+    """True when `e` is, or (as a merged span) contains, a PROTECTED type --
+    the absolute US_SSN guarantee no per-app narrowing may lift."""
+    return e.type in PROTECTED_ENTITIES or e.contains_protected
+
+
 def exempt_from_score_bar(e: Entity) -> bool:
     """True when no score bar may drop `e` (B69's tool-argument bar): an
     unscored match (every RegexDetector hit), an operator-declared custom
     recognizer match, a PROTECTED type (US_SSN), or a merged span any of whose
     cluster members was one of those (`Entity.bar_exempt`, set by `dedupe`)."""
     return (e.bar_exempt or e.score is None or e.source == "custom"
-            or e.type in PROTECTED_ENTITIES)
+            or is_protected(e))
 
 
 def _score(e: Entity) -> float:
@@ -69,5 +75,7 @@ def dedupe(ents: list[Entity]) -> list[Entity]:
                              value=best.value, score=best.score,
                              source=best.source,
                              bar_exempt=any(exempt_from_score_bar(e)
-                                            for e in cluster)))
+                                            for e in cluster),
+                             contains_protected=any(is_protected(e)
+                                                    for e in cluster)))
     return merged

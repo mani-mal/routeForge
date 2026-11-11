@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -10,6 +11,7 @@ from app.models import ChatRequest, Entity, ExecutionPolicyContext, Message
 from app.policy.compile import EffectivePolicy, apply_signals, compile_policy
 from app.policy.context import build_context, match_sensitivity_rule
 from app.policy.detectors import Detector, detection_ran
+from app.policy.enums import TOOL_ARGS_BAR_TYPES_DEFAULT
 from app.policy.merge import dedupe, exempt_from_score_bar
 
 if TYPE_CHECKING:
@@ -71,12 +73,21 @@ class ToolCallRedaction:
         return ToolArgStats(self.redacted, self.skipped, self.skipped_types)
 
 
-def below_tool_arg_bar(e: Entity, min_score: float) -> bool:
+def below_tool_arg_bar(e: Entity, min_score: float,
+                       bar_types: frozenset[str] = frozenset(TOOL_ARGS_BAR_TYPES_DEFAULT)
+                       ) -> bool:
     """True when the tool-argument bar lets `e` pass through unredacted
     inside tool-call arguments (B69).
 
-    Only a SCORED match from a built-in recognizer can fall below the bar.
-    Never exempted, whatever the score:
+    **The bar applies to the noisy types only** -- `bar_types`, the
+    deployment's `serving.yaml` `policy.tool_args_bar_types` (default
+    `TOOL_ARGS_BAR_TYPES_DEFAULT`). A span of any other type is ALWAYS
+    rewritten, whatever its score: Presidio scores real PII low too
+    (PHONE_NUMBER 0.4 with no context word, US_BANK_NUMBER / US_PASSPORT 0.4
+    even with one), so a bar over every type would pass those raw.
+
+    Within those types, only a SCORED match from a built-in recognizer can
+    fall below the bar. Never exempted, whatever the score:
 
     * `PROTECTED_ENTITIES` (US_SSN) -- the same absolute guarantee no per-app
       threshold, denylist or exemption can lift (CLAUDE.md rules 3/8); the
@@ -91,7 +102,8 @@ def below_tool_arg_bar(e: Entity, min_score: float) -> bool:
       from the highest-scoring member only, so the exemption is carried
       across the cluster explicitly rather than lost in the merge.
     """
-    return (min_score > 0.0 and e.score is not None and e.score < min_score
+    return (min_score > 0.0 and e.type in bar_types
+            and e.score is not None and e.score < min_score
             and not exempt_from_score_bar(e))
 
 
@@ -117,8 +129,25 @@ class _Leaf:
     #: Spans the tool-argument bar let through (B69), for counting only.
     skipped: list[Entity] = field(default_factory=list)
 
-    def add(self, e: Entity, min_score: float) -> None:
-        (self.skipped if below_tool_arg_bar(e, min_score) else self.spans).append(e)
+    def add(self, e: Entity, min_score: float, bar_types: frozenset[str]) -> None:
+        below = below_tool_arg_bar(e, min_score, bar_types)
+        (self.skipped if below else self.spans).append(e)
+
+    def settle(self) -> None:
+        """Redact, with the span it overlaps, every below-bar span that
+        overlaps a redacted one (M3). Otherwise the kept span's placeholder
+        would cover only its own part and the weak span's non-overlapping
+        remainder would reach the client raw -- pre-B69 these were one union
+        span. Repeated to a fixed point, since a promoted span can overlap
+        another skipped one."""
+        moved = True
+        while moved and self.skipped and self.spans:
+            moved = False
+            for e in list(self.skipped):
+                if any(k.start < e.end and e.start < k.end for k in self.spans):
+                    self.skipped.remove(e)
+                    self.spans.append(e)
+                    moved = True
 
 
 @dataclass
@@ -182,17 +211,18 @@ def _inert_placeholders(redacted: str, mapping: dict[str, str]) -> str:
 
 
 def _passed_through(leaf: _Leaf) -> set[tuple[int, int, str]]:
-    """The leaf's skipped spans that really passed through: de-duplicated
-    across the two detector passes, and excluding any span a redacted span
-    overlaps (it did not reach the client raw, so it is not "skipped")."""
-    kept = leaf.spans
-    return {(e.start, e.end, e.type) for e in leaf.skipped
-            if not any(k.start < e.end and e.start < k.end for k in kept)}
+    """The leaf's skipped spans that really passed through, de-duplicated
+    across the two detector passes. Call after `_Leaf.settle`, which has
+    already moved every skipped span a redacted span overlaps into the
+    redacted set."""
+    return {(e.start, e.end, e.type) for e in leaf.skipped}
 
 
 def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
                                     det: Detector,
-                                    min_score: float = 0.0) -> ToolCallRedaction:
+                                    min_score: float = 0.0,
+                                    bar_types: Iterable[str] | None = None
+                                    ) -> ToolCallRedaction:
     """Return a COPY of `tool_calls` with each `function.arguments` STRING
     redacted by `det`, plus the entity types detected. `id`, `type`,
     `function.name`, and every other key are preserved exactly; a non-dict
@@ -237,7 +267,12 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
     match. Detection is unchanged: `entity_types` still reports every type
     found, skipped ones included, so classification and the trace see them.
     What was skipped is never silent: `redacted`/`skipped`/`skipped_types`
-    count it, content-free. `min_score=0.0` (the default) skips nothing."""
+    count it, content-free. `min_score=0.0` (the default) skips nothing.
+    `bar_types` (default `TOOL_ARGS_BAR_TYPES_DEFAULT`) is the set of entity
+    types the bar applies to at all -- every other type is always rewritten
+    (see `below_tool_arg_bar`). A below-bar span that overlaps a rewritten one
+    is rewritten with it, never left half-raw (`_Leaf.settle`)."""
+    types = frozenset(TOOL_ARGS_BAR_TYPES_DEFAULT if bar_types is None else bar_types)
     if not tool_calls:
         return ToolCallRedaction(tool_calls, frozenset())
 
@@ -277,10 +312,9 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
             if s < t:
                 found.add(e.type)
                 ls, lt = s - leaf.start, t - leaf.start
-                leaf.add(Entity(type=e.type, start=ls, end=lt,
-                                value=leaf.text[ls:lt], score=e.score,
-                                source=e.source, bar_exempt=e.bar_exempt),
-                         min_score)
+                leaf.add(e.model_copy(update={"start": ls, "end": lt,
+                                              "value": leaf.text[ls:lt]}),
+                         min_score, types)
 
     # Pass 2: raw scan over the argument strings as the gate classifies them.
     raw = "\n".join(t.args for t in targets)
@@ -291,14 +325,14 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
             continue
         for leaf in all_leaves:
             for s, t in _occurrences(value, leaf.text):
-                leaf.add(Entity(type=e.type, start=s, end=t, value=value,
-                                score=e.score, source=e.source,
-                                bar_exempt=e.bar_exempt), min_score)
+                leaf.add(e.model_copy(update={"start": s, "end": t, "value": value}),
+                         min_score, types)
 
     out = list(tool_calls)
     n_redacted = 0
     skipped: set[tuple[int, int, int, str]] = set()
     for li, leaf in enumerate(all_leaves):
+        leaf.settle()
         skipped |= {(li, *k) for k in _passed_through(leaf)}
     for target in targets:
         changed = False
@@ -328,12 +362,15 @@ def redact_tool_calls_with_entities(tool_calls: list[dict] | None,
 
 
 def redact_tool_calls(tool_calls: list[dict] | None, det: Detector,
-                      min_score: float = 0.0) -> list[dict] | None:
+                      min_score: float = 0.0,
+                      bar_types: Iterable[str] | None = None) -> list[dict] | None:
     """`redact_tool_calls_with_entities` without the entity types."""
-    return redact_tool_calls_with_entities(tool_calls, det, min_score).tool_calls
+    return redact_tool_calls_with_entities(tool_calls, det, min_score,
+                                           bar_types).tool_calls
 
 
-def redact_message(det: Detector, m: Message, min_score: float = 0.0) -> Message:
+def redact_message(det: Detector, m: Message, min_score: float = 0.0,
+                   bar_types: Iterable[str] | None = None) -> Message:
     """Redact one message's text with the request's effective detector,
     preserving role + tool-calling structure. Used on the tool-calling path so
     the full structured conversation reaches the model with every message's PII
@@ -352,16 +389,17 @@ def redact_message(det: Detector, m: Message, min_score: float = 0.0) -> Message
     how `Representations.redacted` below is built, and the gate owns every
     representation of a request.
     """
-    return _redact_message(det, m, min_score)[0]
+    return _redact_message(det, m, min_score, bar_types)[0]
 
 
-def _redact_message(det: Detector, m: Message,
-                    min_score: float) -> tuple[Message, ToolArgStats]:
+def _redact_message(det: Detector, m: Message, min_score: float,
+                    bar_types: Iterable[str] | None = None
+                    ) -> tuple[Message, ToolArgStats]:
     """`redact_message` plus the tool-argument bar's counts for `m`."""
     content = m.content
     if content:
         content, _ = det.anonymize(content, det.analyze(content))
-    tcr = redact_tool_calls_with_entities(m.tool_calls, det, min_score)
+    tcr = redact_tool_calls_with_entities(m.tool_calls, det, min_score, bar_types)
     return (Message(role=m.role, content=content, tool_calls=tcr.tool_calls,
                     tool_call_id=m.tool_call_id, name=m.name), tcr.stats)
 
@@ -409,6 +447,8 @@ class Representations:
     #: The effective tool-argument bar (B69) the per-message view applies to
     #: replayed tool-call arguments; `Protection.tool_args_min_score`.
     tool_args_min_score: float = 0.0
+    #: The entity types that bar applies to (`Protection.tool_args_bar_types`).
+    tool_args_bar_types: frozenset[str] = frozenset(TOOL_ARGS_BAR_TYPES_DEFAULT)
     #: Memo for the lazily built per-message redacted view (see `redacted`).
     _redacted_msgs: dict = field(default_factory=dict, compare=False, repr=False)
 
@@ -425,7 +465,8 @@ class Representations:
         if self.text_redacted is None or self.detector is None:
             return None
         if "v" not in self._redacted_msgs:
-            pairs = [_redact_message(self.detector, m, self.tool_args_min_score)
+            pairs = [_redact_message(self.detector, m, self.tool_args_min_score,
+                                     self.tool_args_bar_types)
                      for m in self.raw]
             self._redacted_msgs["v"] = tuple(m for m, _ in pairs)
             self._redacted_msgs["stats"] = sum((st for _, st in pairs), ToolArgStats())
@@ -545,5 +586,6 @@ class Gate:
             detected_entity_types=tuple(sorted(etypes)),
             detector=det if ran else None,
             tool_args_min_score=eff.protection.tool_args_min_score,
+            tool_args_bar_types=eff.protection.tool_args_bar_types,
         )
         return ctx, reps, eff

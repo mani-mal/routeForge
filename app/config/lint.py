@@ -3,6 +3,7 @@ import sys
 from app.config.loader import load_settings
 from app.config.schema import Settings
 from app.policy.enums import POLICY_MODES
+from app.policy.merge import PROTECTED_ENTITIES
 from app.policy.enums import PROMPT_RETENTION_VALUES, RAW_SENSITIVE_VALUES
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
@@ -217,6 +218,22 @@ def lint_settings(s: Settings) -> list[str]:
         errs.append(
             f"TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE serving.yaml policy.tool_args_min_score "
             f"must be a number from 0.0 to 1.0; got {bar!r}")
+    # B69: the types the bar applies to. Each a non-empty string; never a
+    # PROTECTED type -- the list can never put US_SSN under the bar (the bar
+    # never exempts it anyway; this makes the misconfiguration loud).
+    bar_types = s.serving.tool_args_bar_types
+    if not isinstance(bar_types, list) or not all(
+            isinstance(t, str) and t.strip() for t in bar_types):
+        errs.append(
+            "TOOL_ARGS_BAR_TYPES_INVALID serving.yaml policy.tool_args_bar_types must "
+            f"be a list of non-empty entity-type strings; got {bar_types!r}")
+    else:
+        protected = sorted(set(bar_types) & PROTECTED_ENTITIES)
+        if protected:
+            errs.append(
+                f"TOOL_ARGS_BAR_TYPE_PROTECTED serving.yaml policy.tool_args_bar_types "
+                f"names {protected}, which carry an absolute redaction guarantee "
+                "(CLAUDE.md rules 3/8) and can never be subject to the bar")
 
     return errs
 

@@ -17,6 +17,16 @@ STREAM_MODES = ("off", "verified_then_stream", "stream_unverified", "incremental
 # Placement is untouched by either value: onprem_only still pins routing.
 POLICY_MODES = ("enforced", "passthrough")
 
+# B69: the entity types the tool-argument bar applies to by default -- the
+# types seen misfiring on shell text (`-n1`, a `name.ext` read as a URL, a
+# command word read as a LOCATION). Every other type is ALWAYS redacted inside
+# tool-call arguments: Presidio scores real PII low too (PHONE_NUMBER 0.4 with
+# no context word; US_BANK_NUMBER / US_PASSPORT top out at 0.4), so a bar over
+# every type would pass those raw. Deployment-level (serving.yaml
+# policy.tool_args_bar_types); never a PROTECTED type (config lint).
+TOOL_ARGS_BAR_TYPES_DEFAULT = ("US_DRIVER_LICENSE", "PERSON", "LOCATION", "NRP",
+                               "DATE_TIME", "URL")
+
 # --- P1b endpoint data-handling declarations (design doc §2/§7) --------------
 # `prompt_retention` and `accepts_raw_sensitive` are fixed enums (unlike
 # `region`, which is customer vocabulary and deliberately has none — see

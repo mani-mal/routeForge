@@ -387,6 +387,7 @@ class Pipeline:
             # B69: the effective tool-argument bar and what it did. Rewriting
             # only -- `detected_entity_types` above is unchanged by it.
             "tool_args_min_score": eff.protection.tool_args_min_score,
+            "tool_args_bar_types": sorted(eff.protection.tool_args_bar_types),
             "tool_arg_redactions": tool_args.redacted,
             "tool_arg_skipped": tool_args.skipped,
             "tool_arg_skipped_types": sorted(tool_args.skipped_types),
@@ -1042,7 +1043,7 @@ class Pipeline:
         raw_tool_calls = result.tool_calls
         tc_redaction = redact_tool_calls_with_entities(
             raw_tool_calls, egress_detector(det, client_output),
-            eff.protection.tool_args_min_score)
+            eff.protection.tool_args_min_score, eff.protection.tool_args_bar_types)
         redacted_tool_calls = tc_redaction.tool_calls
         tool_args = reps.tool_arg_stats() + tc_redaction.stats
         self._record_tool_arg_stats(internals, tool_args)

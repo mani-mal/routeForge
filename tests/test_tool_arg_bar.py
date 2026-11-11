@@ -233,8 +233,11 @@ class _MergingDetector:
 def test_exempt_member_of_a_merged_span_keeps_it_redacted(label, members, bar, as_json):
     needle = "X48273194"
     args = json.dumps({"v": needle}) if as_json else f"lookup {needle} now"
+    # PHONE_NUMBER is added to the bar's types so the SSN case is a real test
+    # of the merge (by default PHONE_NUMBER is never subject to the bar).
     out = redact_tool_calls_with_entities([_call(args)], _MergingDetector(needle, members),
-                                          min_score=bar)
+                                          min_score=bar,
+                                          bar_types={"US_DRIVER_LICENSE", "PHONE_NUMBER"})
     assert needle not in _args(out.tool_calls), label
     assert out.skipped == 0 and out.redacted >= 1
 
@@ -256,3 +259,166 @@ def test_dedupe_carries_the_exemption_and_changes_nothing_else():
     dt = Entity(type="DATE_TIME", start=0, end=11, value="818-30-4221", score=0.85)
     (won,) = dedupe([dt, ssn])
     assert won.type == "US_SSN" and won.score == 1.0
+
+
+# --- fix round 1: the bar applies to the listed (noisy) types only ----------
+
+class _TypedDetector:
+    """One fixed (regex, type, score) per recognizer, no dedupe."""
+
+    def __init__(self, *rules: tuple[str, str, float]):
+        self._rules = [(re.compile(p), t, sc) for p, t, sc in rules]
+
+    def analyze(self, text: str) -> list[Entity]:
+        return [Entity(type=t, start=m.start(), end=m.end(), value=m.group(), score=sc)
+                for rx, t, sc in self._rules for m in rx.finditer(text)]
+
+    def anonymize(self, text, entities):
+        return RegexDetector().anonymize(text, entities)
+
+    def warmup(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize("etype,value,score", [
+    ("PHONE_NUMBER", "212-555-0187", 0.4),
+    ("US_BANK_NUMBER", "000123456789", 0.4),
+    ("US_PASSPORT", "912803456", 0.4),
+    ("EMAIL_ADDRESS", "jane.doe@example.com", 0.3),
+])
+@pytest.mark.parametrize("as_json", [True, False])
+def test_unlisted_types_are_always_redacted_whatever_the_score(etype, value, score, as_json):
+    det = _TypedDetector((re.escape(value), etype, score),
+                         (r"(?<![A-Za-z0-9])[A-Za-z]\d{1,5}\b", "US_DRIVER_LICENSE", 0.3))
+    args = (json.dumps({"cmd": "xargs -0 -n1 printf", "v": value}) if as_json
+            else f"xargs -0 -n1 printf {value}")
+    out = redact_tool_calls_with_entities([_call(args)], det, min_score=0.5)
+    got = _args(out.tool_calls)
+    assert value not in got and f"REDACTED_{etype}_1" in got
+    assert "-n1" in got                                   # the listed weak type is skipped
+    assert out.skipped_types == frozenset({"US_DRIVER_LICENSE"})
+    assert out.redacted == 1
+
+
+def test_an_operator_added_type_is_subject_to_the_bar():
+    det = _TypedDetector(("212-555-0187", "PHONE_NUMBER", 0.4))
+    args = "call 212-555-0187"
+    out = redact_tool_calls_with_entities(
+        [_call(args)], det, min_score=0.5,
+        bar_types={"US_DRIVER_LICENSE", "PHONE_NUMBER"})
+    assert _args(out.tool_calls) == args
+    assert out.skipped_types == frozenset({"PHONE_NUMBER"})
+
+
+def test_a_weak_span_overlapping_a_kept_one_is_redacted_with_it():
+    # M3: kept PERSON "John Smith" 0.85 overlaps weak DL "Smith Q12345" 0.3.
+    # Leaving the weak span out would leak "Q12345" raw next to the placeholder.
+    det = _TypedDetector((r"John Smith", "PERSON", 0.85),
+                         (r"Smith Q12345", "US_DRIVER_LICENSE", 0.3))
+    for args in ("echo John Smith Q12345", json.dumps({"c": "echo John Smith Q12345"})):
+        out = redact_tool_calls_with_entities([_call(args)], det, min_score=0.5)
+        got = _args(out.tool_calls)
+        assert "Q12345" not in got and "Smith" not in got
+        assert "echo REDACTED_PERSON_1" in got
+        assert out.skipped == 0 and out.skipped_types == frozenset()
+
+
+def test_gate_uses_the_deployment_bar_types():
+    s = copy.deepcopy(load_settings())
+    s.serving.tool_args_bar_types = ["PERSON"]             # DL no longer listed
+    det = StubDetector()
+    req = ChatRequest(messages=[
+        Message(role="user", content="list"),
+        Message(role="assistant", content=None, tool_calls=[_call("xargs -0 -n1 printf")]),
+        Message(role="tool", tool_call_id="c0", content="ok"),
+    ])
+    _, reps, eff = Gate(s, det).evaluate("r1", "acme", req, detector=det)
+    assert eff.protection.tool_args_bar_types == frozenset({"PERSON"})
+    assert "-n1" not in _args(reps.redacted[1].tool_calls)
+    assert reps.tool_arg_stats().skipped == 0
+
+
+@pytest.mark.parametrize("bar_types,code", [
+    (["US_DRIVER_LICENSE", "US_SSN"], "TOOL_ARGS_BAR_TYPE_PROTECTED"),
+    (["US_DRIVER_LICENSE", ""], "TOOL_ARGS_BAR_TYPES_INVALID"),
+    (["US_DRIVER_LICENSE", 3], "TOOL_ARGS_BAR_TYPES_INVALID"),
+])
+def test_bar_types_lint(bar_types, code):
+    from app.config.lint import lint_settings
+    s = copy.deepcopy(load_settings())
+    s.serving.tool_args_bar_types = bar_types
+    assert any(code in e for e in lint_settings(s))
+
+
+def test_default_bar_types_lint_clean_and_default_when_missing():
+    from app.config.lint import lint_settings
+    from app.policy.enums import TOOL_ARGS_BAR_TYPES_DEFAULT
+    s = load_settings()
+    assert s.serving.tool_args_bar_types == list(TOOL_ARGS_BAR_TYPES_DEFAULT)
+    assert not [e for e in lint_settings(s) if "TOOL_ARGS_BAR" in e]
+
+
+# --- FilteredDetector: a merged cluster containing US_SSN is never dropped ---
+
+class _FixedMerged:
+    def __init__(self, ents):
+        self._ents = ents
+
+    def analyze(self, text):
+        from app.policy.merge import dedupe
+        return dedupe(list(self._ents))
+
+    def anonymize(self, text, entities):
+        return RegexDetector().anonymize(text, entities)
+
+    def warmup(self):
+        return None
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"denylist": ["PHONE_NUMBER"]},
+    {"score_threshold": 0.9},
+    {"exempt_patterns": [r"\d{9}"]},
+])
+def test_filtered_detector_keeps_a_merged_span_that_contains_an_ssn(kwargs):
+    from app.policy.effective import FilteredDetector
+    phone = Entity(type="PHONE_NUMBER", start=0, end=9, value="482731946", score=0.75)
+    ssn = Entity(type="US_SSN", start=0, end=9, value="482731946", score=0.4)
+    (merged,) = _FixedMerged([phone, ssn]).analyze("482731946")
+    assert merged.type == "PHONE_NUMBER" and merged.contains_protected is True
+    kept = FilteredDetector(_FixedMerged([phone, ssn]), **kwargs).analyze("482731946")
+    assert len(kept) == 1 and kept[0].start == 0 and kept[0].end == 9
+    # Without an SSN member the same filters still drop it (behaviour unchanged).
+    other = Entity(type="DATE_TIME", start=0, end=9, value="482731946", score=0.4)
+    assert FilteredDetector(_FixedMerged([phone, other]), **kwargs).analyze("482731946") == []
+
+
+# --- compile: provenance and the save-time invariant -----------------------
+
+def test_threshold_raised_bar_is_attributed_and_axis_kept_raw():
+    from app.apps.policy import AppPolicyView
+    from app.policy.compile import check_invariants, compile_policy
+    s = load_settings()
+    eff = compile_policy(AppPolicyView(pii_score_threshold=0.7), s)
+    assert eff.protection.tool_args_min_score == 0.7
+    assert eff.protection.tool_args_min_score_axis == 0.5
+    assert eff.protection.sources["tool_args_min_score"] == "pii_score_threshold"
+    eff = compile_policy(AppPolicyView(pii_score_threshold=0.2, tool_args_min_score=0.6), s)
+    assert eff.protection.tool_args_min_score == 0.6
+    assert eff.protection.sources["tool_args_min_score"] == "app_policy"
+    check_invariants(AppPolicyView(pii_score_threshold=0.7), s)   # does not raise
+
+
+def test_invariant_catches_a_non_monotonic_bar(monkeypatch):
+    import app.policy.compile as c
+    from app.apps.policy import AppPolicyView
+    real = c.resolve_tool_args_min_score
+
+    def inverted(value, default):        # a broken resolver: 0.0 -> 1.0
+        v, ok = real(value, default)
+        return (1.0 - v if value is not None else v), ok
+
+    monkeypatch.setattr(c, "resolve_tool_args_min_score", inverted)
+    with pytest.raises(c.PolicyViolation) as exc:
+        c.check_invariants(AppPolicyView(pii_score_threshold=0.7), load_settings())
+    assert exc.value.code == "INVARIANT_PROTECTION_AXIS_NOT_MONOTONIC"

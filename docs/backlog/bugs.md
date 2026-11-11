@@ -1041,7 +1041,13 @@ at least the bar; below it the span passes through byte for byte. Deployment def
 `serving.yaml` `policy.tool_args_min_score: 0.5` (range-checked at boot,
 `TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE`); per-app override `tool_args_min_score` (0–1, either
 direction, resolved in `compile_policy`, folded into `app_policy_version`). Effective bar =
-`max(pii_score_threshold or 0, tool_args_min_score)`. Never exempted: `US_SSN` at any score,
+`max(pii_score_threshold or 0, tool_args_min_score)`. **Fix round 1 (owner):** the bar
+applies only to the deployment-listed noisy types — `policy.tool_args_bar_types`, default
+`[US_DRIVER_LICENSE, PERSON, LOCATION, NRP, DATE_TIME, URL]`, never a protected type
+(`TOOL_ARGS_BAR_TYPE_PROTECTED`); every other type is always redacted in tool arguments,
+because Presidio scores real PII low too (`PHONE_NUMBER` 0.4 without context;
+`US_BANK_NUMBER`/`US_PASSPORT` 0.4 even with it). A below-bar span overlapping a redacted
+one is redacted with it. Never exempted: `US_SSN` at any score,
 every unscored (regex) match and every custom-recognizer match. Detection is unchanged —
 skipped types still classify, still fire `sensitivity_rules` and still appear in
 `detected_entity_types`; message text is untouched. Never silent: the response `policy`
@@ -1050,7 +1056,11 @@ and `tool_arg_skipped_types` (types only), and the outcome row the three counts/
 nullable columns; ALTERs in `docs/reference/routing-outcomes.md`, and
 `app_policies.tool_args_min_score` in `docs/guides/admin-setup.md`;
 `scripts/migrate_app_policies.py` covers all four). The "fail the tool call visibly"
-option was not built. Tests: `tests/test_tool_arg_bar.py`,
+option was not built. **Also found and fixed here (pre-existing):** `dedupe` types a merged
+overlap cluster after its best member, so a cluster such as `PHONE_NUMBER` 0.75 absorbing
+`US_SSN` 0.4 was typed `PHONE_NUMBER`, and `FilteredDetector` (denylist / threshold / exempt
+patterns) checked only the type — it could drop that SSN from detection and redaction. A
+merged span now carries `contains_protected`, and `FilteredDetector` never drops one. Tests: `tests/test_tool_arg_bar.py`,
 `tests/test_tool_arg_bar_pipeline.py` (incl. the Presidio regression, skipped without
 `presidio_analyzer`). See `docs/reference/per-app-config.md` § `tool_args_min_score`.
 
