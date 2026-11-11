@@ -20,7 +20,9 @@ application and workload.
 `--floor-bounds FILE` adds the `router_floor` arm (B80): the router with
 quality floors on `enforce` and the lower bounds `scripts/floor_fit.py`
 fitted on the calibration half of the suite; `--floor-split heldout` scores
-every arm on the other half only. Its comparison lands in `metrics.json`'s
+every arm on the other half only (required, unless
+`--floor-allow-unsplit` deliberately scores the calibration cases too). The
+bounds must have been fitted on this suite (`suite_hash`). Its comparison lands in `metrics.json`'s
 `router_floor` section and report.md -- a negative result included.
 
 `--candidate FILE` is the offline router-version check: it scores a candidate
@@ -115,6 +117,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--floor-split", default=None, choices=("heldout",),
                    help="with --floor-bounds: score only the held-out half of the "
                         "seeded workload-stratified split (every arm)")
+    p.add_argument("--floor-allow-unsplit", action="store_true",
+                   help="with --floor-bounds and no --floor-split: score the arm on "
+                        "every case, calibration half included (flagged as not a "
+                        "held-out result)")
     p.add_argument("--split-seed", type=int, default=None,
                    help="with --floor-split: the split seed (default and required "
                         "value: the bounds file's seed)")
@@ -189,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                         else args.min_group_size),
         candidate_path=args.candidate, check_plan=check_plan,
         floor_bounds_path=args.floor_bounds, floor_split=args.floor_split,
-        split_seed=args.split_seed))
+        split_seed=args.split_seed, floor_allow_unsplit=args.floor_allow_unsplit))
     if result.exit_code != 1:
         print(f"feasible_bench: results in {result.out_dir} (exit {result.exit_code})")
     if result.check is not None:

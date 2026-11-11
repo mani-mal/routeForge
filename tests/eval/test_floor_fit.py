@@ -24,6 +24,7 @@ from app.eval.floor_fit import (
     load_floor_bounds,
     load_matrix,
     split_cases,
+    suite_hash,
 )
 from app.eval.oracle import MatrixRow
 from app.eval.outcomes import load_export
@@ -205,8 +206,8 @@ def test_load_floor_bounds_round_trip(tmp_path, settings):
     doc = fit_bounds(rows, cases, set(calib), settings, seed=4)
     path = tmp_path / "bounds.json"
     path.write_text(json.dumps(doc))
-    mapping, seed = load_floor_bounds(str(path))
-    assert seed == 4
+    mapping, seed, digest = load_floor_bounds(str(path))
+    assert seed == 4 and digest == suite_hash(cases)
     assert mapping == {(b["model"], b["workload"]): b["lower"] for b in doc["bounds"]}
 
 
@@ -216,6 +217,7 @@ def test_load_floor_bounds_round_trip(tmp_path, settings):
     {"schema": BOUNDS_SCHEMA, "seed": 0, "bounds": [{"model": "m", "workload": None,
                                                      "lower": 1.5}]},
     {"schema": BOUNDS_SCHEMA, "seed": 0, "bounds": [{"workload": None, "lower": 0.5}]},
+    {"schema": BOUNDS_SCHEMA, "seed": 0, "suite_hash": 7, "bounds": []},
     {"schema": BOUNDS_SCHEMA, "seed": 0, "bounds": [
         {"model": "m", "workload": "a", "lower": 0.5},
         {"model": "m", "workload": "a", "lower": 0.6}]},
@@ -268,3 +270,29 @@ def test_cli_missing_matrix_exits_1(tmp_path):
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 1
     assert not (tmp_path / "b.json").exists()
+
+
+# --------------------------------------------------------------------------
+# suite_hash
+# --------------------------------------------------------------------------
+
+def test_suite_hash_is_order_independent_and_content_sensitive():
+    cases = _mixed_cases()
+    assert suite_hash(cases) == suite_hash(list(reversed(cases)))
+    changed = [c.model_copy(update={"quality_floor": 0.5}) if c.id == "faq-0" else c
+               for c in cases]
+    assert suite_hash(changed) != suite_hash(cases)
+    assert suite_hash(cases[1:]) != suite_hash(cases)
+
+
+def test_fit_bounds_stamps_the_suite_hash(settings):
+    cases, rows = _synthetic()
+    calib, _ = split_cases(cases, seed=0)
+    doc = fit_bounds(rows, cases, set(calib), settings, seed=0)
+    assert doc["suite_hash"] == suite_hash(cases)
+
+
+def test_load_floor_bounds_without_suite_hash_returns_none(tmp_path):
+    path = tmp_path / "bounds.json"
+    path.write_text(json.dumps({"schema": BOUNDS_SCHEMA, "seed": 0, "bounds": []}))
+    assert load_floor_bounds(str(path)) == ({}, 0, None)

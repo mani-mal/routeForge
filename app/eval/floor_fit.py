@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import hashlib
 import json
 import math
 import random
@@ -80,6 +81,17 @@ def case_workload(case: Case) -> str | None:
     """The case's workload tag, or `None` when it has no string tag."""
     w = case.tags.get("workload")
     return w if isinstance(w, str) and w else None
+
+
+def suite_hash(cases: list[Case]) -> str:
+    """sha256 over the suite's cases: sorted by id, each as its canonical
+    JSON (`model_dump(mode="json")`, sorted keys, compact). Ties a bounds
+    file to the suite it was fitted on -- independent of case order and of
+    the file's formatting."""
+    canonical = json.dumps(
+        [[c.id, c.model_dump(mode="json")] for c in sorted(cases, key=lambda c: c.id)],
+        sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------
@@ -153,9 +165,10 @@ def export_lines(rows: Iterable[MatrixRow], cases: list[Case], calib_ids: set[st
 def fit_bounds(rows: list[MatrixRow], cases: list[Case], calib_ids: set[str],
                settings: Settings, *, seed: int,
                registry: "ModelRegistry | None" = None) -> dict:
-    """The bounds document `{"schema", "seed", "bounds": [{model, workload,
-    lower}]}` fitted on the calibration half (module docstring). `seed` is
-    the split seed the calibration ids came from; the runner checks it."""
+    """The bounds document `{"schema", "seed", "suite_hash", "bounds":
+    [{model, workload, lower}]}` fitted on the calibration half (module
+    docstring). `seed` is the split seed the calibration ids came from and
+    `suite_hash` is `suite_hash(cases)`; the runner checks both."""
     lines = export_lines(rows, cases, calib_ids, settings, registry)
     # Through the real loader: the estimator sees exactly the shape the
     # export produces, never one assembled here.
@@ -169,7 +182,8 @@ def fit_bounds(rows: list[MatrixRow], cases: list[Case], calib_ids: set[str],
     bounds = [{"model": u["model"], "workload": u["workload"], "lower": u["ci_low"]}
               for u in estimate(records)["units"]
               if u["status"] in (STATUS_RECOMMENDED, STATUS_NO_CHANGE)]
-    return {"schema": BOUNDS_SCHEMA, "seed": seed, "bounds": bounds}
+    return {"schema": BOUNDS_SCHEMA, "seed": seed, "suite_hash": suite_hash(cases),
+            "bounds": bounds}
 
 
 def dump_bounds(doc: dict) -> str:
@@ -180,9 +194,10 @@ def dump_bounds(doc: dict) -> str:
 # files
 # --------------------------------------------------------------------------
 
-def load_floor_bounds(path: str) -> tuple[BoundsMap, int]:
+def load_floor_bounds(path: str) -> tuple[BoundsMap, int, str | None]:
     """Read a `routeforge.floor-bounds/v1` file: `({(model, workload):
-    lower}, seed)`. Raises `ValueError` on a wrong schema, a missing or
+    lower}, seed, suite_hash)` -- `suite_hash` is `None` when the file has
+    none (a hand-written file; the runner refuses it). Raises `ValueError` on a wrong schema, a missing or
     non-int seed, an entry without a string model, a workload that is not a
     string or null, a lower bound that is not a finite number in [0, 1], or a
     duplicate `(model, workload)`."""
@@ -195,6 +210,9 @@ def load_floor_bounds(path: str) -> tuple[BoundsMap, int]:
     seed = doc.get("seed")
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise ValueError(f"floor bounds {path}: seed must be an int, got {seed!r}")
+    digest = doc.get("suite_hash")
+    if digest is not None and not (isinstance(digest, str) and digest):
+        raise ValueError(f"floor bounds {path}: suite_hash must be a non-empty string")
     entries = doc.get("bounds")
     if not isinstance(entries, list):
         raise ValueError(f"floor bounds {path}: bounds must be a list")
@@ -215,7 +233,7 @@ def load_floor_bounds(path: str) -> tuple[BoundsMap, int]:
         if key in mapping:
             raise ValueError(f"{where}: duplicate bound for {key}")
         mapping[key] = float(lower)
-    return mapping, seed
+    return mapping, seed, digest
 
 
 def load_matrix(path: str) -> list[MatrixRow]:

@@ -176,9 +176,11 @@ FLOOR_ARM_NOTE = (
     "cold signal store and a quality resolver loaded with the --floor-bounds "
     "lower bounds; each case's floor is the deployment's own "
     "routing.quality_floors value for its workload tag (raise-only with the "
-    "case's app floors). Bounds must be fitted on a different split than the "
-    "one scored (--floor-split heldout), or the arm is graded on its own "
-    "calibration cases. A floor that makes it dearer or no better than "
+    "case's app floors). A case whose app policy sets its own floor mode "
+    "(off/shadow) runs under that mode, not enforce -- see the section's "
+    "effective_mode counts. Bounds must be fitted on a different split than the "
+    "one scored (--floor-split heldout); --floor-allow-unsplit grades the arm "
+    "on its own calibration cases and is flagged as such. A floor that makes it dearer or no better than "
     "router_cold is reported as such.")
 
 DEFERRED_METRICS = (
@@ -256,24 +258,42 @@ def _load_variants(path: str | None) -> dict[str, dict[str, float]]:
 
 
 def _load_floor_plan(cases: list[Case], bounds_path: str | None,
-                     split: str | None, split_seed: int | None) -> dict | None:
+                     split: str | None, split_seed: int | None,
+                     allow_unsplit: bool = False) -> dict | None:
     """The `router_floor` arm's inputs, or `None` without a bounds file:
     `{"bounds", "seed", "split", "split_seed", "heldout_ids"}`
-    (`heldout_ids` is `None` unless `split == "heldout"`). A split flag
-    without bounds, an unknown split, or a `split_seed` that is not the
-    seed the bounds were fitted on is a load error -- scoring a different
-    half than the one held out would grade the arm on its own calibration
-    cases."""
+    (`heldout_ids` is `None` unless `split == "heldout"`). Load errors:
+    a split flag without bounds; an unknown split; a `split_seed` that is
+    not the seed the bounds were fitted on (scoring a different half than
+    the one held out would grade the arm on its own calibration cases);
+    bounds without `split="heldout"` unless `allow_unsplit`; and a bounds
+    file whose `suite_hash` is missing or is not this suite's."""
     if bounds_path is None:
-        if split is not None or split_seed is not None:
-            raise BenchError("--floor-split/--split-seed need --floor-bounds")
+        if split is not None or split_seed is not None or allow_unsplit:
+            raise BenchError("--floor-split/--split-seed/--floor-allow-unsplit "
+                             "need --floor-bounds")
         return None
     if split not in (None, floor_fit.SPLIT_HELDOUT):
         raise BenchError(f"floor split must be {floor_fit.SPLIT_HELDOUT!r} or unset; "
                          f"got {split!r}")
     if split_seed is not None and split is None:
         raise BenchError("--split-seed needs --floor-split heldout")
-    bounds, seed = floor_fit.load_floor_bounds(bounds_path)
+    if split is None and not allow_unsplit:
+        raise BenchError(
+            "--floor-bounds needs --floor-split heldout: without it the arm is "
+            "scored on the cases its bounds were fitted on (pass "
+            "--floor-allow-unsplit to do that deliberately)")
+    if split is not None and allow_unsplit:
+        raise BenchError("--floor-allow-unsplit contradicts --floor-split heldout")
+    bounds, seed, digest = floor_fit.load_floor_bounds(bounds_path)
+    if digest is None:
+        raise BenchError(f"floor bounds {bounds_path} carry no suite_hash, so the "
+                         "suite they were fitted on cannot be checked; refit them "
+                         "with scripts/floor_fit.py")
+    if digest != floor_fit.suite_hash(cases):
+        raise BenchError(f"floor bounds {bounds_path} were fitted on a different "
+                         "suite (suite_hash mismatch); refit them on this suite "
+                         "with scripts/floor_fit.py")
     if split_seed is not None and split_seed != seed:
         raise BenchError(f"split seed {split_seed} differs from the seed {seed} the "
                          f"floor bounds in {bounds_path} were fitted with")
@@ -285,6 +305,10 @@ def _load_floor_plan(cases: list[Case], bounds_path: str | None,
     return {"bounds": bounds, "seed": seed, "split": split,
             "split_seed": seed if split is not None else None,
             "heldout_ids": heldout}
+
+
+UNSPLIT_WARNING = ("router_floor was evaluated on the cases its bounds were "
+                   "fitted on; this is not a held-out result.")
 
 
 def _git_sha() -> str:
@@ -446,7 +470,8 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
                     check_plan: CheckPlan | None = None,
                     floor_bounds_path: str | None = None,
                     floor_split: str | None = None,
-                    split_seed: int | None = None) -> RunResult:
+                    split_seed: int | None = None,
+                    floor_allow_unsplit: bool = False) -> RunResult:
     """Run the benchmark end to end. Load/usage errors print to stderr and
     return exit code 1 before `out_dir` is touched.
 
@@ -471,8 +496,10 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
     `metrics.json`. `floor_split="heldout"` scores only the held-out half of
     `floor_fit.split_cases(cases, split_seed)` -- every arm, so all are
     compared on the same cases; `split_seed` defaults to the bounds file's
-    `seed` and must equal it. Without `floor_bounds_path` no output
-    changes."""
+    `seed` and must equal it. Bounds without `floor_split="heldout"` are
+    refused unless `floor_allow_unsplit` (then a warning goes to stderr and
+    into the section), and so is a bounds file not fitted on this suite
+    (`suite_hash`). Without `floor_bounds_path` no output changes."""
     args = {"suite": suite_path, "endpoints": endpoints_path, "seed": seed,
             "live": live, "keep_text": keep_text, "variants": variants_path,
             "parity_tol": parity_tol, "fixed": fixed,
@@ -483,7 +510,7 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
         args.update(candidate=candidate_path, min_group_size=min_group_size)
     if floor_bounds_path is not None:  # only then: keeps an unflagged run's keys
         args.update(floor_bounds=floor_bounds_path, floor_split=floor_split,
-                    split_seed=split_seed)
+                    split_seed=split_seed, floor_allow_unsplit=floor_allow_unsplit)
     started = _now()
     try:
         if (isinstance(min_group_size, bool) or not isinstance(min_group_size, int)
@@ -493,7 +520,8 @@ async def run_bench(suite_path: str, endpoints_path: str, *, out_dir: str,
             raise BenchError("a check plan was given without a candidate")
         seconds_per_case = check_seconds_per_case(seconds_per_case)
         cases, suite_hash = load_suite(suite_path)
-        floor_plan = _load_floor_plan(cases, floor_bounds_path, floor_split, split_seed)
+        floor_plan = _load_floor_plan(cases, floor_bounds_path, floor_split, split_seed,
+                                      floor_allow_unsplit)
         if floor_plan is not None and floor_plan["heldout_ids"] is not None:
             held = set(floor_plan["heldout_ids"])
             cases = [c for c in cases if c.id in held]
@@ -643,6 +671,9 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
             f"floor-fit:{floor_plan['seed']}", max_attempts)
     floor_names = [floor_fit.ARM] if floor_arm is not None else []
     floor_statuses: dict[str, str | None] = {}
+    floor_modes: dict[str, str] = {}
+    if floor_plan is not None and floor_plan["split"] is None:
+        print(f"feasible_bench: warning: {UNSPLIT_WARNING}", file=sys.stderr)
     strategy_names = (list(static) + floor_names + list(online)
                       + list(warm_prior_names))
     case_index = {case.id: index for index, case in enumerate(cases)}
@@ -761,6 +792,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
                 name: strategy(inp, failed) for name, strategy in static.items()}
             if floor_arm is not None:
                 floor_inp = replace(inp, ctx=floor_arm.context(case, ctx))
+                floor_modes[case.id] = floor_inp.ctx.quality_floor_mode
                 chains[floor_fit.ARM] = floor_arm(floor_inp, failed)
                 floor_statuses[case.id] = floor_arm.status(floor_inp)
             for name, arm in online.items():
@@ -832,7 +864,7 @@ async def _run_loaded(*, cases, specs, settings, registry, detector,
     }
     if floor_arm is not None:
         metrics[floor_fit.ARM] = _floor_section(
-            floor_plan, floor_arm, floor_statuses, per_strategy, fixed)
+            floor_plan, floor_arm, floor_statuses, floor_modes, per_strategy, fixed)
     # Round-trip so `RunResult.metrics` equals what is on disk (tuples ->
     # lists), then write deterministically: sorted keys, no timings/paths.
     metrics = json.loads(_dump(metrics))
@@ -900,8 +932,8 @@ FLOOR_COMPARE_METRICS = ("pass_rate", "quality_regret", "floor_miss_rate",
 
 
 def _floor_section(plan: dict, arm: "floor_fit.FloorArm",
-                   statuses: dict[str, str | None], per_strategy: dict[str, dict],
-                   fixed: str | None) -> dict:
+                   statuses: dict[str, str | None], modes: dict[str, str],
+                   per_strategy: dict[str, dict], fixed: str | None) -> dict:
     """`metrics.json`'s `router_floor` section: the arm's setup, how its
     cases' floors fared (`floor_status` counts, `coverage`), and the arm
     beside every baseline. The deltas against `router_cold` are signed
@@ -920,8 +952,15 @@ def _floor_section(plan: dict, arm: "floor_fit.FloorArm",
         a, b = floor_m.get(key), cold_m.get(key)
         return None if a is None or b is None else round(a - b, 12)
 
-    return {
+    mode_counts: dict[str, int] = {}
+    for m in modes.values():
+        mode_counts[m] = mode_counts.get(m, 0) + 1
+    section = {
         "mode": arm.settings.routing.quality_floors.mode,
+        # A case's own app policy may set its floor mode (per-app override):
+        # what each case actually ran under.
+        "effective_mode": dict(sorted(mode_counts.items())),
+        "heldout": plan["split"] is not None,
         "workload_floors": dict(sorted(
             arm.settings.routing.quality_floors.workloads.items())),
         "bounds_seed": plan["seed"],
@@ -937,6 +976,9 @@ def _floor_section(plan: dict, arm: "floor_fit.FloorArm",
         "vs_router_cold": {"pass_rate_delta": delta("pass_rate"),
                            "mean_chosen_cost_delta": delta("mean_chosen_cost")},
     }
+    if plan["split"] is None:
+        section["warning"] = UNSPLIT_WARNING
+    return section
 
 
 def _served(attempts: tuple[str, ...], rows_by_endpoint: dict[str, MatrixRow]
@@ -1106,9 +1148,15 @@ def _floor_report(floor: dict) -> list[str]:
              if floor["split"] else
              "ALL cases -- not a held-out split; the arm may be scored on its "
              "own calibration cases")
-    lines = ["## Quality floor arm", "",
+    lines = ["## Quality floor arm", ""]
+    if floor.get("warning"):
+        lines += [f"**Warning:** {floor['warning']}", ""]
+    lines += [
              f"- **scored on**: {split}, {floor['n_cases']} case(s)",
-             f"- **mode**: {floor['mode']}; **workload floors**: "
+             f"- **mode**: {floor['mode']}; **effective mode per case**: "
+             + (", ".join(f"{m}={n}" for m, n in floor["effective_mode"].items())
+                or "n/a"),
+             f"- **workload floors**: "
              + (", ".join(f"{w}={_fmt(v)}" for w, v in floor["workload_floors"].items())
                 or "none configured -- every case reports floor status `none`"),
              f"- **bounds**: {floor['n_bounds']} (fitted with seed "

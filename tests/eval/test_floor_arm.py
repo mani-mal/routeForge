@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from app.eval import runner
-from app.eval.floor_fit import BOUNDS_SCHEMA, split_cases
+from app.eval.floor_fit import BOUNDS_SCHEMA, split_cases, suite_hash
 from app.eval.cases import load_suite
 from app.eval.runner import run_bench
 from app.eval.strategies import router_attempts
@@ -75,9 +75,17 @@ def _write(tmp_path, cases=CASES) -> tuple[str, str]:
     return str(suite), str(eps)
 
 
-def _bounds(tmp_path, bounds, seed=0, name="bounds.json") -> str:
+def _bounds(tmp_path, bounds, seed=0, name="bounds.json", digest="suite") -> str:
+    """A bounds file stamped with the suite written by `_write` (default),
+    an explicit `digest`, or none (`digest=None`, a hand-written file)."""
+    doc = {"schema": BOUNDS_SCHEMA, "seed": seed, "bounds": bounds}
+    if digest == "suite":
+        cases, _ = load_suite(str(tmp_path / "suite.jsonl"))
+        doc["suite_hash"] = suite_hash(cases)
+    elif digest is not None:
+        doc["suite_hash"] = digest
     path = tmp_path / name
-    path.write_text(json.dumps({"schema": BOUNDS_SCHEMA, "seed": seed, "bounds": bounds}))
+    path.write_text(json.dumps(doc))
     return str(path)
 
 
@@ -143,7 +151,8 @@ def test_floor_arm_runs_and_is_no_dearer_than_router_cold(tmp_path, floors):
     floors({"faq": 0.8})
     suite, eps = _write(tmp_path)
     out = tmp_path / "out"
-    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP))
+    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP),
+                  floor_allow_unsplit=True)
     assert result.exit_code == 0
     metrics = json.loads((out / "metrics.json").read_text())
     strategies = metrics["strategies"]
@@ -156,6 +165,9 @@ def test_floor_arm_runs_and_is_no_dearer_than_router_cold(tmp_path, floors):
     assert floor["mode"] == "enforce"
     assert floor["workload_floors"] == {"faq": 0.8}
     assert floor["split"] is None and floor["n_cases"] == 4
+    assert floor["heldout"] is False
+    assert "not a held-out result" in floor["warning"]
+    assert floor["effective_mode"] == {"enforce": 4}
     assert floor["floor_status"] == {"met": 4}
     assert floor["coverage"] == 1.0
     # quality, coverage and cost reported together, against every baseline
@@ -181,7 +193,8 @@ def test_floor_arm_with_no_qualifier_reports_unmet_not_hidden(tmp_path, floors):
     floors({"faq": 0.99})
     suite, eps = _write(tmp_path)
     out = tmp_path / "out"
-    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP))
+    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP),
+                  floor_allow_unsplit=True)
     assert result.exit_code == 0
     floor = json.loads((out / "metrics.json").read_text())["router_floor"]
     assert floor["floor_status"] == {"unmet_no_qualifier": 4}
@@ -192,7 +205,8 @@ def test_floor_arm_without_configured_floors_reports_none(tmp_path, floors):
     floors({})
     suite, eps = _write(tmp_path)
     out = tmp_path / "out"
-    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP))
+    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP),
+                  floor_allow_unsplit=True)
     assert result.exit_code == 0
     metrics = json.loads((out / "metrics.json").read_text())
     floor = metrics["router_floor"]
@@ -209,7 +223,8 @@ def test_floor_arm_forces_enforce_over_the_deployment_mode(tmp_path, floors):
     floors({"faq": 0.8}, mode="off")
     suite, eps = _write(tmp_path)
     out = tmp_path / "out"
-    _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP))
+    _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP),
+                  floor_allow_unsplit=True)
     assert json.loads((out / "metrics.json").read_text())["router_floor"][
         "floor_status"] == {"met": 4}
 
@@ -229,6 +244,7 @@ def test_heldout_split_scores_only_the_held_out_cases(tmp_path, floors):
         assert m["n_cases"] == len(held), name
     floor = metrics["router_floor"]
     assert floor["split"] == "heldout" and floor["split_seed"] == 3
+    assert floor["heldout"] is True and "warning" not in floor
     assert floor["n_cases"] == len(held)
     assert {r["case_id"] for r in _jsonl(out / "matrix.jsonl")} == set(held)
 
@@ -251,6 +267,9 @@ def test_no_bounds_leaves_outputs_without_the_arm(tmp_path, floors):
     ({"split_seed": 1}, False),
     ({"floor_split": "train"}, True),
     ({"floor_split": "heldout", "split_seed": 9}, True),   # != the bounds' seed
+    ({"floor_allow_unsplit": True}, False),
+    ({}, True),                                            # bounds, no split, no opt-out
+    ({"floor_split": "heldout", "floor_allow_unsplit": True}, True),
 ])
 def test_bad_floor_arguments_exit_1(tmp_path, floors, kwargs, needs_bounds, capsys):
     floors({"faq": 0.8})
@@ -269,8 +288,64 @@ def test_bad_bounds_file_exits_1(tmp_path, floors):
     suite, eps = _write(tmp_path)
     path = tmp_path / "bounds.json"
     path.write_text(json.dumps({"schema": "nope", "seed": 0, "bounds": []}))
-    result = _run(suite, eps, tmp_path / "out", floor_bounds_path=str(path))
+    result = _run(suite, eps, tmp_path / "out", floor_bounds_path=str(path),
+                  floor_split="heldout")
     assert result.exit_code == 1
+
+
+def test_bounds_without_split_are_refused_by_default(tmp_path, floors, capsys):
+    floors({"faq": 0.8})
+    suite, eps = _write(tmp_path)
+    result = _run(suite, eps, tmp_path / "out",
+                  floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP))
+    assert result.exit_code == 1
+    assert "--floor-split heldout" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+def test_unsplit_opt_out_warns_on_stderr(tmp_path, floors, capsys):
+    floors({"faq": 0.8})
+    suite, eps = _write(tmp_path)
+    out = tmp_path / "out"
+    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP),
+                  floor_allow_unsplit=True)
+    assert result.exit_code == 0
+    assert "not a held-out result" in capsys.readouterr().err
+    assert "**Warning:**" in (out / "report.md").read_text()
+
+
+def test_bounds_fitted_on_another_suite_are_refused(tmp_path, floors, capsys):
+    floors({"faq": 0.8})
+    suite, eps = _write(tmp_path)
+    result = _run(suite, eps, tmp_path / "out", floor_split="heldout",
+                  floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP, digest="0" * 64))
+    assert result.exit_code == 1
+    assert "different suite" in capsys.readouterr().err
+
+
+def test_bounds_without_suite_hash_are_refused(tmp_path, floors, capsys):
+    floors({"faq": 0.8})
+    suite, eps = _write(tmp_path)
+    result = _run(suite, eps, tmp_path / "out", floor_split="heldout",
+                  floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP, digest=None))
+    assert result.exit_code == 1
+    assert "refit" in capsys.readouterr().err
+
+
+def test_effective_mode_counts_show_per_app_overrides(tmp_path, floors):
+    floors({"faq": 0.8})
+    cases = [dict(c) for c in CASES]
+    cases[0] = {**cases[0], "app_policy": {**cases[0]["app_policy"],
+                                           "quality_floor_mode": "shadow"}}
+    suite, eps = _write(tmp_path, cases)
+    out = tmp_path / "out"
+    result = _run(suite, eps, out, floor_bounds_path=_bounds(tmp_path, FAVOUR_CHEAP),
+                  floor_allow_unsplit=True)
+    assert result.exit_code == 0
+    floor = json.loads((out / "metrics.json").read_text())["router_floor"]
+    assert floor["mode"] == "enforce"
+    assert floor["effective_mode"] == {"enforce": 3, "shadow": 1}
+    assert floor["floor_status"] == {"met": 3, "shadow_met": 1}
 
 
 # --------------------------------------------------------------------------
@@ -296,6 +371,11 @@ def test_feasible_bench_cli_passes_floor_flags(monkeypatch, tmp_path):
                      "--split-seed", "4"]) == 0
     assert (seen["floor_bounds_path"], seen["floor_split"], seen["split_seed"]) == (
         "b.json", "heldout", 4)
+    assert seen["floor_allow_unsplit"] is False
+    seen.clear()
+    assert cli.main(["--suite", "s", "--endpoints", "e", "--out", str(tmp_path),
+                     "--floor-bounds", "b.json", "--floor-allow-unsplit"]) == 0
+    assert seen["floor_allow_unsplit"] is True
     seen.clear()
     assert cli.main(["--suite", "s", "--endpoints", "e", "--out", str(tmp_path)]) == 0
     assert (seen["floor_bounds_path"], seen["floor_split"], seen["split_seed"]) == (
