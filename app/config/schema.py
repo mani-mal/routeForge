@@ -422,3 +422,8 @@ class Settings(BaseModel):
     # classifier) don't need to re-read from disk.
     prompt_version: str = ""
     active_prompts: dict[str, PromptArtifact] = {}
+    # B91: top-level keys each raw YAML file carried (after the overlay merge),
+    # keyed by file name ("serving" | "policy" | "routing" | "pricing"). The
+    # models above drop unknown keys, so the one-owner-per-concern lint can only
+    # see a misplaced key here. Empty (check skipped) for a hand-built Settings.
+    config_keys: dict[str, list[str]] = {}

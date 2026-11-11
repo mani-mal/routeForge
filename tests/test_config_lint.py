@@ -331,3 +331,101 @@ def test_quality_refresh_nonpositive_is_caught(value):
     assert any(e.startswith("QUALITY_REFRESH_NOT_POSITIVE") for e in lint_settings(s))
     with pytest.raises(SystemExit):
         enforce(s)
+
+
+# --- B90: risk-class names ---------------------------------------------------
+
+def test_risk_floor_unknown_class_is_caught():
+    s = copy.deepcopy(load_settings())
+    s.routing.risk_floors["critical"] = "frontier"
+    assert any("RISK_FLOOR_CLASS_UNKNOWN" in e and "critical" in e
+               for e in lint_settings(s))
+
+
+def test_risk_floor_missing_class_is_caught():
+    s = copy.deepcopy(load_settings())
+    del s.routing.risk_floors["medium"]
+    assert any("RISK_FLOOR_CLASS_MISSING" in e and "medium" in e
+               for e in lint_settings(s))
+
+
+def test_rule_unknown_risk_class_is_caught():
+    s = copy.deepcopy(load_settings())
+    s.policy.sensitivity_rules[0].risk_class = "critical"
+    assert any("RULE_RISK_CLASS_UNKNOWN" in e and "critical" in e
+               for e in lint_settings(s))
+
+
+# --- B91: canonical values and one owner per concern -------------------------
+
+def test_onprem_provider_must_be_declared():
+    s = copy.deepcopy(load_settings())
+    s.serving.providers["on-prem"] = s.serving.providers.pop("onprem")
+    errs = lint_settings(s)
+    assert any("ONPREM_PROVIDER_MISSING" in e for e in errs)
+
+
+def test_tier_set_extra_and_missing_are_named():
+    s = copy.deepcopy(load_settings())
+    s.routing.tiers = ["cheap", "mid", "strong"]
+    errs = [e for e in lint_settings(s) if "TIER_SET_NONCANONICAL" in e]
+    assert errs and "strong" in errs[0] and "frontier" in errs[0]
+
+
+def test_sensitivity_enum_must_be_canonical():
+    s = copy.deepcopy(load_settings())
+    s.policy.sensitivity_scale = ["public", "internal", "secret"]
+    assert any("SENSITIVITY_ENUM_NONCANONICAL" in e for e in lint_settings(s))
+
+
+def _config_copy(tmp_path, edits):
+    import shutil
+    import yaml
+    d = tmp_path / "cfg"
+    shutil.copytree("config", d)
+    for name, fn in edits.items():
+        p = d / name
+        raw = yaml.safe_load(p.read_text())
+        fn(raw)
+        p.write_text(yaml.safe_dump(raw))
+    return str(d)
+
+
+def test_key_in_wrong_file_is_a_failure(tmp_path):
+    d = _config_copy(tmp_path, {"routing.yaml": lambda r: r.update(budgets={"x": 1.0})})
+    errs = lint_settings(load_settings(d))
+    hit = [e for e in errs if "CONCERN_IN_WRONG_FILE" in e]
+    assert hit and "budgets" in hit[0] and "routing.yaml" in hit[0] and "policy.yaml" in hit[0]
+
+
+def test_unknown_key_warns_but_does_not_fail(tmp_path, caplog):
+    import logging
+    d = _config_copy(tmp_path, {"policy.yaml": lambda r: r.update(fail_closed=True)})
+    with caplog.at_level(logging.WARNING, logger="app.config.lint"):
+        errs = lint_settings(load_settings(d))
+    assert errs == []
+    assert any("UNKNOWN_CONFIG_KEY" in r.message and "fail_closed" in r.message
+               for r in caplog.records)
+
+
+def test_shipped_config_has_no_unknown_keys(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="app.config.lint"):
+        assert lint_settings(load_settings()) == []
+    assert not [r for r in caplog.records if "UNKNOWN_CONFIG_KEY" in r.message]
+
+
+def test_overlay_keys_are_checked_after_merge(tmp_path, monkeypatch):
+    import yaml
+    ov = tmp_path / "ov"
+    ov.mkdir()
+    (ov / "pricing.yaml").write_text(yaml.safe_dump({"tiers": ["cheap"]}))
+    monkeypatch.setenv("SP_CONFIG_OVERLAY_DIR", str(ov))
+    errs = lint_settings(load_settings())
+    assert any("CONCERN_IN_WRONG_FILE" in e and "tiers" in e and "routing.yaml" in e
+               for e in errs)
+
+
+def test_overlay_valid_addition_still_lints_clean(monkeypatch):
+    monkeypatch.setenv("SP_CONFIG_OVERLAY_DIR", "deploy/dgx_lab/config-overlay")
+    load_settings()  # must not raise; overlay merge path intact
