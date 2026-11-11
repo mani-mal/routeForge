@@ -35,8 +35,8 @@ docker compose -f deploy/compose/docker-compose.yml --profile gpu up
 RouteForge does not deploy or select the serving stack; onboard the resulting endpoint
 at runtime.
 
-> First build compiles the API image with the `observability` extra (Langfuse
-> export) — the "< 5 minutes" target assumes images are already built/pulled.
+> First build compiles the API image with the `observability` and `postgres` extras (Langfuse
+> export, asyncpg) — the "< 5 minutes" target assumes images are already built/pulled.
 > For a lean image build with `--build-arg EXTRAS=""`.
 
 ## Single workstation — NVIDIA DGX Spark
@@ -71,8 +71,8 @@ helm upgrade serving-plane deploy/helm/serving-plane \
 ```
 
 See `deploy/helm/serving-plane/README.md` for the full values reference. Key GreenLake
-notes (from the greenlake-deploy skill): set `storageClassName` and `ingress.className`
+notes (from the greenlake-deploy skill): set `ingress.className`
 explicitly; reference existing K8s Secrets for Langfuse/provider creds (never chart
-values); CCR PVC stays **inside the cluster** (residency hard-rule 6); GPU workloads
+values); the CCR cache stays **inside the cluster** (residency hard-rule 6); GPU workloads
 are gated behind `nodeSelector`/`tolerations`; and outside demo mode the SSE decision
 stream must be auth'd + tenant-scoped (it carries tenant/entity/cost metadata).

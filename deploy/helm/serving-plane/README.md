@@ -11,7 +11,7 @@ self-hosted Langfuse stack).
 ## Install
 
 ```bash
-# Demo-safe defaults (mock backend, CPU only, no GPU nodes needed):
+# Demo-safe defaults (CPU only, no GPU nodes needed):
 helm install serving-plane deploy/helm/serving-plane \
   --set langfuse.existingSecret=langfuse-keys
 
@@ -30,21 +30,16 @@ kubectl create secret generic langfuse-keys \
   --from-literal=langfuse-secret-key=sk-lf-...
 ```
 
-## Switching backends / PII / compression — no rebuild required
+## Switching PII / compression — no rebuild required
 
 Every knob in `config/serving.yaml` is settable here under `servingPlane:` and
 is rendered into a ConfigMap that overlays `/app/config/serving.yaml` inside
 the api Pod (routing.yaml/policy.yaml/pricing.yaml stay as baked into the
 image — they aren't infra switches). A handful of the same switches are also
-set as container env vars (`SP_INFERENCE_BACKEND`, `SP_PII_DETECTION`,
-`SP_SERVER_PORT`, `SP_CONTEXT_OPT`), matching exactly what
-`app/config/loader.py` already reads from the environment in the Dockerfile
-and compose setup.
+set as container env vars (`SP_PII_DETECTION`, `SP_SERVER_PORT`,
+`SP_CONTEXT_OPT`), matching what `app/config/loader.py` reads from the environment.
 
 ```bash
-helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
-  --set servingPlane.inferenceBackend=vllm
-
 helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
   --set servingPlane.policy.piiDetection=regex
 
@@ -56,24 +51,38 @@ helm upgrade serving-plane deploy/helm/serving-plane --reuse-values \
 A pod-template checksum annotation on the api Deployment forces a rollout
 whenever the rendered config changes.
 
+## Admin login
+
+The api seeds an admin at first boot from `ADMIN_EMAIL` / `ADMIN_PASSWORD`, read from
+the chart's `<release>-serving-plane-admin` Secret. `admin.password` defaults to empty:
+the chart generates a 24-character password on first install and reuses it on every
+upgrade. `changeme` is refused, including a `changeme` already stored in the Secret by an
+earlier install: set `--set admin.password=<new>` and also change the stored admin (the api
+only seeds when no admin with that email exists), e.g. in the console. Read the generated
+password with the command in NOTES.txt.
+
+## Removed values (chart 0.2.0)
+
+There is no changelog file; these keys were removed and no longer do anything. Delete them
+from your values files: `servingPlane.inferenceBackend`, `servingPlane.allowBackendFallback`,
+`servingPlane.vllm.*`, `servingPlane.dynamo.*`, `servingPlane.policy.failClosed`,
+`servingPlane.contextOptimization.ccr.storageClassName` / `.size` (the CCR cache is
+in-memory; the `<release>-ccr` PVC is no longer created). The `SP_INFERENCE_BACKEND` env var is
+gone. `servingPlane.providers.<name>` now takes `litellmPrefix` / `apiKeyEnv` / `apiBaseEnv` /
+`apiVersionEnv`.
+
 ## Values reference
 
 | Key | Default | Notes |
 |---|---|---|
-| `servingPlane.inferenceBackend` | `mock` | `mock \| vllm \| dynamo \| none`. `mock` needs no GPU. |
-| `servingPlane.allowBackendFallback` | `true` | `false` ⇒ api exits non-zero if backend unreachable. |
-| `servingPlane.vllm.baseUrl` / `.timeoutS` | vLLM OpenAI-compatible endpoint | Only used when `inferenceBackend: vllm`. |
-| `servingPlane.dynamo.endpoint` / `.routerMode` / `.timeoutS` | Dynamo frontend | Only used when `inferenceBackend: dynamo`. |
-| `servingPlane.policy.piiDetection` | `presidio` | `presidio \| regex \| off`. Use `regex` if Presidio's model can't be downloaded air-gapped. |
-| `servingPlane.policy.failClosed` | `true` | Never set `false`. |
+| `admin.email` / `admin.password` | `admin@routeforge.local` / `""` | Empty password => generated and kept across upgrades; `changeme` refused. |
+| `servingPlane.policy.piiDetection` | `regex` | `regex \| presidio \| off`. `presidio` needs an api image built with `EXTRAS=observability,postgres,presidio`. |
 | `servingPlane.contextOptimization.enabled` | `false` | Headroom compression. Off by default so a demo can show before/after. |
 | `servingPlane.contextOptimization.mode` | `library` | `library \| proxy`. |
 | `servingPlane.contextOptimization.ccr.enabled` | `true` | Only takes effect when `contextOptimization.enabled` is also `true`. |
 | `servingPlane.contextOptimization.ccr.residency` | `local_only` | Must stay `local_only` — hard rule 6. |
 | `servingPlane.contextOptimization.ccr.ttlHours` | `24` | TTL enforced by the app; not a storage-layer setting. |
-| `servingPlane.contextOptimization.ccr.storageClassName` | `""` (cluster default) | **Set explicitly on GreenLake** — see values-greenlake.yaml. Must be in-cluster block/file storage, never an object store. |
-| `servingPlane.contextOptimization.ccr.size` | `20Gi` | PVC size for the CCR store. |
-| `servingPlane.providers.{onprem,azure,bedrock}.enabled` | `onprem: true`, rest `false` | Provider *availability* only — tier membership is `routing.yaml`'s job, unchanged here. |
+| `servingPlane.providers.{onprem,azure,bedrock}.{enabled,litellmPrefix,apiKeyEnv,...}` | `onprem` enabled, rest off; prefixes `openai`/`azure`/`bedrock` | Provider *availability* only — tier membership is `routing.yaml`'s job, unchanged here. |
 | `servingPlane.server.streamDecisions` | `true` | **See warning below.** |
 | `servingPlane.server.rejectStreamRequests` | `true` | Rejects inbound `stream: true` (demo policy — separate from the SSE decision stream). |
 | `langfuse.enabled` | `true` | |
@@ -93,7 +102,7 @@ whenever the rendered config changes.
 
 ## GPU gating
 
-The default install (`inferenceBackend: mock`) schedules the api and ui
+The default install schedules the api and ui
 Deployments on ordinary CPU nodes — nothing in this chart requests a GPU by
 default. `gpuWorkload.nodeSelector`/`.tolerations`/`.resources` exist purely
 as plumbing for a GPU serving workload and are only wired into the optional,
@@ -102,15 +111,6 @@ disabled-by-default `vllmStub` Deployment (Phase 9 placeholder). Verify with:
 ```bash
 helm template . | grep -A2 nodeSelector   # empty on default values
 ```
-
-## CCR PVC gating
-
-The `ccr-pvc.yaml` template only renders when **both**
-`servingPlane.contextOptimization.enabled` and
-`servingPlane.contextOptimization.ccr.enabled` are `true` (the default has
-compression off, so no PVC is created by default). It is always inside-cluster
-storage — `storageClassName` is a Kubernetes StorageClass, never an S3-style
-endpoint (hard rule 6).
 
 ## Decision stream (SSE) — auth warning
 
@@ -129,7 +129,7 @@ Do not expose the ingress route unauthenticated in a shared environment.
   air-gapped install, bake those assets into the image and set
   `HF_HUB_OFFLINE=1` via `extraEnv`. Leaving compression disabled (the
   default) needs neither asset.
-- If Presidio's model can't be downloaded, set `servingPlane.policy.piiDetection: regex`.
+- The default detector is `regex`. For `presidio`, build the api image with `EXTRAS=observability,postgres,presidio` (the build downloads the spaCy model).
 - Behind corporate TLS-inspecting proxies, `HEADROOM_TLS_STRICT=0` (via
   `extraEnv`) narrows only the strict X.509 check; chain/expiry/hostname
   checks stay on.
@@ -141,5 +141,5 @@ helm lint deploy/helm/serving-plane
 helm template deploy/helm/serving-plane
 helm template deploy/helm/serving-plane \
   -f deploy/helm/serving-plane/values-greenlake.yaml \
-  --set servingPlane.inferenceBackend=vllm
+  --set servingPlane.policy.piiDetection=presidio
 ```

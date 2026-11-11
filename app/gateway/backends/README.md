@@ -1,8 +1,7 @@
 # Inference Backends
 
 One `InferenceBackend` Protocol (`base.py`), one implementation
-(`LiteLLMBackend`, `litellm_backend.py`). There is no `inference_backend` axis
-any more — routeForge deploys nothing; on-prem models are onboarded at
+(`LiteLLMBackend`, `litellm_backend.py`). routeForge deploys nothing; on-prem models are onboarded at
 runtime (endpoint + auth env registered per model, see
 `docs/guides/onboarding-models.md` and `app/apps/registry.py`'s `ModelRegistry`).
 Every provider (onprem/azure/bedrock alike) egresses through this single

@@ -1,12 +1,13 @@
 # Serving Plane API image — multi-stage, non-root, pinned bases.
-# Default runtime is the safe-boot path: inference_backend=none (on-prem disabled),
-# regex PII detector — no GPU, no network, no API keys. Real deploys set
-# SP_INFERENCE_BACKEND=vllm|dynamo; every LLM call egresses via LiteLLM.
+# Default runtime is the safe-boot path: regex PII detector, no on-prem model
+# onboarded (the pool boots empty), no GPU, no network, no API keys. On-prem
+# endpoints are onboarded at runtime; every LLM call egresses via LiteLLM.
 #
 # EXTRAS build-arg controls which optional dependency groups are installed:
-#   "observability"            (default) — Langfuse export
-#   ""                         — lean mock-only API (smallest image)
-#   "observability,presidio"  — + Presidio (needs a spaCy model download)
+#   "observability,postgres"            (default) — Langfuse export + Postgres store
+#   ""                                  — lean API (smallest image)
+#   "observability,postgres,presidio"   — + Presidio (downloads the spaCy model);
+#                                         required for SP_PII_DETECTION=presidio
 ARG PYTHON_VERSION=3.12
 
 # ---- builder ---------------------------------------------------------------
@@ -36,7 +37,10 @@ RUN EXTRA_FLAGS=""; \
 # Now the source, then install the project itself into the venv.
 COPY app/ ./app/
 COPY config/ ./config/
-COPY tests/ ./tests/
+# Only what /api/traffic needs at runtime (app/api/ui_routes.py imports
+# tests.traffic.generator, which reads tests/personas.yaml): not the test suite.
+COPY tests/__init__.py tests/personas.yaml ./tests/
+COPY tests/traffic/ ./tests/traffic/
 RUN EXTRA_FLAGS=""; \
     for e in $(echo "${EXTRAS}" | tr ',' ' '); do EXTRA_FLAGS="$EXTRA_FLAGS --extra $e"; done; \
     uv sync --frozen ${EXTRA_FLAGS}
@@ -72,11 +76,8 @@ COPY --from=builder --chown=app:app /app /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    # Safe-boot defaults; override via compose/Helm/K8s env. `none` disables the
-    # on-prem path so a bare `docker run` boots with no external deps (mock was
-    # removed in the LiteLLM gateway swap — it is no longer a valid value and the
-    # config lint would reject it). Real deploys set SP_INFERENCE_BACKEND=vllm|dynamo.
-    SP_INFERENCE_BACKEND=none \
+    # Safe-boot defaults; override via compose/Helm/K8s env. regex needs no
+    # model download; presidio needs an image built with the presidio extra.
     SP_PII_DETECTION=regex \
     SP_SERVER_PORT=8080
 
