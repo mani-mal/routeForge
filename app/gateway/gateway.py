@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from typing import AsyncIterator
 
+from app.apps.secret_box import scrub_secrets
 from app.config.schema import Settings
 from app.errors import BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate
 from app.gateway.backends.base import InferenceBackend, StreamChunk
@@ -29,7 +30,9 @@ _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
 
 
 def _scrub_endpoints(text: str) -> str:
-    return _IPV4.sub("<endpoint>", _URL.sub("<endpoint>", text))
+    """Endpoints AND live endpoint keys (B68): an upstream error may echo the
+    request kwargs or the bearer token, and this text is logged and returned."""
+    return _IPV4.sub("<endpoint>", _URL.sub("<endpoint>", scrub_secrets(text)))
 
 
 def _format_upstream_error(model: str, exc: Exception) -> str:

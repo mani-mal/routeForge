@@ -3,12 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
+
+from pydantic import SecretStr
 
 from app.config.schema import PoolCandidate, PriceCfg, Settings
 from app.apps import store
+from app.apps.secret_box import decrypt_or_none, register_secret
 
 _log = logging.getLogger("serving.registry")
+
+#: The bearer sent for a model whose key RouteForge cannot produce -- an
+#: api_key_env naming an unset variable, or a stored key that no longer
+#: decrypts. A placeholder, never a real credential: the endpoint answers
+#: 401 and the probe reports `unauthorized` (B61), which is the honest result.
+NO_AUTH_KEY = "sk-noauth"
 
 
 @dataclass(frozen=True)
@@ -44,6 +54,13 @@ class _OnboardedRow:
     # Read by /health only; eligibility keys on `enabled`, which the admin
     # routes AND with the probe. Anything but "healthy" is "known down".
     probe_status: str = "healthy"
+    # B68: "stored" (api_key_enc set), "env" (api_key_env set) or None.
+    api_key_source: str | None = None
+    # The decrypted stored key, wrapped so a repr/str/model_dump of the row
+    # shows `**********`, and excluded from the dataclass repr and equality.
+    # None when there is no stored key OR it no longer decrypts (key
+    # rotated/missing) -- `api_key_source` still says "stored" in that case.
+    stored_key: SecretStr | None = field(default=None, repr=False, compare=False)
 
 
 class ModelRegistry:
@@ -59,6 +76,9 @@ class ModelRegistry:
         # Bumped on every successful `refresh`, so derived caches (the shared
         # QualityResolver's tier/published maps) know the pool may have moved.
         self._generation = 0
+        # (slug, ciphertext) pairs already warned about as undecryptable, so a
+        # periodic refresh logs each broken stored key once, not every minute.
+        self._undecryptable_warned: set[tuple[str, str]] = set()
 
     @property
     def generation(self) -> int:
@@ -88,11 +108,37 @@ class ModelRegistry:
                     accepts_raw_sensitive=r.accepts_raw_sensitive,
                     price_cached_input=r.price_cached_input,
                     context_window=r.context_window,
-                    probe_status=r.probe_status or "unknown")
+                    probe_status=r.probe_status or "unknown",
+                    **self._credential(r))
                 for r in rows}
             self._generation += 1
         except Exception:
             _log.exception("registry refresh failed; keeping last-known-good")
+
+    def _credential(self, r) -> dict:
+        """`api_key_source` + decrypted `stored_key` for one DB row. Decrypted
+        here, on every refresh, so a key rotated on one replica is picked up
+        by every other replica on its next refresh (no restart). A stored key
+        that does not decrypt under the current ENCRYPTION_KEY is treated as
+        no key; a WARNING names the slug, never the value."""
+        enc = getattr(r, "api_key_enc", None)
+        if enc:
+            plain = decrypt_or_none(enc)
+            if plain is None:
+                if (r.slug, enc) not in self._undecryptable_warned:
+                    self._undecryptable_warned.add((r.slug, enc))
+                    _log.warning(
+                        "onboarded model %s has a stored API key that cannot be "
+                        "decrypted with the current ENCRYPTION_KEY; sending no key "
+                        "(the endpoint will answer 401). Re-enter the key.", r.slug)
+                return {"api_key_source": "stored", "stored_key": None}
+            register_secret(plain)
+            return {"api_key_source": "stored", "stored_key": SecretStr(plain)}
+        if r.api_key_env:
+            # Env-held keys are scrubbed from upstream error text too.
+            register_secret(os.environ.get(r.api_key_env))
+            return {"api_key_source": "env", "stored_key": None}
+        return {"api_key_source": None, "stored_key": None}
 
     def _onboarded(self) -> dict[str, _OnboardedRow]:
         return self._rows or {}
@@ -228,6 +274,22 @@ class ModelRegistry:
     def endpoint_for(self, slug: str) -> tuple[str, str | None] | None:
         r = self._onboarded().get(slug)
         return (r.endpoint, r.api_key_env) if r is not None else None
+
+    def api_key_for(self, slug: str) -> str | None:
+        """The bearer key to send to onboarded model `slug`, or None when the
+        model declares no key of its own (the provider-level `api_key_env` in
+        serving.yaml then applies). A stored key wins; an undecryptable stored
+        key or an unset api_key_env yields `NO_AUTH_KEY`, so the endpoint
+        refuses the call rather than receiving some other credential.
+        Callers must never log the return value."""
+        r = self._onboarded().get(slug)
+        if r is None:
+            return None
+        if r.api_key_source == "stored":
+            return r.stored_key.get_secret_value() if r.stored_key else NO_AUTH_KEY
+        if r.api_key_env:
+            return os.environ.get(r.api_key_env, NO_AUTH_KEY)
+        return None
 
     def disabled_onboarded(self) -> tuple[str, ...]:
         """Sorted slugs of onboarded rows the admin has disabled. They are

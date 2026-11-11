@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.exception_handlers import (
     http_exception_handler, request_validation_exception_handler,
 )
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -229,9 +230,17 @@ async def refresh_quality(app: FastAPI) -> bool:
 
 
 async def _quality_loop(app: FastAPI) -> None:
-    """Background refresher: `refresh_quality` every
-    `routing.quality_refresh_s` until `app.state.quality_stop` is set. A
-    failed refresh is logged inside `refresh_quality` and never ends the
+    """Background refresher: every `routing.quality_refresh_s` until
+    `app.state.quality_stop` is set, reload the onboarded-model registry and
+    then `refresh_quality`.
+
+    The registry reload is what carries an admin write made on ANOTHER replica
+    -- an onboarding, an enable/disable, a rotated endpoint key (B68) -- to
+    this one without a restart; the replica that served the write refreshes at
+    once. So the cross-replica staleness bound is `quality_refresh_s` (60 s by
+    default). It runs first so the quality resolver sees the new generation.
+    `ModelRegistry.refresh` keeps last-known-good on a DB error, and a failed
+    quality refresh is logged inside `refresh_quality`; neither ends the
     loop."""
     stop: asyncio.Event = app.state.quality_stop
     while not stop.is_set():
@@ -242,6 +251,9 @@ async def _quality_loop(app: FastAPI) -> None:
             pass
         if stop.is_set():
             break
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            await registry.refresh(app.state.db)
         await refresh_quality(app)
 
 
@@ -510,6 +522,13 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith("/admin/infra/models"):
+            # B68: the onboarding body may carry an endpoint API key. FastAPI's
+            # default 422 echoes each error's `input` -- for a missing field,
+            # the whole body -- so drop it on this route.
+            return JSONResponse(status_code=422, content={"detail": jsonable_encoder([
+                {k: v for k, v in e.items() if k not in ("input", "ctx")}
+                for e in exc.errors()])})
         if not request.url.path.startswith("/v1/"):
             return await request_validation_exception_handler(request, exc)
         first = exc.errors()[0] if exc.errors() else {}

@@ -526,6 +526,14 @@ class OnboardedModel(Base):
     price_cached_input: Mapped[float | None] = mapped_column(Float, nullable=True)
     endpoint: Mapped[str] = mapped_column(String(255))
     api_key_env: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # B68: the endpoint's API key, given at onboarding time, as a Fernet token
+    # under ENCRYPTION_KEY (`app/apps/secret_box.py`). Never plaintext: with no
+    # usable ENCRYPTION_KEY the admin route refuses the key (422). Write-only --
+    # no admin read, snapshot, trace or outcome row carries it. At most one of
+    # api_key_env / api_key_enc is set per row. Added after the table's first
+    # release: `ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS
+    # api_key_enc TEXT;` (scripts/migrate_app_policies.py).
+    api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Where `context_window` came from: "operator" (a human typed it) or
     # "probed" (read from the endpoint's own /v1/models max_model_len). NULL

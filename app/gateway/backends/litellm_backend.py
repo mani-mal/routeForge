@@ -220,17 +220,20 @@ class LiteLLMBackend:
                 "(guardrail 3: cloud must be unreachable by construction)")
         litellm_model = cand.litellm_model or f"{pcfg.litellm_prefix}/{cand.name}"
         kwargs: dict = {}
-        # onprem: base_url + optional auth env come from the onboarded model's
-        # registered endpoint (per-model reachability probed at onboard time).
+        # onprem: base_url + optional per-model key come from the onboarded
+        # model's registered endpoint (per-model reachability probed at onboard
+        # time). The key is the model's stored (encrypted, B68) key, else the
+        # value of its api_key_env; with neither, the provider-level
+        # api_key_env below is the fallback.
         if cand.provider == "onprem":
             ep = self._reg.endpoint_for(cand.name) if self._reg else None
             if ep is None:
                 raise RuntimeError(
                     f"onprem model {model!r} has no registered endpoint")
-            base, key_env = ep
-            kwargs["api_base"] = base
-            if key_env:
-                kwargs["api_key"] = os.environ.get(key_env, "sk-noauth")
+            kwargs["api_base"] = ep[0]
+            key = self._reg.api_key_for(cand.name)
+            if key:
+                kwargs["api_key"] = key
         if pcfg.api_base_env:   # cloud, unchanged
             kwargs["api_base"] = os.environ.get(pcfg.api_base_env) or kwargs.get("api_base")
         if pcfg.api_key_env and "api_key" not in kwargs:
