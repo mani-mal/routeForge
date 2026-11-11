@@ -616,6 +616,8 @@ async def _record_usage_and_outcome(request: Request, usage: dict | None,
     if usage is None and outcome is None:
         return
     log = logging.getLogger("serving.obs")
+    commit_attempted = False
+    split = False
     try:
         async with request.app.state.db.session() as session:
             try:
@@ -628,16 +630,23 @@ async def _record_usage_and_outcome(request: Request, usage: dict | None,
                 log.warning("combined usage/outcome write failed request=%s; "
                             "writing each on its own", (usage or outcome).get("request_id"),
                             exc_info=True)
-                await session.rollback()
-                split = True
+                split = True   # closing the session rolls the pair back
             else:
-                split = False
+                commit_attempted = True
                 await session.commit()
     except Exception:  # metering must never break serving
-        log.exception("usage record failed (swallowed)")
-        if outcome is not None:
-            await _record_outcome(request, outcome)
-        return
+        if commit_attempted:
+            # The commit's outcome is unknown: never rewrite the usage row (a
+            # duplicate meter), retry only the outcome (its key is the request id).
+            log.exception("usage record failed (swallowed)")
+            if outcome is not None:
+                await _record_outcome(request, outcome)
+            return
+        # Nothing was committed (the session failed to open, or the rollback
+        # after a failed flush raised): write each row on its own.
+        log.warning("usage/outcome session failed before commit; writing each on "
+                    "its own", exc_info=True)
+        split = True
     if split:
         if usage is not None:
             await _record_usage(request, usage)

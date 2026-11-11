@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import weakref
 from contextlib import asynccontextmanager
 from typing import Callable
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.pool import StaticPool
 
 DEFAULT_SQLITE_URL = "sqlite+aiosqlite:///./routeforge.db"
@@ -87,7 +89,10 @@ class Base(DeclarativeBase):
 # globally, on the sync Session class; a session reaches its own Database's
 # callbacks through `session.info` (shared, read-only), and the per-session
 # "a relevant write was flushed" mark lives in a WeakSet, never in that shared
-# dict.
+# dict. Covers ORM unit-of-work changes, ORM bulk and Core insert/update/
+# delete, and `text()` DML, all executed through a Session. Writes made on a
+# bare engine connection, or by another process (scripts, direct SQL), are not
+# seen: they reach the cache within one TTL, like another replica's.
 AUTH_VIEW_TABLES = frozenset({"applications", "app_policies", "app_tokens"})
 # Execution option for a bulk UPDATE that must NOT invalidate (the request
 # path's own `last_used_at` stamp).
@@ -116,17 +121,35 @@ def _note_auth_writes(session, _flush_context) -> None:
         _auth_dirty.add(session)
 
 
+# Table names a raw SQL write (`text("UPDATE app_tokens ...")`) targets.
+_TEXT_DML_TABLE = re.compile(
+    r'\b(?:update|delete\s+from|insert\s+into)\s+(?:only\s+)?'
+    r'(?:"?\w+"?\.)?"?(\w+)"?', re.IGNORECASE)
+
+
+def _dml_tables(state) -> set[str]:
+    """The tables a statement executed through a Session writes to: ORM bulk
+    and Core `insert/update/delete(...)` (mapped entity or plain Table), and
+    `text()` DML matched by name. Empty for reads."""
+    stmt = state.statement
+    if isinstance(stmt, TextClause):
+        return {t.lower() for t in _TEXT_DML_TABLE.findall(stmt.text)}
+    if not getattr(stmt, "is_dml", False):
+        return set()
+    tables = {getattr(m.local_table, "name", None) for m in state.all_mappers}
+    table = getattr(stmt, "table", None)
+    tables.add(getattr(table, "name", None))
+    return {t for t in tables if t}
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _note_bulk_auth_writes(state) -> None:
     session = state.session
     if _AUTH_LISTENERS_KEY not in session.info:
         return
-    if not (state.is_update or state.is_delete):
-        return
     if state.execution_options.get(AUTH_STAMP_OPTION):
         return
-    tables = {getattr(m.local_table, "name", None) for m in state.all_mappers}
-    if tables & AUTH_VIEW_TABLES:
+    if _dml_tables(state) & AUTH_VIEW_TABLES:
         _auth_dirty.add(session)
 
 

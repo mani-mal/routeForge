@@ -178,7 +178,10 @@ curl -b cookies.txt http://<host>:<port>/admin/applications/acme-support/tokens 
   `server.auth_cache_ttl_s` seconds (`config/serving.yaml`, default `5`), so a revoked
   token can keep working on **another replica** for up to `auth_cache_ttl_s` seconds.
   The same bound applies to disabling an app or editing its policy: the replica that
-  took the write applies it at once, the others within one TTL. Set it to `0` to
+  took the write applies it at once, the others within one TTL. It also applies to
+  changes made outside the serving process — `scripts/migrate_app_policies.py`, other
+  scripts, or SQL run directly against the database — which every replica picks up
+  within one TTL. Set it to `0` to
   disable the cache (every request then looks the token up in the database).
   An unknown, revoked or expired token is never cached, so a newly issued token works
   at once on every replica, and expiry and session binding are checked on every request.

@@ -11,6 +11,13 @@
   and a failing outcome never costs the usage row.
 
 Driven through the real HTTP boundary (`create_app()` + `TestClient`).
+
+CI has no Postgres, so `PgDecisionBridge.notify_in` (one `pg_notify` per id
+inside the snapshot flush transaction) is not exercised here against a real
+server; it is a documented manual check: on 2026-11-11 a second bridge with
+its own replica id, LISTENing on a local Postgres 16.2, received the request
+event of a request served by another app instance after its snapshot flush.
+The failure paths around it are tested below with a fake bridge.
 """
 from __future__ import annotations
 
@@ -463,8 +470,8 @@ def test_a_cached_request_makes_one_commit():
 
 def test_failing_outcome_write_keeps_the_usage_row(monkeypatch):
     async def bad_outcome(session, row):
-        # A DB-level failure: a NULL primary key fails at flush, inside the
-        # outcome's savepoint.
+        # A DB-level failure: a NULL primary key fails at the combined flush;
+        # nothing is committed, and each row is then written on its own.
         session.add(RoutingOutcome(**{**row, "request_id": None}))
     monkeypatch.setattr(store, "write_outcome", bad_outcome)
     with _client() as c:
@@ -533,3 +540,281 @@ def test_record_snapshots_replaces_by_request_id():
         finally:
             await db.dispose()
     assert asyncio.run(go()) == {"r1": {"v": 1}, "r2": {"v": 3}}
+
+
+# --------------------------------------------------------------- fix round 1
+
+def _token_by_id(c, token_id):
+    async def get(s):
+        return await s.get(AppToken, token_id, populate_existing=True)
+    return _db(c, get)
+
+
+@pytest.mark.parametrize("how", ["core_update", "text_update", "orm_bulk_update",
+                                 "orm_status_and_last_used"])
+def test_every_kind_of_auth_table_write_clears_the_cache(how):
+    from sqlalchemy import text, update
+    from app.apps.models import Application
+    with _client() as c:
+        t = _new_token(c)
+        assert _chat(c, t["token"]).status_code == 200
+        assert len(c.app.state.auth_cache) >= 1
+
+        async def write(s):
+            if how == "core_update":
+                await s.execute(update(AppToken.__table__)
+                                .where(AppToken.__table__.c.id == t["id"])
+                                .values(status="revoked"))
+            elif how == "text_update":
+                await s.execute(text("UPDATE app_tokens SET status = 'revoked' "
+                                     "WHERE id = :i"), {"i": t["id"]})
+            elif how == "orm_bulk_update":
+                await s.execute(update(AppToken).where(AppToken.id == t["id"])
+                                .values(status="revoked"))
+            else:
+                tok = await s.get(AppToken, t["id"])
+                tok.last_used_at = store.utcnow()
+                tok.status = "revoked"
+            await s.commit()
+        _db(c, write)
+        assert len(c.app.state.auth_cache) == 0
+        assert _chat(c, t["token"]).status_code == 401
+
+
+def test_core_update_of_an_application_clears_the_cache():
+    from sqlalchemy import update
+    from app.apps.models import Application
+    with _client() as c:
+        assert _chat(c).status_code == 200
+
+        async def write(s):
+            await s.execute(update(Application.__table__)
+                            .where(Application.__table__.c.id == "default")
+                            .values(status="disabled"))
+            await s.commit()
+        _db(c, write)
+        assert _chat(c).status_code == 401
+
+
+def test_stamp_update_alone_does_not_clear():
+    with _client() as c:
+        assert _chat(c).status_code == 200
+        gen = c.app.state.auth_cache.generation
+
+        async def stamp(s):
+            tok = (await s.execute(select(AppToken).limit(1))).scalar_one()
+            await store.stamp_token_used(s, tok.id)
+            await s.commit()
+        _db(c, stamp)
+        assert c.app.state.auth_cache.generation == gen
+
+
+def test_revoke_racing_a_lookup_is_not_cached_end_to_end(monkeypatch):
+    """Through the real `_authenticate`: the token is revoked (and committed)
+    after the lookup read it as active but before the result is cached. That
+    in-flight request may still be served, but the stale result must not be
+    cached, so the very next request is refused."""
+    orig = store.resolve_token
+    raced = []
+
+    async def racing(session, raw, session_id=None):
+        token = await orig(session, raw, session_id=session_id)
+        if token is not None and not raced:
+            raced.append(token.id)
+            token.status = "revoked"         # an admin revoke lands meanwhile
+            await session.commit()           # -> invalidation hook clears the cache
+        return token
+    with _client() as c:
+        t = _new_token(c)
+        monkeypatch.setattr(store, "resolve_token", racing)
+        assert _chat(c, t["token"]).status_code == 200    # in flight: already authorized
+        assert raced == [t["id"]]
+        assert _chat(c, t["token"]).status_code == 401    # not served from a stale cache
+
+
+def test_negative_or_infinite_ttl_and_bad_flush_interval_are_named_lint_errors(monkeypatch):
+    from app.config.lint import lint_settings
+    from app.config.loader import load_settings
+    s = load_settings()
+
+    def errs(**upd):
+        return lint_settings(s.model_copy(update={"serving": s.serving.model_copy(update=upd)}))
+    assert any(e.startswith("AUTH_CACHE_TTL_NOT_FINITE") for e in errs(auth_cache_ttl_s=float("inf")))
+    assert any(e.startswith("AUTH_CACHE_TTL_NOT_FINITE") for e in errs(auth_cache_ttl_s=float("nan")))
+    assert any(e.startswith("SNAPSHOT_FLUSH_INTERVAL_NOT_POSITIVE") for e in errs(snapshot_flush_s=0.0))
+    assert any(e.startswith("SNAPSHOT_FLUSH_INTERVAL_INVALID") for e in errs(snapshot_flush_s=float("inf")))
+    monkeypatch.setenv("SP_SNAPSHOT_FLUSH_S", "soon")
+    bad = load_settings()                       # no crash at load
+    assert any(e.startswith("SNAPSHOT_FLUSH_INTERVAL_INVALID") for e in lint_settings(bad))
+    monkeypatch.setenv("SP_SNAPSHOT_FLUSH_S", "0.25")
+    assert load_settings().serving.snapshot_flush_s == 0.25
+    assert not any(e.startswith(("SNAPSHOT_FLUSH", "AUTH_CACHE")) for e in lint_settings(s))
+
+
+def test_flush_interval_from_env_reaches_the_writer(monkeypatch):
+    monkeypatch.setenv("SP_SNAPSHOT_FLUSH_S", "0.3")
+    assert create_app().state.snapshot_writer.flush_interval_s == 0.3
+
+
+class _FailingBridge:
+    def __init__(self, fail_times: int) -> None:
+        self.fail_times = fail_times
+        self.notified: list[str] = []
+
+    async def notify_in(self, session, ids):
+        if self.fail_times:
+            self.fail_times -= 1
+            raise RuntimeError("NOTIFY queue full")
+        self.notified.extend(ids)
+
+
+@pytest.mark.parametrize("fail_times", [1, 1000])
+def test_failing_notify_never_loses_snapshots(fail_times):
+    bridge = _FailingBridge(fail_times)
+    app = create_app()
+    w = app.state.snapshot_writer
+    w.flush_interval_s = 3600
+    w._bridge = bridge
+    with TestClient(app) as c:
+        ids = [_chat(c).json()["id"] for _ in range(3)]
+        assert c.portal.call(w.flush) == 3
+        assert _snapshot_rows(c) == 3
+
+        async def stored(s):
+            return set((await s.execute(select(RequestSnapshot.request_id))).scalars())
+        assert _db(c, stored) == set(ids)
+    # Notified after the commit, in its own transaction, when NOTIFY recovers.
+    assert bridge.notified == (ids if fail_times == 1 else [])
+
+
+def test_cancelled_flush_puts_the_batch_back_and_shutdown_drains_it():
+    app = create_app()
+    w = app.state.snapshot_writer
+    w.flush_interval_s = 3600
+    w.stop_timeout_s = 0.2
+    orig = w._write_batch
+    gate = {"block": True}
+
+    async def blocking(batch, *, prune):
+        if gate["block"]:
+            gate["block"] = False
+            await asyncio.sleep(3600)       # a stuck flush
+        return await orig(batch, prune=prune)
+    w._write_batch = blocking
+    with TestClient(app) as c:
+        ids = [_chat(c).json()["id"] for _ in range(2)]
+
+        async def cancel_mid_flush():
+            task = asyncio.create_task(w.flush())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            return w.pending()
+        assert c.portal.call(cancel_mid_flush) == 2     # back in the buffer
+        assert _snapshot_rows(c) == 0
+    # (TestClient exit ran the shutdown handlers: stop() flushed the buffer.)
+
+    async def count():
+        async with app.state.db.session() as s:
+            return set((await s.execute(select(RequestSnapshot.request_id))).scalars())
+    assert asyncio.run(count()) == set(ids)
+
+
+def test_shutdown_timeout_mid_flush_still_drains(monkeypatch, tmp_path):
+    url = f"sqlite+aiosqlite:///{tmp_path}/b86-stop.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+    app = create_app()
+    w = app.state.snapshot_writer
+    w.flush_interval_s = 0.05
+    w.stop_timeout_s = 0.2
+    orig = w._write_batch
+    gate = {"block": False, "blocked": False}
+
+    async def maybe_block(batch, *, prune):
+        if gate["block"] and batch and not gate["blocked"]:
+            gate["blocked"] = True
+            await asyncio.sleep(3600)       # the loop's flush hangs at shutdown
+        return await orig(batch, prune=prune)
+    w._write_batch = maybe_block
+    with TestClient(app) as c:
+        gate["block"] = True
+        ids = [_chat(c).json()["id"] for _ in range(2)]
+
+        async def wait_blocked():
+            for _ in range(200):
+                if gate["blocked"]:
+                    return True
+                await asyncio.sleep(0.01)
+            return False
+        assert c.portal.call(wait_blocked)
+    # stop() timed out, cancelled the loop mid-flush, and the final flush wrote it.
+
+    async def read():
+        db = Database(url)
+        try:
+            async with db.engine.connect() as conn:
+                return {r[0] for r in await conn.execute(select(RequestSnapshot.request_id))}
+        finally:
+            await db.dispose()
+    assert asyncio.run(read()) == set(ids)
+
+
+def test_ambiguous_commit_retries_outcome_once_and_never_duplicates_usage(monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+    outcome_calls = []
+    orig_write = store.write_outcome
+
+    async def counting_write(session, row):
+        outcome_calls.append(row["request_id"])
+        session.info_b86 = True                    # mark the combined session
+        await orig_write(session, row)
+    monkeypatch.setattr(store, "write_outcome", counting_write)
+    orig_commit = AsyncSession.commit
+    tripped = []
+
+    async def commit_then_fail(self):
+        await orig_commit(self)
+        if getattr(self, "info_b86", False) and not tripped:
+            tripped.append(1)
+            raise RuntimeError("connection lost after COMMIT")
+    monkeypatch.setattr(AsyncSession, "commit", commit_then_fail)
+    with _client() as c:
+        rid = _chat(c).json()["id"]
+
+        async def rows(s):
+            u = (await s.execute(select(func.count()).select_from(UsageRecord)
+                                 .where(UsageRecord.request_id == rid))).scalar_one()
+            o = (await s.execute(select(func.count()).select_from(RoutingOutcome)
+                                 .where(RoutingOutcome.request_id == rid))).scalar_one()
+            return u, o
+        assert _db(c, rows) == (1, 1)               # usage not rewritten
+    assert tripped and outcome_calls.count(rid) == 2  # outcome retried exactly once
+
+
+def test_rollback_failure_after_a_failed_flush_still_writes_usage(monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+    state = {"fail_close": False, "raised": 0}
+
+    async def bad_outcome(session, row):
+        if not state["raised"]:
+            state["fail_close"] = True       # only the combined session's close
+        raise RuntimeError("outcome broken")
+    monkeypatch.setattr(store, "write_outcome", bad_outcome)
+    orig_close = AsyncSession.close
+
+    async def close(self):
+        await orig_close(self)
+        if state["fail_close"]:
+            state["fail_close"] = False
+            state["raised"] += 1
+            raise RuntimeError("rollback on close failed")
+    monkeypatch.setattr(AsyncSession, "close", close)
+    with _client() as c:
+        r = _chat(c)
+        assert r.status_code == 200
+        rid = r.json()["id"]
+        assert rid in _db(c, _usage_ids)
+    assert state["raised"] == 1

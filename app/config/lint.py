@@ -1,3 +1,4 @@
+import math
 import sys
 
 from app.config.loader import load_settings
@@ -98,9 +99,20 @@ def lint_settings(s: Settings) -> list[str]:
     if sig.max_seed_obs_per_model < 1:
         errs.append(f"SIGNALS_MAX_SEED_OBS_NOT_POSITIVE {sig.max_seed_obs_per_model}")
 
-    # B86: the auth-cache TTL may be 0 (disabled) but never negative.
-    if s.serving.auth_cache_ttl_s < 0:
-        errs.append(f"AUTH_CACHE_TTL_NEGATIVE {s.serving.auth_cache_ttl_s}")
+    # B86: the auth-cache TTL may be 0 (disabled) but must be a finite,
+    # non-negative number (inf would never expire; NaN would silently disable).
+    ttl = s.serving.auth_cache_ttl_s
+    if not math.isfinite(ttl):
+        errs.append(f"AUTH_CACHE_TTL_NOT_FINITE {ttl}")
+    elif ttl < 0:
+        errs.append(f"AUTH_CACHE_TTL_NEGATIVE {ttl}")
+    # B86: the snapshot flush interval (SP_SNAPSHOT_FLUSH_S) must be a finite
+    # positive number: zero or negative would busy-spin the flush loop.
+    flush_s = s.serving.snapshot_flush_s
+    if not math.isfinite(flush_s):
+        errs.append(f"SNAPSHOT_FLUSH_INTERVAL_INVALID {flush_s}")
+    elif flush_s <= 0:
+        errs.append(f"SNAPSHOT_FLUSH_INTERVAL_NOT_POSITIVE {flush_s}")
 
     # Step-7 circuit breaker (routing.yaml `breaker`). Zero/negative values
     # would open a circuit on no failures or never let it recover.

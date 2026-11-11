@@ -16,6 +16,15 @@ from app.prompts.store import prompt_version, resolve_active
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
 
 
+def _float_or_nan(v) -> float:
+    """A number, or NaN when `v` does not parse -- left for the config lint to
+    report by name rather than crashing the load."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def _expand_env(value: str) -> str:
     def repl(m: re.Match) -> str:
         return os.environ.get(m.group(1), m.group(2) or "")
@@ -187,7 +196,8 @@ def load_settings(config_dir: str = "config") -> Settings:
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
         stream_keepalive_s=float(serving_raw["server"].get("stream_keepalive_s", 5.0)),
         derive_session_id=bool(serving_raw["server"].get("derive_session_id", True)),
-        auth_cache_ttl_s=float(serving_raw["server"].get("auth_cache_ttl_s", 5.0)),
+        auth_cache_ttl_s=_float_or_nan(serving_raw["server"].get("auth_cache_ttl_s", 5.0)),
+        snapshot_flush_s=_float_or_nan(os.environ.get("SP_SNAPSHOT_FLUSH_S", "1.0")),
         context_optimization=ContextOptimizationCfg(
             enabled=co_enabled,
             mode=co_raw["mode"],

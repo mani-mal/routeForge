@@ -398,7 +398,8 @@ def create_app() -> FastAPI:
     # before this process's own console reads (app/apps/snapshot_writer.py).
     # It also sends the cross-replica NOTIFY, inside the write transaction.
     app.state.snapshot_writer = SnapshotWriter(
-        app.state.db, capacity=apps_store.SNAPSHOT_CAPACITY, bridge=app.state.bridge)
+        app.state.db, capacity=apps_store.SNAPSHOT_CAPACITY, bridge=app.state.bridge,
+        flush_interval_s=settings.serving.snapshot_flush_s)
     # B86: per-process token cache (app/apps/auth_cache.py). Any committed
     # write to an app, its policy or a token through this Database clears it.
     app.state.auth_cache = AuthCache(settings.serving.auth_cache_ttl_s)

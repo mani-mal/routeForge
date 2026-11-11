@@ -393,6 +393,11 @@ class ServingCfg(BaseModel):
     # 0 disables it. Defaulted for the upgrade-safety reason above; a negative
     # value is a named lint error (AUTH_CACHE_TTL_NEGATIVE), not a load error.
     auth_cache_ttl_s: float = 5.0
+    # B86: console snapshot flush interval, seconds (app/apps/snapshot_writer.py).
+    # Env-only (SP_SNAPSHOT_FLUSH_S), like SP_SNAPSHOT_CAPACITY. An unparseable
+    # value loads as NaN so the lint can name it (SNAPSHOT_FLUSH_INTERVAL_INVALID)
+    # instead of the import crashing.
+    snapshot_flush_s: float = 1.0
     context_optimization: ContextOptimizationCfg
     memory: MemoryCfg = MemoryCfg()
     # Optional/defaulted like `memory` and `context_optimization`: a mounted
