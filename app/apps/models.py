@@ -225,6 +225,13 @@ class AppPolicy(Base):
     # Added after the table shipped: a deployed DB needs the ALTER in
     # docs/reference/per-app-config.md.
     model_aliases: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # B80 per-app quality floors {workload -> floor in (0, 1]} and floor mode
+    # (off | shadow | enforce). Null = inherit the deployment's. Raise-only:
+    # the effective floor is the max of the two, never a lower app value. Added
+    # after the table shipped: a deployed DB needs the ALTERs in
+    # docs/guides/admin-setup.md, run before rolling the image.
+    quality_floors: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    quality_floor_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 

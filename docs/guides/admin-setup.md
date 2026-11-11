@@ -195,6 +195,17 @@ ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS issued_by VARCHAR(64);
 
 Existing tokens keep all three null: no expiry, no session binding, admin-issued.
 
+**Per-app quality floors (B80).** Two more nullable columns, on `app_policies`.
+**Run these before rolling the image**: the policy row is read on every request,
+so against an unmigrated table every `/v1/*` request fails.
+
+```sql
+ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS quality_floors JSON;
+ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS quality_floor_mode VARCHAR(16);
+```
+
+Existing apps keep both null: they inherit the deployment's floors and mode.
+
 ### Service credentials (machine-issued, short-lived tokens)
 
 A **service credential** lets a system — for example a CI runner or an agent

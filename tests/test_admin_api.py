@@ -1034,3 +1034,51 @@ def test_policy_rejects_bad_capture_io(client):
     for ok in ("off", "redacted"):
         assert client.put("/admin/applications/capapp/policy",
                           json={"capture_io": ok}).status_code == 200
+
+
+# --- B80: per-app quality floors and floor mode ------------------------------
+
+def _qf_app(client, app_id):
+    _login(client)
+    client.post("/admin/applications", json={"id": app_id, "name": app_id})
+    return f"/admin/applications/{app_id}/policy"
+
+
+def test_policy_in_quality_floors_validation(client):
+    url = _qf_app(client, "qf-val")
+    ok = client.put(url, json={"quality_floors": {"claims": 0.8}})
+    assert ok.status_code == 200, ok.text
+    for bad in ({"Claims": 0.8}, {"claims": 0}, {"claims": 2}, {"claims": True}, [1]):
+        r = client.put(url, json={"quality_floors": bad})
+        assert r.status_code == 422, (bad, r.text)
+        assert "quality_floors" in r.text, (bad, r.text)
+    got = client.get("/admin/applications/qf-val").json()["policy"]
+    assert got["quality_floors"] == {"claims": 0.8}
+
+
+def test_policy_in_quality_floor_mode_validation(client):
+    url = _qf_app(client, "qf-mode")
+    assert client.put(url, json={"quality_floor_mode": "shadow"}).status_code == 200
+    r = client.put(url, json={"quality_floor_mode": "on"})
+    assert r.status_code == 422
+    assert "quality_floor_mode" in r.text
+
+
+def test_quality_floors_reset_to_inherit(client):
+    url = _qf_app(client, "qf-reset")
+    assert client.put(url, json={"quality_floors": {"claims": 0.8},
+                                 "quality_floor_mode": "enforce"}).status_code == 200
+    r = client.put(url, json={"reset": ["quality_floors", "quality_floor_mode"]})
+    assert r.status_code == 200, r.text
+    got = client.get("/admin/applications/qf-reset").json()["policy"]
+    assert got["quality_floors"] is None
+    assert got["quality_floor_mode"] is None
+
+
+def test_app_floor_below_deployment_floor_still_saves(client):
+    url = _qf_app(client, "qf-low")
+    settings = client.app.state.settings
+    settings.routing.quality_floors.workloads["claims"] = 0.9
+    r = client.put(url, json={"quality_floors": {"claims": 0.7}})
+    assert r.status_code == 200, r.text
+    assert r.json()["policy"]["quality_floors"] == {"claims": 0.7}

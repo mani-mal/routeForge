@@ -44,10 +44,17 @@ def _jsonable(value):
     return value
 
 
+def _policy_value(name: str, value):
+    # Floors travel as the {workload: floor} map the admin API shows.
+    if name == "quality_floors" and value is not None:
+        return dict(value)
+    return _jsonable(value)
+
+
 def policy_dict(view: AppPolicyView) -> dict:
     """Every `AppPolicyView` field except the excluded ones; sets become
     sorted lists. Shared with the simulator's tests as the one spelling."""
-    return {f.name: _jsonable(getattr(view, f.name))
+    return {f.name: _policy_value(f.name, getattr(view, f.name))
             for f in dataclasses.fields(view)
             if f.name not in _EXCLUDED_POLICY_FIELDS}
 

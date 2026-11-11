@@ -59,6 +59,8 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("compression_enabled", "BOOLEAN", "BOOLEAN"),
     ("trajectory_mode", "VARCHAR(16)", "VARCHAR(16)"),
     ("model_aliases", "JSON", "JSON"),
+    ("quality_floors", "JSON", "JSON"),
+    ("quality_floor_mode", "VARCHAR(16)", "VARCHAR(16)"),
     ("capture_io", "VARCHAR(16)", "VARCHAR(16)"),
     ("pii_detection", "VARCHAR(16)", "VARCHAR(16)"),
     ("stream_mode", "VARCHAR(24)", "VARCHAR(24)"),

@@ -547,7 +547,7 @@ POLICY_FIELDS: frozenset[str] = frozenset({
     "model_input", "client_output", "content_integrity",
     "escalate_residency_on_detection",
     "allowed_regions", "require_no_retention", "trajectory_mode",
-    "model_aliases"})
+    "model_aliases", "quality_floors", "quality_floor_mode"})
 
 
 async def upsert_policy(session: AsyncSession, app_id: str, **fields) -> AppPolicy:

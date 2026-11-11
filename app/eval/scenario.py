@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, fields as dc_fields
 from pydantic import ValidationError
 
 from app.apps.db import Database
-from app.apps.policy import AppPolicyView
+from app.apps.policy import AppPolicyView, floor_pairs
 from app.apps.privacy import AppPrivacyProfile, SensitivityRuleView, effective_rules
 from app.apps.registry import ModelRegistry
 from app.apps.snapshot import SERVING_POLICY_FIELDS
@@ -428,6 +428,8 @@ def _app_policy_view(policy: dict, app_id: str) -> AppPolicyView:
             raise SnapshotError(f"apps.{app_id}.policy.{key}", "unknown field")
         if key in _SET_FIELDS and value is not None:
             converted[key] = frozenset(value)
+        elif key == "quality_floors":
+            converted[key] = floor_pairs(value)
         else:
             converted[key] = value
     return AppPolicyView(**converted)
