@@ -442,7 +442,7 @@ pooled connection is replaced on checkout instead of failing a request. Test:
 (drives the real `StreamingResponse` with a client that disconnects on `[DONE]`; fails for
 both modes without the shield).
 
-## B89 — Neither Helm chart boots and works at its default values  🔴 OPEN
+## B89 — Neither Helm chart boots and works at its default values  ✅ RESOLVED (2026-11-11, fix/b89-deploy-correctness)
 
 **Severity:** high (the Kubernetes / GreenLake / PCAI packaging path fails at default values;
 the Definition of done requires Helm deploys that boot with the config lint passing).
@@ -477,6 +477,12 @@ fix the MinIO image refs. **Acceptance:** a CI step runs `helm template` for bot
 extracts the rendered `serving.yaml`, and runs it through `load_settings()` + `enforce()`
 together with the shipped routing/policy/pricing configs. This is the pre-install lint that would have
 caught the boot failure.
+**Resolved:** both charts now render `litellm_prefix`/`api_key_env` per provider from values, default
+`piiDetection: regex` (presidio needs an image built with `EXTRAS=observability,postgres,presidio`), generate the admin
+password (`randAlphaNum 24`, reused on upgrade via `lookup`; `changeme` refused, also when reused), and use
+`quay.io/minio/*` images. The serving-plane chart mounts a K8s nginx ConfigMap for the UI. `tests/test_helm_render_lint.py`
+renders both charts and runs the boot lint on the result (it failed with `PROVIDER_NO_LITELLM_MAP` before the fix).
+
 
 ## B90 — Risk-class names are not linted, so a typo becomes a 500 on every affected request  🔴 OPEN
 
@@ -516,12 +522,12 @@ the sensitivity enum to `app/policy/enums.py`. Reject unknown top-level keys per
 (`extra="forbid"`, or an explicit owned-keys table) so a value in the wrong file fails the boot.
 If any of these is left out on purpose, correct the CLAUDE.md "Config lint" section instead.
 
-## B92 — Dead switches still in the deploy artifacts (`inference_backend`, `allowBackendFallback`, `fail_closed`, CCR PVC)  🔴 OPEN
+## B92 — Dead switches still in the deploy artifacts (`inference_backend`, `allowBackendFallback`, `fail_closed`, CCR PVC)  ✅ RESOLVED (2026-11-11, fix/b89-deploy-correctness) <!-- purged-ok -->
 
 **Severity:** low (nothing breaks, but the docs point operators at switches that do nothing).
 **Found:** 2026-11-08, same audit as B89.
 
-- `inference_backend` / `SP_INFERENCE_BACKEND`: nothing in `app/` reads them (only a stale comment
+- `inference_backend` / `SP_INFERENCE_BACKEND`: nothing in `app/` reads them (only a stale comment <!-- purged-ok -->
   in `app/policy/feasible.py`). They are still set in the `Dockerfile` (`ENV` plus a header comment that
   says the lint rejects `none`, which it doesn't), in both charts (configmap, api env, values, README,
   NOTES — presented as *the* backend switch, default `mock`), `deploy/compose/.env.example`,
@@ -534,8 +540,13 @@ If any of these is left out on purpose, correct the CLAUDE.md "Config lint" sect
   `app/compression/ccr.py::CCRStore` is in-memory only. It provisions 20Gi that nothing uses.
 
 **Wanted:** remove them all (keep a CHANGELOG note for operators whose values files set them).
+**Resolved:** removed `inference_backend`/`SP_INFERENCE_BACKEND`, `allowBackendFallback`, `policy.fail_closed` (also from <!-- purged-ok -->
+`config/serving.yaml`), the HPE `vllm:`/`dynamo:` blocks and the CCR PVC + mount (both charts) everywhere outside the docs;
+the Dockerfile header and defaults now describe reality. Operators' notes are under "Removed values" in each chart README
+(serving-plane 0.2.0, HPE 0.3.0; there is no CHANGELOG file).
 
-## B93 — Repo and packaging hygiene from the same audit  🔴 OPEN
+
+## B93 — Repo and packaging hygiene from the same audit  🟡 PARTLY FIXED (2026-11-11, fix/b89-deploy-correctness)
 
 **Severity:** low, except the first item, which can leak secrets.
 **Found:** 2026-11-08, same audit as B89.
@@ -557,6 +568,11 @@ If any of these is left out on purpose, correct the CLAUDE.md "Config lint" sect
   (`/api/traffic`).
 - HPE `langfuse-app.yaml` seeds the Langfuse login from the RouteForge admin credentials. Say so in
   the HPE README.
+**Fixed in repo:** `.gitignore` (`.env.*`, `!.env.example`, `deploy/hpe/*.tgz`), both `.env.example` files, the compose
+`postgres` extra, the untracked HPE tgz, the Dockerfile copying only the traffic generator + `tests/personas.yaml`, and the
+HPE README Langfuse-login note. **Remaining (Spark-side, not in the repo):** delete `deploy/spark/.env.bak-*` and
+rotate the secrets in them; drop `API_EXTRAS=agent` from the Spark's `deploy/spark/.env`.
+
 
 ## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
 
@@ -2658,12 +2674,12 @@ but that safety is incidental to how the fall-through happens to interact with t
 exporter, not a deliberate, validated default, and it is silent: the operator gets no
 signal that their config value was nonsense. Every sibling field would have told them.
 
-## B28 — Purged `inference_backend` axis survives in the HPE Helm values (values, templates, and a stale wiring claim) <!-- purged-ok -->
+## B28 — Purged `inference_backend` axis survives in the HPE Helm values (values, templates, and a stale wiring claim)  ✅ RESOLVED (2026-11-11, fix/b89-deploy-correctness) <!-- purged-ok -->
 
 **Severity:** low (cosmetic/documentation risk only — no application code reads these keys)
 **Found:** 2026-09-10, docs-reclassification Task 5; extended 2026-09-10 (fix round 1 —
 review caught two more stale artifacts from the same axis, listed below as 3 and 4).
-**Open, deliberately not fixed here.**
+**Resolved 2026-11-11 (fix/b89-deploy-correctness, with B92):** the HPE `inferenceBackend`/`vllm`/`dynamo` values, the env var and the false "env wins" comment are removed; NOTES.txt no longer branches on them.
 
 Four stale artifacts, all from the `inference_backend` axis the 2026-08-03 pure-router <!-- purged-ok -->
 pivot removed (CLAUDE.md: "There is no `inference_backend` axis and no separate <!-- purged-ok -->

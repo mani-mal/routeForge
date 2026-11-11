@@ -23,7 +23,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
       args:
-        EXTRAS: "observability"   # Langfuse export
+        EXTRAS: "observability,postgres"   # Langfuse export + asyncpg (needed for a Postgres DATABASE_URL)
     ports: ["8080:8080"]
     environment:
       SP_PII_DETECTION: regex           # offline-safe; presidio needs a model download
@@ -44,7 +44,8 @@ services:
       # a boot warning. Set it in .env (see .env.example) for anything but a demo.
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       # Multi-tenant store: defaults to an in-container SQLite file (offline,
-      # no extra service). To reuse this stack's Postgres instead, set:
+      # no extra service). To reuse this stack's Postgres instead (needs the
+      # `postgres` extra, which EXTRAS above includes), set:
       #   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/postgres
       # Admin dashboard login (demo defaults — change for anything real).
       ADMIN_EMAIL: admin@routeforge.local

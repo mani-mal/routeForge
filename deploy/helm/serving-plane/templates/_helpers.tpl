@@ -87,3 +87,21 @@ ui image ref.
 {{- define "serving-plane.uiImage" -}}
 {{- printf "%s:%s" .Values.image.ui.repository (.Values.image.ui.tag | default .Chart.AppVersion) -}}
 {{- end -}}
+
+{{/*
+Nil-safe admin values: a `helm upgrade --reuse-values` from a release that
+predates the `admin:` block has no .Values.admin at all.
+*/}}
+{{- define "serving-plane.adminEmail" -}}
+{{- dig "admin" "email" "admin@routeforge.local" .Values.AsMap -}}
+{{- end -}}
+{{- define "serving-plane.adminPassword" -}}
+{{- dig "admin" "password" "" .Values.AsMap -}}
+{{- end -}}
+
+{{/*
+Name of the Secret holding the admin console login (ADMIN_EMAIL/ADMIN_PASSWORD).
+*/}}
+{{- define "serving-plane.adminSecretName" -}}
+{{- printf "%s-admin" (include "serving-plane.fullname" .) -}}
+{{- end -}}
