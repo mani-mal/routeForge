@@ -1,8 +1,7 @@
 # Inference Backends
 
 One `InferenceBackend` Protocol (`base.py`), one implementation
-(`LiteLLMBackend`, `litellm_backend.py`). There is no `inference_backend` axis
-any more — routeForge deploys nothing; on-prem models are onboarded at
+(`LiteLLMBackend`, `litellm_backend.py`). routeForge deploys nothing; on-prem models are onboarded at
 runtime (endpoint + auth env registered per model, see
 `docs/guides/onboarding-models.md` and `app/apps/registry.py`'s `ModelRegistry`).
 Every provider (onprem/azure/bedrock alike) egresses through this single
@@ -12,7 +11,8 @@ LiteLLM SDK path. See `.claude/skills/inference-backends/SKILL.md` and
 - `litellm_backend.py` — `LiteLLMBackend.generate` calls `litellm.acompletion`
   pinned to the model the router already chose (`num_retries=0`, no
   `litellm.Router`), mapping `onprem` models to their registered
-  `registry.endpoint_for(slug)` and cloud providers to their configured
+  `registry.endpoint_for(slug)` (key: `registry.api_key_for(slug)` — a stored,
+  encrypted key (B68), else the model's `api_key_env`) and cloud providers to their configured
   `litellm_prefix` (see `config/serving.yaml`'s `providers` block). Cost is
   computed from `pricing.yaml` (cloud) or the onboarded row's own price
   (on-prem), never `litellm.completion_cost`. Offline-tested via a

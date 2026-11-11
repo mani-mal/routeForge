@@ -14,10 +14,11 @@ import os
 import re
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from app.apps import store
 from app.apps.admin_auth import SESSION_COOKIE, require_admin
@@ -29,6 +30,8 @@ from app.apps.models import AppToken, OutcomeFeedback, RoutingOutcome
 from app.apps.outcomes import _WORKLOAD_RE
 from app.apps.policy_lint import price_warnings
 from app.apps.probe import probe_endpoint
+from app.apps.secret_box import (decrypt_or_none, encrypt_required,
+                                  endpoint_key_encryption_problem)
 from app.apps.policy import AppPolicyView, alias_pairs, floor_pairs, policy_view_from
 from app.apps.snapshot import build_config_snapshot
 from app.apps.tokens import new_service_credential, new_token
@@ -105,12 +108,32 @@ def _masked_api_key_env(v: str | None) -> str | None:
     return _INVALID_ENV_MASK
 
 
+def _api_key_source(m) -> str | None:
+    """B68: which credential this row uses -- "stored" (an encrypted key given
+    at onboarding), "env" (api_key_env) or None. Never the key itself."""
+    return _source_of(getattr(m, "api_key_enc", None), m.api_key_env)
+
+
+def _api_key_hint(m) -> str | None:
+    """Last 4 characters of a stored key, only when the key is at least 12
+    characters long (shorter keys get no hint: 4 of 8 characters is half the
+    secret). None when nothing is stored or it no longer decrypts."""
+    plain = decrypt_or_none(getattr(m, "api_key_enc", None))
+    if plain is None or len(plain) < 12:
+        return None
+    return plain[-4:]
+
+
 def _onboarded_dict(m) -> dict:
     return {"slug": m.slug, "display_name": m.display_name, "provider": m.provider,
             "tier": m.tier, "quality": m.quality, "price_input": m.price_input,
             "price_output": m.price_output,
             "price_cached_input": m.price_cached_input, "endpoint": m.endpoint,
             "api_key_env": _masked_api_key_env(m.api_key_env),
+            # B68: write-only key. Neither the key nor its ciphertext is ever
+            # returned -- only where the credential comes from and a hint.
+            "api_key_source": _api_key_source(m),
+            "api_key_hint": _api_key_hint(m),
             "context_window": m.context_window,
             "context_window_source": m.context_window_source,
             "enabled": m.enabled, "allowed_app_ids": m.allowed_app_ids,
@@ -289,28 +312,43 @@ class PolicyIn(BaseModel):
 
 
 class LangfuseCredsIn(BaseModel):
-    # Every field is load-bearing for the capture_io='full' eligibility check
-    # (`load_app_langfuse(app) is not None`, `has_langfuse_keys`). A blank or
-    # whitespace-only value would still encrypt to a non-empty Fernet token and
-    # silently unlock 'full' capture with no valid sink — reject fail-closed.
-    host: str = Field(min_length=1)
-    public_key: str = Field(min_length=1)
-    secret_key: str = Field(min_length=1)
-    project_id: str = Field(min_length=1)
+    """Partial update (B33): any subset of the four fields; an omitted field
+    keeps its stored value, `secret_key` omitted = keep the stored secret.
+    A supplied value that is blank or whitespace-only is a 422 -- a blank would
+    still encrypt to a non-empty Fernet token and silently unlock 'full'
+    capture with no valid sink (fail closed)."""
+    host: str | None = None
+    public_key: str | None = None
+    secret_key: str | None = None
+    project_id: str | None = None
 
     @field_validator("host", "public_key", "secret_key", "project_id")
     @classmethod
-    def _not_blank(cls, v: str) -> str:
-        if not v.strip():
+    def _not_blank(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
             raise ValueError("must not be blank")
         return v
 
     @field_validator("host")
     @classmethod
-    def _host_is_url(cls, v: str) -> str:
-        # Mirror onboard_model's endpoint check (~admin_routes.py:431).
-        if not re.match(r"^https?://", v):
+    def _host_is_url(cls, v: str | None) -> str | None:
+        # Mirror onboard_model's endpoint check (~admin_routes.py:431), and
+        # refuse userinfo (`user:pass@host`) and anything urlparse rejects.
+        if v is None:
+            return v
+        from urllib.parse import urlparse
+        try:
+            u = urlparse(v)
+            u.port  # noqa: B018 -- raises ValueError on a bad port
+        except ValueError:
+            raise ValueError("host is not a valid URL")
+        if u.scheme not in ("http", "https") or not u.hostname:
             raise ValueError("host must be an http(s) URL")
+        if "@" in u.netloc:
+            raise ValueError("host must not contain credentials (user:pass@)")
         return v
 
 
@@ -347,6 +385,14 @@ class OnboardIn(BaseModel):
     tier: str                       # cheap|mid|frontier
     endpoint: str
     api_key_env: str | None = None
+    # B68: the endpoint's API key itself, stored encrypted (ENCRYPTION_KEY)
+    # and never returned. Exactly one of api_key / api_key_env per model:
+    # both -> 422. Unlike api_key_env (full replace), an OMITTED api_key
+    # preserves the stored key -- the console cannot resubmit a write-only
+    # value -- while an explicit `null` clears it and a non-null api_key_env
+    # replaces it. See `_resolved_api_key`. SecretStr keeps it out of any
+    # repr/log of the body.
+    api_key: SecretStr | None = None
     price_input: float
     price_output: float
     # USD/1M for prompt tokens this endpoint served from its own prompt
@@ -570,36 +616,240 @@ async def update_application(app_id: str, body: UpdateAppIn, request: Request,
     if (body.default_residency is not None
             and body.default_residency not in RESIDENCY):
         raise HTTPException(422, f"bad default_residency {body.default_residency!r}")
+    settings = request.app.state.settings
     async with request.app.state.db.session() as session:
+        if body.default_residency is not None:
+            # A policy row with no residency of its own inherits
+            # `default_residency` (`policy_view_from`), so changing it changes
+            # that app's effective policy -- and must pass the same rules a
+            # policy PUT does. Without this, an off-prem `pii_detection: off` +
+            # `capture_io: full` app could be moved to `onprem_only` here,
+            # where pii off alone is not a declared posture (B31 review).
+            current = await store.get_application_with_policy(session, app_id)
+            if current is None:
+                raise HTTPException(404, "application not found")
+            if body.default_residency != current.default_residency:
+                await _validate_default_residency_change(
+                    current, body.default_residency, settings)
         app = await store.update_application(
             session, app_id, **body.model_dump(exclude_none=True))
         if app is None:
             raise HTTPException(404, "application not found")
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full, settings=request.app.state.settings)
+        return _app_dict(full, settings=settings)
+
+
+async def _validate_default_residency_change(app, new_default: str, settings) -> None:
+    """Judge the post-write policy of `app` with `default_residency` moved to
+    `new_default`, exactly as `set_policy` judges a policy PUT: compile it,
+    run `validate_effective` + `check_invariants`, 422 on a violation. Only a
+    policy row that sets no residency of its own is affected."""
+    import dataclasses
+
+    from app.apps.langfuse_provision import load_app_langfuse
+    view = policy_view_from(app)
+    if app.policy is None or not app.policy.residency:
+        view = dataclasses.replace(view, residency=new_default)
+    try:
+        validate_effective(
+            compile_policy(view, settings), settings,
+            has_own_langfuse_project=lambda: load_app_langfuse(app) is not None)
+        check_invariants(view, settings)
+    except PolicyViolation as exc:
+        raise HTTPException(422, exc.message)
+
+
+def _langfuse_http_client():
+    """Outbound client for verify-on-save. A seam so tests never touch the network.
+
+    Private / in-cluster hosts are deliberately NOT blocked: the normal Langfuse
+    address is `http://langfuse-web:3000`, so an SSRF allow-list of public
+    ranges would break the main use case. The admin is trusted to point at
+    internal services; the mitigations are no redirects, a hard total timeout,
+    a capped body, and never sending a stored secret to a changed host."""
+    import httpx
+    return httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+
+
+_VERIFY_MAX_BODY = 64 * 1024
+
+
+def _norm_origin(host: str | None) -> tuple | None:
+    """scheme + host + port, normalised, for 'is this the same Langfuse'."""
+    if not host:
+        return None
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(host.strip())
+        port = u.port or (443 if u.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return (u.scheme.lower(), (u.hostname or "").lower(), port)
+
+
+def _effective_langfuse_host(app) -> tuple[str | None, str]:
+    """(host, source): the app's own host, else the deployment LANGFUSE_HOST
+    that `load_app_langfuse` falls back to (auto-provisioned apps)."""
+    if app.langfuse_host:
+        return app.langfuse_host, "app"
+    env = os.environ.get("LANGFUSE_HOST") or None
+    return env, "deployment"
+
+
+async def _verify_langfuse_creds(host: str, public_key: str, secret_key: str,
+                                 project_id: str) -> None:
+    """Check the pair from THIS process (B33): reachable, accepted, and the
+    pair's project is `project_id`. Raises HTTPException(422). Messages are built
+    only from host / status / project ids -- never the secret."""
+    import asyncio
+    import httpx
+    unreachable = HTTPException(
+        422, f"host {host} is not reachable from the RouteForge API process "
+             "(use the address the API container can reach, not the browser URL)")
+    url = host.rstrip("/") + "/api/public/projects"
+    body = b""
+    try:
+        async with asyncio.timeout(5):          # total, not per phase
+            async with _langfuse_http_client() as c:
+                async with c.stream("GET", url, auth=(public_key, secret_key)) as r:
+                    status = r.status_code
+                    if status == 200:
+                        async for chunk in r.aiter_bytes():
+                            body += chunk
+                            if len(body) > _VERIFY_MAX_BODY:
+                                raise HTTPException(
+                                    422, "Langfuse returned HTTP 200 with an oversized body")
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, httpx.InvalidURL, OSError, TimeoutError):
+        raise unreachable
+    if status in (401, 403):
+        raise HTTPException(422, "Langfuse rejected these keys")
+    if status != 200:
+        raise HTTPException(422, f"Langfuse returned HTTP {status}")
+    try:
+        ids = [str(x.get("id")) for x in (json.loads(body).get("data") or [])]
+    except Exception:
+        raise HTTPException(422, "Langfuse returned HTTP 200 with an unreadable body")
+    if project_id not in ids:
+        found = ", ".join(i[:64] for i in ids[:5]) if ids else "no project"
+        raise HTTPException(
+            422, f"these keys belong to project {found}, not {project_id}")
+
+
+def _langfuse_summary(app) -> dict:
+    """Non-secret read-back (B33). The secret is never returned; its last 4
+    characters only when it is long enough (>= 12) that they reveal little."""
+    from app.apps.langfuse_provision import decrypt_secret
+    secret_set = bool(app.langfuse_secret_key_enc)
+    last4 = None
+    if secret_set:
+        try:
+            sk = decrypt_secret(app.langfuse_secret_key_enc)
+            if len(sk) >= 12:
+                last4 = sk[-4:]
+        except Exception:
+            last4 = None
+    host, source = _effective_langfuse_host(app)
+    return {"host": host, "host_source": source,
+            "public_key": app.langfuse_public_key,
+            "project_id": app.langfuse_project_id, "secret_set": secret_set,
+            "secret_last4": last4}
+
+
+@admin_router.get("/applications/{app_id}/langfuse")
+async def get_langfuse_creds(app_id: str, request: Request,
+                             _: str = Depends(require_admin)) -> dict:
+    async with request.app.state.db.session() as session:
+        app = await store.get_application_with_policy(session, app_id)
+        if app is None:
+            raise HTTPException(404, "application not found")
+        return _langfuse_summary(app)
 
 
 @admin_router.put("/applications/{app_id}/langfuse")
 async def set_langfuse_creds(app_id: str, body: LangfuseCredsIn, request: Request,
+                             verify: bool = True,
                              _: str = Depends(require_admin)) -> dict:
     """Manual per-app Langfuse creds for an air-gapped operator who can't reach
     the org-scoped provisioning API (B15). Stored the same way auto-provisioning
     stores them (secret encrypted at rest via `encrypt_secret`), so once set,
     `load_app_langfuse(app)` returns non-None and the app becomes
     capture_io='full'-eligible under the existing Phase-B lint in `set_policy`.
+
+    Partial update; the merged set is verified against Langfuse from this
+    process before anything is stored (`?verify=false` skips that for
+    air-gapped setups and the response says `verified: false`).
     """
+    from app.apps.langfuse_provision import decrypt_secret
+    # Read, then close the session BEFORE the outbound call so no DB
+    # connection is held open for up to 5 s of network wait.
     async with request.app.state.db.session() as session:
-        app = await store.update_application(
-            session, app_id,
-            langfuse_host=body.host, langfuse_public_key=body.public_key,
-            langfuse_project_id=body.project_id,
-            langfuse_secret_key_enc=encrypt_secret(body.secret_key))
-        if app is None:
+        cur = await store.get_application_with_policy(session, app_id)
+        if cur is None:
             raise HTTPException(404, "application not found")
+        stored_host, _src = _effective_langfuse_host(cur)
+        stored_pub = cur.langfuse_public_key
+        stored_pid = cur.langfuse_project_id
+        stored_enc = cur.langfuse_secret_key_enc
+        stored_sk = decrypt_secret(stored_enc) if stored_enc else None
+        own_host = cur.langfuse_host
+    host = body.host or stored_host
+    pub = body.public_key or stored_pub
+    pid = body.project_id or stored_pid
+    sk = body.secret_key or stored_sk
+    missing = [n for n, v in (("host", host), ("public_key", pub),
+                              ("secret_key", sk), ("project_id", pid)) if not v]
+    if missing:
+        raise HTTPException(
+            422, "no stored value to keep for: " + ", ".join(missing))
+    if not body.secret_key:
+        # The stored secret must only ever go to the host/key it was saved with.
+        if (_norm_origin(host) != _norm_origin(stored_host)
+                or pub != stored_pub):
+            raise HTTPException(
+                422, "changing the host or public key requires re-entering the secret key")
+    if verify:
+        await _verify_langfuse_creds(host, pub, sk, pid)
+    async with request.app.state.db.session() as session:
+        await store.update_application(
+            session, app_id,
+            langfuse_host=(body.host if body.host else own_host),
+            langfuse_public_key=pub, langfuse_project_id=pid,
+            langfuse_secret_key_enc=(encrypt_secret(sk) if body.secret_key
+                                     else stored_enc))
         await session.commit()
         full = await store.get_application_with_policy(session, app_id)
-        return _app_dict(full, settings=request.app.state.settings)
+        out = _app_dict(full, settings=request.app.state.settings)
+        out["langfuse"] = _langfuse_summary(full)
+        out["verified"] = bool(verify)
+        return out
+
+
+@admin_router.delete("/applications/{app_id}/langfuse")
+async def delete_langfuse_creds(app_id: str, request: Request,
+                                _: str = Depends(require_admin)) -> dict:
+    """Remove the app's own Langfuse credential set. Refused while the app's
+    resolved capture_io is 'full': raw capture requires the own project
+    (CLAUDE.md rule 2) and removing it would strand that."""
+    settings = request.app.state.settings
+    async with request.app.state.db.session() as session:
+        app = await store.get_application_with_policy(session, app_id)
+        if app is None:
+            raise HTTPException(404, "application not found")
+        eff = compile_policy(policy_view_from(app), settings)
+        if eff.protection.telemetry_io == "full":
+            raise HTTPException(
+                422, "this app's capture_io resolves to 'full', which requires its own "
+                     "Langfuse project; set capture_io to redacted or off before "
+                     "removing the credentials")
+        await store.update_application(
+            session, app_id, langfuse_host=None, langfuse_public_key=None,
+            langfuse_project_id=None, langfuse_secret_key_enc=None)
+        await session.commit()
+        full = await store.get_application_with_policy(session, app_id)
+        return _app_dict(full, settings=settings)
 
 
 @admin_router.put("/applications/{app_id}/policy")
@@ -695,7 +945,7 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
             resetting `policy_mode` on an onprem_only + passthrough +
             capture_io=full app reverts the posture to the deployment default
             (normally `enforced`) and leaves an ENFORCED onprem_only app storing
-            raw I/O, exactly what `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`
+            raw I/O, exactly what `CAPTURE_FULL_NEEDS_NO_PROTECTION`
             exists to forbid (CLAUDE.md rules 2/8). Routed through here, the
             compiled policy resolves to `enforced` — hence `model_input:
             redact` — and that write is refused, whole, like any other.
@@ -1143,6 +1393,7 @@ def _static_validate_onboard(body: OnboardIn, s) -> None:
         raise HTTPException(
             422, "api_key_env is the NAME of an environment variable in the API "
             "container (e.g. SP_ONPREM_API_KEY), not the key itself")
+    _static_validate_api_key(body)
     if body.price_input < 0 or body.price_output < 0:
         raise HTTPException(422, "price must be >= 0")
     if body.price_cached_input is not None and body.price_cached_input < 0:
@@ -1164,6 +1415,92 @@ def _static_validate_onboard(body: OnboardIn, s) -> None:
         raise HTTPException(
             422, f"bad prompt_retention {body.prompt_retention!r}; legal values: "
             f"{sorted(PROMPT_RETENTION_VALUES)}, or omit/null for undeclared")
+
+
+def _source_of(api_key_enc: str | None, api_key_env: str | None) -> str | None:
+    return "stored" if api_key_enc else ("env" if api_key_env else None)
+
+
+_KEY_CHARS_RE = re.compile(r"[\x21-\x7e]+")
+
+
+def _origin(url: str | None) -> tuple[str, str, int | None] | None:
+    """(scheme, host, port) of an endpoint URL, default ports filled in, so
+    `http://h/v1` and `http://h:80/v2` are the same origin."""
+    if not url:
+        return None
+    try:
+        u = urlsplit(url.strip())
+        scheme = (u.scheme or "").lower()
+        port = u.port or {"http": 80, "https": 443}.get(scheme)
+        return scheme, (u.hostname or "").lower(), port
+    except ValueError:
+        return None
+
+
+def _static_validate_api_key(body: OnboardIn) -> None:
+    """B68 rulings, checked before anything touches the DB or the network:
+    exactly one of api_key / api_key_env; no empty key; and a key is refused
+    outright -- never stored in clear -- without a usable ENCRYPTION_KEY."""
+    if body.api_key is None:
+        return
+    if body.api_key_env is not None:
+        raise HTTPException(
+            422, "give either api_key (stored encrypted) or api_key_env (name of an "
+            "environment variable), not both")
+    key = body.api_key.get_secret_value().strip()
+    if not key:
+        raise HTTPException(422, "api_key must not be empty; send null to remove a stored key")
+    # Printable ASCII, no spaces or control characters: anything else is not a
+    # valid bearer token, and an HTTP client that rejects it echoes it back in
+    # its error text, escaped -- which would land in probe_error (I-2).
+    if not _KEY_CHARS_RE.fullmatch(key):
+        raise HTTPException(
+            422, "api_key must be printable ASCII with no spaces or control characters")
+    problem = endpoint_key_encryption_problem()
+    if problem is not None:
+        raise HTTPException(422, problem)
+
+
+def _resolved_api_key(body: OnboardIn, existing, *, preserve: bool
+                      ) -> tuple[str | None, str | None, str | None]:
+    """(api_key_enc, api_key_env, key_to_probe_with) to store for this write.
+
+    `preserve` is True only for PUT (edit). A POST -- including a re-POST over
+    a disabled row (B19) -- never inherits a prior row's stored key. And a
+    stored key never follows an endpoint to a new origin: a PUT that changes
+    scheme, host or port with `api_key` omitted is 422, so neither an admin
+    session nor a repointed model can send a write-only key to a new host.
+
+    - api_key given -> encrypt it; api_key_env is cleared (one call switches
+      env -> stored);
+    - api_key_env given -> stored key cleared (stored -> env);
+    - explicit `api_key: null` (and no env) -> both cleared;
+    - api_key omitted -> the stored key is PRESERVED (the console never holds
+      it to resubmit), and the probe uses it. A preserved key that no longer
+      decrypts probes with no key: the endpoint answers 401 -> unauthorized.
+    Surrounding whitespace is stripped from a given key (a pasted key with a
+    trailing newline is never a valid bearer token)."""
+    if body.api_key is not None:
+        plain = body.api_key.get_secret_value().strip()
+        return encrypt_required(plain), None, plain
+    if body.api_key_env is not None:
+        return None, body.api_key_env, None
+    if "api_key" in body.model_fields_set:
+        return None, None, None
+    enc = existing.api_key_enc if (preserve and existing is not None) else None
+    if enc and _origin(body.endpoint) != _origin(existing.endpoint):
+        raise HTTPException(
+            422, "changing the endpoint requires re-entering api_key, or sending "
+            "api_key: null to remove it")
+    return enc, None, decrypt_or_none(enc)
+
+
+def _probe_key_kwargs(probe_key: str | None) -> dict:
+    """`api_key=` for `probe_endpoint` only when there is a key to send, so
+    the 3-argument probe signature (and stand-ins written against it) is
+    unchanged for the api_key_env / no-key paths."""
+    return {"api_key": probe_key} if probe_key else {}
 
 
 def _normalized_region(region: str | None) -> str | None:
@@ -1282,7 +1619,10 @@ async def onboard_model(body: OnboardIn, request: Request,
             for aid in body.allowed_app_ids:
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
-        _probe = await probe_endpoint(body.endpoint, body.slug, body.api_key_env)
+        api_key_enc, api_key_env, probe_key = _resolved_api_key(
+            body, existing, preserve=False)
+        _probe = await probe_endpoint(body.endpoint, body.slug, api_key_env,
+                                      **_probe_key_kwargs(probe_key))
         ok, detail = _probe.ok, _probe.detail
         # `enabled` is explicit admin intent, ANDed with probe result: an
         # unreachable model can NEVER end up enabled (registry.has_healthy_onprem()
@@ -1293,7 +1633,8 @@ async def onboard_model(body: OnboardIn, request: Request,
             body, _probe.max_model_len, existing)
         await store.upsert_onboarded(
             session, body.slug, display_name=body.display_name, provider="onprem",
-            tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
+            tier=body.tier, endpoint=body.endpoint, api_key_env=api_key_env,
+            api_key_enc=api_key_enc,
             price_input=body.price_input, price_output=body.price_output,
             price_cached_input=_resolved_price_cached_input(body, existing),
             quality=body.quality, context_window=context_window,
@@ -1321,6 +1662,7 @@ async def onboard_model(body: OnboardIn, request: Request,
     await reg.refresh(request.app.state.db)
     return {"slug": body.slug, "enabled": final_enabled,
             "probe_status": _probe.status,
+            "api_key_source": _source_of(api_key_enc, api_key_env),
             "probe_error": None if ok else detail,
             "warnings": _onboard_warnings(s, body)}
 
@@ -1344,7 +1686,10 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             for aid in body.allowed_app_ids:
                 if await store.get_application(session, aid) is None:
                     raise HTTPException(422, f"unknown application {aid!r}")
-        _probe = await probe_endpoint(body.endpoint, slug, body.api_key_env)
+        api_key_enc, api_key_env, probe_key = _resolved_api_key(
+            body, existing, preserve=True)
+        _probe = await probe_endpoint(body.endpoint, slug, api_key_env,
+                                      **_probe_key_kwargs(probe_key))
         ok, detail = _probe.ok, _probe.detail
         # Same intent-AND-probe rule as onboard_model — see comment there.
         final_enabled = body.enabled and ok
@@ -1352,7 +1697,8 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
             body, _probe.max_model_len, existing)
         await store.upsert_onboarded(
             session, slug, display_name=body.display_name, provider="onprem",
-            tier=body.tier, endpoint=body.endpoint, api_key_env=body.api_key_env,
+            tier=body.tier, endpoint=body.endpoint, api_key_env=api_key_env,
+            api_key_enc=api_key_enc,
             price_input=body.price_input, price_output=body.price_output,
             price_cached_input=_resolved_price_cached_input(body, existing),
             quality=body.quality, context_window=context_window,
@@ -1370,6 +1716,7 @@ async def edit_onboarded_model(slug: str, body: OnboardIn, request: Request,
     await reg.refresh(request.app.state.db)
     return {"slug": slug, "enabled": final_enabled,
             "probe_status": _probe.status,
+            "api_key_source": _source_of(api_key_enc, api_key_env),
             "probe_error": None if ok else detail,
             "warnings": _onboard_warnings(s, body)}
 

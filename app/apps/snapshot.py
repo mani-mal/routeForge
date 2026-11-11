@@ -8,7 +8,8 @@ deployment. Content-free and secret-free BY CONSTRUCTION: every field is
 listed explicitly below -- nothing is dumped wholesale except the routing,
 pricing and policy config sections, which hold no secrets, plus the four
 deployment posture values in `SERVING_POLICY_FIELDS` (not secrets). Excluded: endpoint
-URLs, `api_key_env`, `serving.observability` (Langfuse), `pii_exempt_patterns`
+URLs, `api_key_env`, `api_key_enc` (B68: a stored endpoint key, write-only),
+`serving.observability` (Langfuse), `pii_exempt_patterns`
 (operator regexes), custom recognizers, and per-app credential columns.
 """
 from __future__ import annotations

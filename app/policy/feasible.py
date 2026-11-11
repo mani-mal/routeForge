@@ -108,6 +108,7 @@ from typing import TYPE_CHECKING, Callable
 from app.config.schema import PoolCandidate, Settings
 from app.models import ExecutionPolicyContext
 from app.policy.compile import compile_policy, resolve_residency
+from app.policy.enums import ONPREM_PROVIDER
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -132,7 +133,7 @@ RAW_SENSITIVE_NOT_ACCEPTED = "raw_sensitive_not_accepted"
 
 # The only provider `onprem_only` admits. `feasible_set` intersects placement
 # with this whenever the resolved onprem_only is true (B52).
-ONPREM_ONLY_PROVIDERS = frozenset({"onprem"})
+ONPREM_ONLY_PROVIDERS = frozenset({ONPREM_PROVIDER})
 
 # Operator-facing strings. The console renders these verbatim and
 # `app/routing/router.py::_FIX_HINTS` keys on them -- they are an interface.
@@ -454,9 +455,10 @@ def endpoint_allows_app(c: PoolCandidate, registry: "ModelRegistry | None",
 
 
 def is_disabled(c: PoolCandidate, registry: "ModelRegistry | None") -> bool:
-    """An on-prem row the admin has disabled. STATE, not policy (spec §2.2)."""
-    return (c.provider == "onprem" and registry is not None
-            and not registry.is_enabled(c.name))
+    """A row the registry reports as disabled, of any provider. STATE, not
+    policy (spec §2.2). The registry answers True for names it does not hold
+    an onboarded row for, so static cloud pool members are unaffected."""
+    return registry is not None and not registry.is_enabled(c.name)
 
 
 def registry_permits(registry: "ModelRegistry | None", c, tenant_id: str) -> bool:
@@ -483,8 +485,8 @@ def _placement_providers(settings: Settings, residency: str,
     # healthy onboarded on-prem model, drop "onprem" from `enabled` so an
     # onprem_only request resolves to an empty allowed set and is rejected
     # downstream by the router's "no candidates after residency filter" path --
-    # never silently routed to cloud (CLAUDE.md backend rule; replaces the old
-    # inference_backend == "none" drop).
+    # never silently routed to cloud (CLAUDE.md: derived reject, not a backend
+    # value).
     if registry is not None and not registry.has_healthy_onprem():
         enabled = enabled - {"onprem"}
     if residency == "onprem_only":

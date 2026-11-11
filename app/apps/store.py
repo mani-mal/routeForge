@@ -1049,7 +1049,7 @@ async def delete_calibration_set(session: AsyncSession, set_id: str) -> int:
 
 _ONBOARDED_FIELDS = {
     "display_name", "provider", "tier", "quality", "price_input",
-    "price_output", "price_cached_input", "endpoint", "api_key_env",
+    "price_output", "price_cached_input", "endpoint", "api_key_env", "api_key_enc",
     "context_window", "context_window_source", "enabled", "allowed_app_ids",
     "probe_status", "probe_error", "notes",
     "region", "prompt_retention", "accepts_raw_sensitive"}

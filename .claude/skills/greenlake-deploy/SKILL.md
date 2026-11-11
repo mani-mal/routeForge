@@ -48,29 +48,20 @@ servingPlane:
   contextOptimization:
     enabled: false
     mode: library              # library | proxy
-    ccr: {enabled: true, ttlHours: 24, storageClassName: "", size: 20Gi}
+    ccr: {enabled: true, ttlHours: 24}
   providers:
     onprem: {enabled: true}
     azure: {enabled: false}
 langfuse: {enabled: true, host: ""}
 ```
 
-**`servingPlane.inferenceBackend` is a dead field — not yet removed.** Both shipped
-charts (`deploy/helm/serving-plane/values.yaml` and `deploy/hpe/routeforge/values.yaml`)
-still declare `inferenceBackend: mock # mock | vllm | dynamo | none`, and their
-templates (`deployment-api.yaml`/`api.yaml`, `configmap.yaml`/`serving-config.yaml`,
-`NOTES.txt`) and `README.md` still branch on `.Values.servingPlane.inferenceBackend` —
-`deploy/hpe/routeforge/templates/NOTES.txt` even still describes
-`inferenceBackend=none` as how you reject `onprem_only`, which is stale: that reject is
-now derived from `ModelRegistry.has_healthy_onprem()` (no onboarded on-prem model
-enabled), not a chart value. This is **cosmetically stale, not a deploy bug** —
-`config/serving.yaml` no longer defines `inference_backend` at all (the loader dropped
-it), so whatever the chart renders for it is simply ignored; on-prem models are
-onboarded at runtime against the deployed router regardless of what
-`inferenceBackend` is set to. Purging `inferenceBackend` from both charts'
-`values.yaml`/templates/`README.md`/`NOTES.txt` is tracked as a **separate,
-already-deferred packaging-cleanup task** — do not set it expecting it to do
-anything, and do not remove it from the charts as a side effect of unrelated work.
+There is no `servingPlane.inferenceBackend` (or `allowBackendFallback` / `failClosed`)
+value any more — they were removed from both charts (B92/B28). The `onprem_only` reject
+is derived from `ModelRegistry.has_healthy_onprem()` (no onboarded on-prem model
+enabled), not a chart value; on-prem models are onboarded at runtime. Each
+`servingPlane.providers.<name>` carries `litellmPrefix` (+ `apiKeyEnv` etc.) because the
+boot lint requires it, and `tests/test_helm_render_lint.py` renders both charts and runs
+the boot lint on the result.
 
 Secrets via existing K8s Secret references, never chart values. GreenLake customers
 will have opinions about secret management; don't fight them.
@@ -80,17 +71,16 @@ will have opinions about secret management; don't fight them.
 GreenLake gives you managed Kubernetes — a conformant cluster, so standard Helm
 applies. The deltas worth handling explicitly:
 
-- **Storage** — set `storageClassName` explicitly in `values-greenlake.yaml`;
-  don't rely on a default existing. Langfuse's Postgres/ClickHouse need PVCs.
+- **Storage** — the serving-plane chart provisions no PVC (CCR is in-memory). In the
+  HPE bundle set `global.storageClassName` explicitly; Langfuse's Postgres/ClickHouse need PVCs.
 - **Ingress** — confirm the controller class; parameterise `ingress.className`.
 - **Registry** — customers usually run a private registry. Parameterise
   `image.repository` and support `imagePullSecrets`.
 - **GPU nodes** — routeForge deploys no inference, so its own pods schedule on **CPU**.
   GPUs are only relevant to the operator's separately-deployed vLLM/Dynamo endpoints.
-- **CCR storage** — if compression is on, CCR needs a PVC **inside the cluster**.
-  Never point it at an external object store or cloud bucket; that breaks the
-  residency guarantee (hard rule 6). Set TTL via `contextOptimization.ccr.ttlHours`
-  and size the PVC for it.
+- **CCR storage** — `CCRStore` is in-memory today (no PVC). If it ever gains
+  persistence it must be **inside the cluster**: never an external object store or
+  cloud bucket (hard rule 6). Set TTL via `contextOptimization.ccr.ttlHours`.
 - **Headroom offline assets** — Headroom fetches the ONNX runtime and the
   Kompress model from HuggingFace at first use. In air-gapped GreenLake, bake them
   into the image or pre-download and set `HF_HUB_OFFLINE=1`. Running with

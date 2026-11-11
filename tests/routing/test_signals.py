@@ -90,6 +90,22 @@ def test_disabled_reports_defaults_and_says_so():
     assert s.availability("m", now=5.0).value == 1.0
 
 
+def test_disabled_still_reports_the_true_sample_count():
+    """B42: like the tier_default / neutral paths, a disabled term reports how
+    many observations the store holds -- informational only, the value used is
+    still the default."""
+    s = SignalStore(SignalsCfg(enabled=False, min_samples=1))
+    assert s.latency("m", "cheap", now=0.0).samples == 0
+    assert s.availability("m", now=0.0).samples == 0
+    for i in range(5):
+        s.observe_success("m", 999.0, now=float(i))
+    s.observe_error("m", now=5.0)
+    lat = s.latency("m", "cheap", now=6.0)
+    av = s.availability("m", now=6.0)
+    assert (lat.source, lat.samples) == ("disabled", 5)
+    assert (av.source, av.samples, av.value) == ("disabled", 6, 1.0)
+
+
 def test_an_unknown_tier_falls_back_without_raising():
     s = _store()
     assert s.latency("m", "no-such-tier", now=0.0).source == "tier_default"

@@ -13,6 +13,9 @@ spec:
     metadata:
       labels:
         {{- include "serving-plane.componentSelectorLabels" (dict "root" . "component" "ui") | nindent 8 }}
+      annotations:
+        # Roll the Pod when the nginx conf (upstream api Service) changes.
+        checksum/nginx-config: {{ include (print $.Template.BasePath "/ui-nginx-config.yaml") . | sha256sum }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -30,6 +33,13 @@ spec:
             - name: http
               containerPort: 80
               protocol: TCP
+          volumeMounts:
+            # Replaces the image's Compose-specific conf (resolver 127.0.0.11,
+            # upstream `api`) with one that targets this chart's api Service.
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/serving-plane.conf
+              subPath: serving-plane.conf
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /
@@ -48,6 +58,10 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources.ui | nindent 12 }}
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: {{ include "serving-plane.fullname" . }}-ui-nginx
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

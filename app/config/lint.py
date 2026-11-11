@@ -1,9 +1,14 @@
+import logging
 import math
 import sys
 
 from app.config.loader import load_settings
-from app.config.schema import QUALITY_FLOOR_MODES, Settings
-from app.policy.enums import POLICY_MODES
+from app.config.schema import (
+    QUALITY_FLOOR_MODES, PolicyCfg, PricingCfg, RoutingCfg, ServingCfg, Settings,
+)
+from app.policy.enums import (
+    ONPREM_PROVIDER, POLICY_MODES, RISK_CLASS, SENSITIVITY, TIERS,
+)
 from app.policy.enums import PROMPT_RETENTION_VALUES, RAW_SENSITIVE_VALUES
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
@@ -18,6 +23,27 @@ def _data_handling_token(v) -> str | None:
     if v is None:
         return None
     return str(v).strip().lower()
+
+
+log = logging.getLogger(__name__)
+
+# One owner per concern (CLAUDE.md "Configuration"): the top-level keys each
+# file owns, computed from the schema models so the table cannot drift from
+# them. serving.yaml's `policy` and `server` sections are flattened by the
+# loader into ServingCfg fields: the sections are owned top-level keys, but the
+# flattened field names are not (the loader never reads them at the top level,
+# so one written there is ignored and must warn, not pass silently).
+_SERVING_FLATTENED = frozenset({
+    "pii_detection", "allow_app_pii_downgrade", "allow_app_passthrough",
+    "default_policy_mode", "reject_stream_requests", "stream_keepalive_s",
+    "derive_session_id",
+})
+OWNED_KEYS: dict[str, frozenset[str]] = {
+    "serving": (frozenset(ServingCfg.model_fields) - _SERVING_FLATTENED) | {"policy", "server"},
+    "policy": frozenset(PolicyCfg.model_fields),
+    "routing": frozenset(RoutingCfg.model_fields),
+    "pricing": frozenset(PricingCfg.model_fields),
+}
 
 
 class ConfigLintError(Exception):
@@ -38,7 +64,20 @@ def lint_settings(s: Settings) -> list[str]:
         errs.append(f"PROVIDER_UNDECLARED pool={sorted(pool_prov)} "
                     f"pricing={sorted(price_prov)} not subset of serving={sorted(serv_prov)}")
 
+    if ONPREM_PROVIDER not in serv_prov:
+        errs.append(f"ONPREM_PROVIDER_MISSING {ONPREM_PROVIDER!r} must be declared "
+                    f"under serving.providers (enabled may be false); "
+                    f"declared={sorted(serv_prov)}")
+
     tiers = set(s.routing.tiers)
+    if tiers != set(TIERS):
+        errs.append(f"TIER_SET_NONCANONICAL routing.tiers={sorted(tiers)}; "
+                    f"extra={sorted(tiers - set(TIERS))} "
+                    f"missing={sorted(set(TIERS) - tiers)}")
+    for k in sorted(set(s.routing.risk_floors) - RISK_CLASS):
+        errs.append(f"RISK_FLOOR_CLASS_UNKNOWN {k} not in {sorted(RISK_CLASS)}")
+    for k in sorted(RISK_CLASS - set(s.routing.risk_floors)):
+        errs.append(f"RISK_FLOOR_CLASS_MISSING {k} has no routing.risk_floors entry")
     pool_tiers = [c.tier for c in s.routing.model_pool]
     for t in s.routing.risk_floors.values():
         if t not in tiers:
@@ -142,11 +181,35 @@ def lint_settings(s: Settings) -> list[str]:
                     "(policy.yaml)")
 
     scale = set(s.policy.sensitivity_scale)
+    if scale != SENSITIVITY:
+        errs.append(f"SENSITIVITY_ENUM_NONCANONICAL policy.sensitivity_scale="
+                    f"{sorted(scale)}; extra={sorted(scale - SENSITIVITY)} "
+                    f"missing={sorted(SENSITIVITY - scale)}")
     if s.policy.default_sensitivity not in scale:
         errs.append(f"DEFAULT_SENSITIVITY_UNKNOWN {s.policy.default_sensitivity}")
     for r in s.policy.sensitivity_rules:
         if r.sensitivity not in scale:
             errs.append(f"RULE_SENSITIVITY_UNKNOWN {r.sensitivity}")
+
+    for r in s.policy.sensitivity_rules:
+        if r.risk_class not in RISK_CLASS:
+            errs.append(f"RULE_RISK_CLASS_UNKNOWN {r.risk_class} not in "
+                        f"{sorted(RISK_CLASS)}")
+
+    # One owner per concern. A top-level key another file owns is a boot
+    # failure; one nobody owns only warns (a stale key, e.g. a removed switch,
+    # must not take down a customer's boot).
+    for fname, keys in s.config_keys.items():
+        for k in keys:
+            if k in OWNED_KEYS[fname]:
+                continue
+            owners = sorted(f for f, ks in OWNED_KEYS.items() if k in ks)
+            if owners:
+                errs.append(f"CONCERN_IN_WRONG_FILE {k!r} is in {fname}.yaml but is "
+                            f"owned by {owners[0]}.yaml")
+            else:
+                log.warning("UNKNOWN_CONFIG_KEY %r in %s.yaml is owned by no file "
+                            "and is ignored", k, fname)
 
     residency_values = [("rule", r.residency) for r in s.policy.sensitivity_rules]
     residency_values += [(f"tenant:{name}", t.default_residency)

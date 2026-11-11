@@ -393,7 +393,7 @@ per request vs about 65 on Postgres), and the Postgres was a WSL2 docker loopbac
   tests still pass. Note any change in the paper (`docs/research/paper/main.tex` §Overhead
   quotes "9–10 statements, 4–5 commits").
 
-## B87 — `is_disabled` treats only on-prem rows as disableable  🔴 OPEN
+## B87 — `is_disabled` treats only on-prem rows as disableable  ✅ RESOLVED (2026-11-11, fix/b90-config-lint)
 
 **Severity:** low (latent; no effect today).
 **Found:** 2026-11-06, matched-baseline state grid (`docs/research/data/paper-revision/matched_baseline.py`).
@@ -406,6 +406,11 @@ today only because `registry.effective_pool()` omits disabled rows, so they neve
 provider kind, a pool built another way), it would be eligible. **Wanted:** drop the provider
 condition (or state in the code why it is needed), and add a test that a disabled row of each
 provider kind is rejected by `candidate_rejection`.
+
+**Resolved:** `is_disabled` (`app/policy/feasible.py`) no longer checks `provider == "onprem"`; it
+asks the registry, which reports names with no onboarded row as enabled, so static cloud pool
+members are unaffected. `tests/test_is_disabled_any_provider.py` rejects a disabled onprem, azure
+and bedrock row through `candidate_rejection`.
 
 ## B88 — A streamed request whose client hangs up right after `[DONE]` is never metered  ✅ RESOLVED (2026-11-08)
 
@@ -454,7 +459,7 @@ pooled connection is replaced on checkout instead of failing a request. Test:
 (drives the real `StreamingResponse` with a client that disconnects on `[DONE]`; fails for
 both modes without the shield).
 
-## B89 — Neither Helm chart boots and works at its default values  🔴 OPEN
+## B89 — Neither Helm chart boots and works at its default values  ✅ RESOLVED (2026-11-11, fix/b89-deploy-correctness)
 
 **Severity:** high (the Kubernetes / GreenLake / PCAI packaging path fails at default values;
 the Definition of done requires Helm deploys that boot with the config lint passing).
@@ -489,8 +494,14 @@ fix the MinIO image refs. **Acceptance:** a CI step runs `helm template` for bot
 extracts the rendered `serving.yaml`, and runs it through `load_settings()` + `enforce()`
 together with the shipped routing/policy/pricing configs. This is the pre-install lint that would have
 caught the boot failure.
+**Resolved:** both charts now render `litellm_prefix`/`api_key_env` per provider from values, default
+`piiDetection: regex` (presidio needs an image built with `EXTRAS=observability,postgres,presidio`), generate the admin
+password (`randAlphaNum 24`, reused on upgrade via `lookup`; `changeme` refused, also when reused), and use
+`quay.io/minio/*` images. The serving-plane chart mounts a K8s nginx ConfigMap for the UI. `tests/test_helm_render_lint.py`
+renders both charts and runs the boot lint on the result (it failed with `PROVIDER_NO_LITELLM_MAP` before the fix).
 
-## B90 — Risk-class names are not linted, so a typo becomes a 500 on every affected request  🔴 OPEN
+
+## B90 — Risk-class names are not linted, so a typo becomes a 500 on every affected request  ✅ RESOLVED (2026-11-11, fix/b90-config-lint)
 
 **Severity:** medium (a config error surfaces at request time, not at boot; this goes against rule 5
 and the "drift is a boot failure" promise).
@@ -506,7 +517,11 @@ then raises `KeyError` at `app/routing/router.py:332` (also 393, 431) and return
 `risk_class ∈ RISK_CLASS`, with named errors (`RISK_FLOOR_CLASS_UNKNOWN`,
 `RISK_FLOOR_CLASS_MISSING`, `RULE_RISK_CLASS_UNKNOWN`). Add a test for each.
 
-## B91 — Config lint enforces less than CLAUDE.md says (canonical values, one owner per concern)  🔴 OPEN
+**Resolved:** `lint_settings` now emits `RISK_FLOOR_CLASS_UNKNOWN`, `RISK_FLOOR_CLASS_MISSING` and
+`RULE_RISK_CLASS_UNKNOWN` against `enums.RISK_CLASS`. The only `risk_class` in `policy.yaml` is on
+`sensitivity_rules`. One test per code in `tests/test_config_lint.py`.
+
+## B91 — Config lint enforces less than CLAUDE.md says (canonical values, one owner per concern)  ✅ RESOLVED (2026-11-11, fix/b90-config-lint)
 
 **Severity:** low–medium (it fails closed today, but on-prem routing can die with no boot signal; the
 docs overclaim what the lint checks).
@@ -528,12 +543,20 @@ the sensitivity enum to `app/policy/enums.py`. Reject unknown top-level keys per
 (`extra="forbid"`, or an explicit owned-keys table) so a value in the wrong file fails the boot.
 If any of these is left out on purpose, correct the CLAUDE.md "Config lint" section instead.
 
-## B92 — Dead switches still in the deploy artifacts (`inference_backend`, `allowBackendFallback`, `fail_closed`, CCR PVC)  🔴 OPEN
+**Resolved:** the lint now pins `onprem` declared in serving (`ONPREM_PROVIDER_MISSING`, constant
+`enums.ONPREM_PROVIDER`), the tier set to `enums.TIERS` (`TIER_SET_NONCANONICAL`) and the
+sensitivity enum to `enums.SENSITIVITY` (`SENSITIVITY_ENUM_NONCANONICAL`). One owner per concern uses an
+owned-top-level-keys table derived from the schema models, checked against the raw merged YAML
+(`Settings.config_keys`): a key in another file's lane fails (`CONCERN_IN_WRONG_FILE`); a key no
+file owns only warns (`UNKNOWN_CONFIG_KEY`) rather than `extra="forbid"`, so a stale key in a
+customer's file (e.g. the removed `policy.fail_closed`) does not stop their boot.
+
+## B92 — Dead switches still in the deploy artifacts (`inference_backend`, `allowBackendFallback`, `fail_closed`, CCR PVC)  ✅ RESOLVED (2026-11-11, fix/b89-deploy-correctness) <!-- purged-ok -->
 
 **Severity:** low (nothing breaks, but the docs point operators at switches that do nothing).
 **Found:** 2026-11-08, same audit as B89.
 
-- `inference_backend` / `SP_INFERENCE_BACKEND`: nothing in `app/` reads them (only a stale comment
+- `inference_backend` / `SP_INFERENCE_BACKEND`: nothing in `app/` reads them (only a stale comment <!-- purged-ok -->
   in `app/policy/feasible.py`). They are still set in the `Dockerfile` (`ENV` plus a header comment that
   says the lint rejects `none`, which it doesn't), in both charts (configmap, api env, values, README,
   NOTES — presented as *the* backend switch, default `mock`), `deploy/compose/.env.example`,
@@ -546,8 +569,13 @@ If any of these is left out on purpose, correct the CLAUDE.md "Config lint" sect
   `app/compression/ccr.py::CCRStore` is in-memory only. It provisions 20Gi that nothing uses.
 
 **Wanted:** remove them all (keep a CHANGELOG note for operators whose values files set them).
+**Resolved:** removed `inference_backend`/`SP_INFERENCE_BACKEND`, `allowBackendFallback`, `policy.fail_closed` (also from <!-- purged-ok -->
+`config/serving.yaml`), the HPE `vllm:`/`dynamo:` blocks and the CCR PVC + mount (both charts) everywhere outside the docs;
+the Dockerfile header and defaults now describe reality. Operators' notes are under "Removed values" in each chart README
+(serving-plane 0.2.0, HPE 0.3.0; there is no CHANGELOG file).
 
-## B93 — Repo and packaging hygiene from the same audit  🔴 OPEN
+
+## B93 — Repo and packaging hygiene from the same audit  🟡 PARTLY FIXED (2026-11-11, fix/b89-deploy-correctness)
 
 **Severity:** low, except the first item, which can leak secrets.
 **Found:** 2026-11-08, same audit as B89.
@@ -569,8 +597,15 @@ If any of these is left out on purpose, correct the CLAUDE.md "Config lint" sect
   (`/api/traffic`).
 - HPE `langfuse-app.yaml` seeds the Langfuse login from the RouteForge admin credentials. Say so in
   the HPE README.
+**Fixed in repo:** `.gitignore` (`.env.*`, `!.env.example`, `deploy/hpe/*.tgz`), both `.env.example` files, the compose
+`postgres` extra, the untracked HPE tgz, the Dockerfile copying only the traffic generator + `tests/personas.yaml`, and the
+HPE README Langfuse-login note. **Remaining (Spark-side, not in the repo):** delete `deploy/spark/.env.bak-*` and
+rotate the secrets in them; drop `API_EXTRAS=agent` from the Spark's `deploy/spark/.env`.
 
-## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  🔴 OPEN
+
+## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  ✅ RESOLVED (2026-11-11, fix/b85-stream-token-parity)
+
+> **Resolved:** `_usage_dict` now reads `cached_tokens` and `reasoning_tokens` with the same `_cached_tokens` / `_reasoning_tokens` helpers the non-stream path uses, and `generate_stream`'s final `GenerationResult` carries `reasoning_tokens`. `tests/routing/test_stream_token_parity.py` feeds one usage payload (nested, partial, absent, null) non-streamed and as a stream's final chunk and asserts equal token fields and cost.
 
 **Severity:** low (records only; no effect on what a client receives).
 **Found:** 2026-11-05, review of B58 (live tool streaming), which made it matter for tool turns too.
@@ -1066,7 +1101,9 @@ below other than the placeholder are not built.
 - Regression test: `xargs -0 -n1`, `tail -n20`, `head -c1500` through an enforced app with
   `presidio`.
 
-## B68 — Onboarding a keyed endpoint needs a redeploy: the key can only come from an env var in the API pod  🔴 OPEN
+## B68 — Onboarding a keyed endpoint needs a redeploy: the key can only come from an env var in the API pod  ✅ RESOLVED (2026-11-11, feat/b68-onboarding-api-key)
+
+**Resolved 2026-11-11 (feat/b68-onboarding-api-key):** `POST`/`PUT /admin/infra/models` take a write-only `api_key`, stored Fernet-encrypted under `ENCRYPTION_KEY` in the new `onboarded_models.api_key_enc` column (`422`, nothing stored, when no usable key is configured — never plaintext). Exactly one of `api_key`/`api_key_env` per model; omitting `api_key` on `PUT` keeps the stored key, `null` removes it. Reads show only `api_key_source` and a last-4 `api_key_hint` (12+ char keys). The write re-probes with the new key (401/403 → `unauthorized`, B61 unchanged); the gateway and probe send the stored key, provider `api_key_env` stays the fallback; a key that no longer decrypts takes the model out of routing on each replica's next reload, with one WARNING naming the slug. A stored key never follows an endpoint to a new scheme/host/port (`PUT` without the key → 422) and a `POST` never inherits one; keys must be printable ASCII and `ENCRYPTION_KEY` at least 32 bytes. The registry now also reloads in the background every `routing.quality_refresh_s` (60 s), so other replicas pick up a rotation without restart. Upstream error text, probe errors and streaming failures have live endpoint keys (stored, per-model env and provider-level, incl. escaped forms) scrubbed. Console: key-mode choice, password field, "key stored ••••1234" / "using env VAR" / "no key", remove action. Needs `ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS api_key_enc TEXT;` (in `scripts/migrate_app_policies.py`). Docs: `docs/guides/onboarding-models.md` (b3).
 
 **Severity:** medium (operator friction on the product's main runtime workflow; the
 definition of done says onboarding "takes effect with no restart").
@@ -1266,7 +1303,9 @@ endpoint's measured ratio — never below a floor that could under-estimate; (3)
 count. Any change here touches admission, so it needs its own spec and the consumer-contract
 checks.
 
-## B63 — `--shadow-prices` with no `--proposal` carries no `rows` block, so excluded and estimated counts are invisible  🔴 OPEN
+## B63 — `--shadow-prices` with no `--proposal` carries no `rows` block, so excluded and estimated counts are invisible  ✅ RESOLVED (2026-11-11, fix/b85-stream-token-parity)
+
+> **Resolved:** the shadow-only `simulation.json` now carries a `rows` block (`simulated`, `estimated_tokens`, `excluded`) built by the same `rows_block` helper `summarize` uses, and `report.md` ends with an "Excluded rows" section. Additive key; schema string unchanged. `docs/reference/policy-simulator.md` §8.5 updated.
 
 **Severity:** low (reporting gap; no effect on the prices themselves).
 **Found:** 2026-10-06, B60 final review (`docs/reference/policy-simulator.md` §8.5).
@@ -1931,10 +1970,10 @@ Related: B45 (the question), B46 (`counts_as_endpoint_unhealth` boundary coverag
 
 ---
 
-## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all
+## B47 — a backend failure on a real-token stream after the client already disconnected writes no usage row at all  ✅ RESOLVED (2026-11-11)
 
 **Severity:** low
-**Found:** 2026-09-21, signal hardening Task 7 self-review. **Open.**
+**Found:** 2026-09-21, signal hardening Task 7 self-review. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 On a real-token stream (`stream_unverified` / `incremental_verify`), a backend failure
 that happens **after** the client has already disconnected surfaces inside
@@ -1948,6 +1987,8 @@ deliberately left disconnect handling on the drain path unchanged.
 **Fix, if picked up.** Route that failure through `_record_failed` (or
 `_record_cancelled`, since the client is already gone) from within the drain's
 exception handler.
+
+**Resolved:** 2026-11-11. The drain-on-disconnect exception handler in `_finalize_stream` (`app/api/routes.py`) now meters the request `cancelled` through `_record_cancelled` inside `anyio.CancelScope(shield=True)`: one usage row, the `cancelled` routing outcome and the minimal failure trace, naming the streamed model as the attempt. `_finalize_stream` now takes `started` from both live generators. Test: `tests/test_error_metering.py::test_backend_failure_after_client_disconnect_writes_one_cancelled_row` (both modes).
 
 ---
 
@@ -2174,10 +2215,10 @@ identity.
 score-level pin, so a future reader does not retire the identity test believing the
 older oracle covers it.
 
-## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape
+## B43 — the response `usage` object carries a flat `cached_prompt_tokens`, not OpenAI's nested shape  ✅ RESOLVED (2026-11-11)
 
 **Severity:** low (API-surface decision, deliberately deferred; benign today)
-**Found:** 2026-09-19, P2a Task 2 ruling. **Open — needs a decision, not a fix.**
+**Found:** 2026-09-19, P2a Task 2 ruling. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 P2a threads the provider-reported cached prompt-token count through to the response so
 the meter can persist it. It is exposed as a **flat** key:
@@ -2202,10 +2243,12 @@ deprecated duplicate for one release), or document the flat key as intentional. 
 `consumer-contract-tests` skill — this is exactly the class of wire-shape drift it exists
 to catch.
 
-## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist
+**Resolved:** 2026-11-11. Decided: emit the nested shape and keep the flat key as a deprecated duplicate. `_wire_usage` (`app/api/routes.py`), the one chokepoint for the non-stream body and the stream terminal usage frame, now adds `usage.prompt_tokens_details.cached_tokens` when the provider reported a count, and omits `prompt_tokens_details` entirely when it did not (no null; B75). `cached_prompt_tokens` stays, documented as deprecated in `docs/reference/api-reference.md`, to be removed in a later release. `completion_tokens_details.reasoning_tokens` is not emitted: the count exists only on `GenerationResult` (it feeds the outcome row), not on the response `usage`, and the ruling was not to widen the plumbing. Consumer-contract tests (SDK-validated): `tests/test_openai_compat.py::test_usage_*`, `tests/test_stream_include_usage.py::test_terminal_usage_frame_*`.
+
+## B42 — `SignalStore` reports `samples: 0` on the `disabled` path even when observations exist  ✅ RESOLVED (2026-11-11)
 
 **Severity:** trivial (cosmetic honesty gap in the scoring record)
-**Found:** 2026-09-19, P2a Task 4 review. **Open.**
+**Found:** 2026-09-19, P2a Task 4 review. **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 `app/routing/signals.py`'s `latency()` and `availability()` return early when
 `signals.enabled` is false:
@@ -2225,6 +2268,8 @@ Defensible as "zero signals were consulted", but it is inconsistent with the two
 sibling paths and slightly understates what an operator would recover by flipping
 `signals.enabled` back on. Either report the true count, or document the `0` as "consulted",
 in the type.
+
+**Resolved:** 2026-11-11. Report the true count. `latency()` / `availability()` on the `disabled` path now return the store's real `latency_n` / `availability_n`, matching `tier_default` / `neutral`. The value is still the default, so the count is informational and recomputing from `sp.scoring` is unaffected. Test: `tests/routing/test_signals.py::test_disabled_still_reports_the_true_sample_count`.
 
 ## B41 — streaming requests feed no routing-signal observations at all  ✅ RESOLVED (2026-09-21, `f582181`)
 
@@ -2534,7 +2579,9 @@ cause.
 
 ---
 
-## B33 — Per-app Langfuse credentials form always looks like "add new", never "edit existing", and never checks what it saves
+## B33 — Per-app Langfuse credentials form always looks like "add new", never "edit existing", and never checks what it saves  ✅ RESOLVED (2026-11-11, fix/b33-langfuse-creds-form)
+
+**Resolved 2026-11-11 (fix/b33-langfuse-creds-form):** all four fix ideas shipped: non-secret read-back (`GET .../langfuse`), partial `PUT`, verify-on-save from the API process (`?verify=false` for air-gapped), `DELETE` (refused while `capture_io` resolves to `full`), and a summary/Edit/Remove console form. See `docs/guides/langfuse-per-app-projects.md`.
 
 **Severity:** low–medium (UX; no privacy impact — raw capture still only goes to
 the app's own project). Hit by every operator who sets per-app Langfuse credentials.
@@ -2599,11 +2646,11 @@ api container by every compose bundle) and set the field to that name. Related
 trap on the same form, already handled well: the slug must equal the endpoint's
 served model name, and the probe says so explicitly.
 
-## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps
+## B31 — CLAUDE.md rule 2's "declared no-protection posture" isn't enforced for non-onprem_only apps  ✅ RESOLVED (2026-11-11)
 
 **Severity:** medium (spec/code mismatch — either the rule overstates what is enforced,
 or the `capture_io=full` clamp is missing a condition)
-**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Open.**
+**Found:** 2026-09-11, final whole-branch review of PR #39 (docs-reclassification). **Resolved 2026-11-11 (fix/b31-batch-d).**
 
 CLAUDE.md rule 2 says raw capture (`capture_io="full"`) requires "the app to be in a
 declared no-protection posture." `app/api/admin_routes.py`'s clamp (`~648-661`) enforces
@@ -2618,6 +2665,8 @@ enforces, or the clamp is missing a residency-independent posture check. This is
 *why* the `docs/guides/faq.md` line fixed elsewhere in this same review read as plausible
 before the fix — the code really does let an `enforced` app hold `capture_io=full` once
 it is not `onprem_only`.
+
+**Resolved:** 2026-11-11. Raw capture now needs a declared no-protection posture at every residency, defined once by `app/policy/compile.py::has_no_protection_posture`. `compile_policy` denies a `full` without it to `redacted` (`capture_full_refused`), and `validate_effective` refuses the write with `CAPTURE_FULL_NEEDS_NO_PROTECTION`, which replaces the onprem-only `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` (the code was never on the wire). `_finalize` (`app/api/routes.py`) now reads capture from the compiled policy, so a row saved before this change is served as `redacted` until re-saved, never failed and never exported raw. B31 only tightens: for `onprem_only` the rule is unchanged (raw/raw only; `pii_detection: off` alone still refused, test `test_b31_onprem_pii_off_full_is_still_refused`); every other residency needs raw/raw or the app's own `pii_detection: off`. The compiled policy applies only the residency-independent half (placement never alters a compiled protection value); the `onprem_only` half is write-time, as before. Golden table contract updated. The console capture control uses the same predicate and flags a stored `full` served as `redacted`. Tests: `tests/test_admin_api.py::test_b31_*`, `tests/test_capture_io.py::test_b31_*`, `tests/test_policy_golden_table.py`.
 
 ## B26 — Catch-all exception handler in the request path logs nothing  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
 
@@ -2691,12 +2740,12 @@ but that safety is incidental to how the fall-through happens to interact with t
 exporter, not a deliberate, validated default, and it is silent: the operator gets no
 signal that their config value was nonsense. Every sibling field would have told them.
 
-## B28 — Purged `inference_backend` axis survives in the HPE Helm values (values, templates, and a stale wiring claim) <!-- purged-ok -->
+## B28 — Purged `inference_backend` axis survives in the HPE Helm values (values, templates, and a stale wiring claim)  ✅ RESOLVED (2026-11-11, fix/b89-deploy-correctness) <!-- purged-ok -->
 
 **Severity:** low (cosmetic/documentation risk only — no application code reads these keys)
 **Found:** 2026-09-10, docs-reclassification Task 5; extended 2026-09-10 (fix round 1 —
 review caught two more stale artifacts from the same axis, listed below as 3 and 4).
-**Open, deliberately not fixed here.**
+**Resolved 2026-11-11 (fix/b89-deploy-correctness, with B92):** the HPE `inferenceBackend`/`vllm`/`dynamo` values, the env var and the false "env wins" comment are removed; NOTES.txt no longer branches on them.
 
 Four stale artifacts, all from the `inference_backend` axis the 2026-08-03 pure-router <!-- purged-ok -->
 pivot removed (CLAUDE.md: "There is no `inference_backend` axis and no separate <!-- purged-ok -->
