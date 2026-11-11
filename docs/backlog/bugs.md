@@ -125,6 +125,110 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+> **Filed 2026-11-10 (B94–B99) — governance program (SMARt managed autonomy), RouteForge's share only.**
+> Source: an external design proposal (kept locally, not in the repo) with three parts:
+> a per-task authority controller (Stable / Meta-cognitive / Assisted / Regulated),
+> uncertainty-aware routing, and expert-defined invariant anchors with replay. Reviewed
+> against `main` at `b1fef07`. **Most of the program is agent-harness work and belongs to
+> the calling application**, not the gateway: the task controller, bounded recovery,
+> human review and release, tool gating, domain anchors and their replay, task identity
+> and task budgets. RouteForge builds none of those.
+>
+> The rule: a capability is RouteForge's only if it needs the per-call policy context or
+> produces the gateway audit record. An app's own agent harness is never absorbed.
+> **RouteForge's share:** per-call raise-only narrowing (B95), gateway-only evidence on the
+> response (B96), a forecast of a narrowing policy (B97), uncertainty-aware selection (B80
+> extension, B99), and per-credential spend caps with per-endpoint concurrency admission
+> (B82 extension). Order: B94 → B95 → B96 → B97. B80/B99 and B82 are independent.
+>
+> **Corrections to the proposal that apply to RouteForge's share:**
+> 1. **Proposal 2 is mostly built already.** The proposal didn't see the step-6 strategy seam
+>    (`app/routing/strategy.py`), FeasibleRouteBench and its baselines, including
+>    `cheapest` (`app/eval/strategies.py`, `oracle.py`), per-(model, workload)
+>    Beta-posterior calibration with a human-gated apply (`app/eval/calibration.py`), or
+>    bootstrap ranges (`app/eval/uncertainty.py`). Its §4.4 objective is **B80**. What's
+>    genuinely new is replacing the length-derived tier target
+>    (`complexity = min(1, tokens_after/2000)`, `app/pipeline.py:954` and `:1348`). Folded
+>    into B80.
+> 2. **Narrowing placement is a cross-axis path (rule 2a).** It must be declared, raise-only,
+>    named on the response and trace (like `sensitivity_rules`), and applied in the
+>    feasible set before scoring (rule 3). It must never touch a protection axis.
+> 3. **Content-free and offline-fit, as today.** New trace and outcome fields are allowlisted
+>    enums. Any predictor the router reads is fit offline and applied through a human gate.
+> 4. **Probes consume, they don't host.** They stay inside residency, count against budget,
+>    and are off by default.
+>
+## B94 — FEATURE (SMARt G0): governance interface spec for RouteForge's share  🔴 OPEN
+
+**Deliver** `docs/architecture/governance-interface.md`. It says what RouteForge offers to
+an external governance controller (any calling application's), and nothing about how that
+controller works:
+- The narrowing hint (B95): the header or field, its vocabulary, which narrowings exist,
+  that it is raise-only, and what an unparseable value does (deny to the protective end).
+- Which gateway-only signals a controller can read per response (B96).
+- What the forecast can and cannot predict (B97).
+- Which proposal questions RouteForge answers: only "which signals are deterministic vs.
+  estimated" (for gateway signals) and "is local-only recovery required" (RouteForge
+  guarantees the narrowing; the app decides when to ask). The rest belong to the harness.
+- Add the header to the published client-header contract.
+
+**Accept when:** the owner and the first consuming harness sign off. No code.
+
+## B95 — FEATURE (SMARt G1): per-call raise-only governance narrowing  🔴 OPEN
+
+**Shape.** A client (typically a harness whose controller has left S) sends
+`x-routeforge-governance` with a state label and the narrowings it requests, from a fixed
+vocabulary: `placement: onprem_only`, `max_tier`, `require_verification`, `no_cache`.
+RouteForge folds them into the policy context **after the gate**, as a declared,
+raise-only cross-axis input (correction 2). It enforces them in the feasible set before
+scoring, and an empty result names the hint in the P3b conflicting core.
+- **Per-app opt-in** lists which narrowings the app may request. Others are refused
+  with a 422 (they are never silently dropped).
+- **It can only narrow.** A hint never widens anything, so a client that lies can only
+  restrict itself. RouteForge does not verify the controller's state; it records it.
+- **There is no "hold" state here.** A task in R simply doesn't call. Holds, approvals
+  and tool gating are the harness's job.
+- **Audit.** `sp.governance_state` and `sp.governance_narrowing` go on the response
+  `policy` block, the trace and `routing_outcomes` (all content-free), and are folded
+  into the per-request policy version. They don't go into `app_policy_version`, which is
+  per-app.
+
+**Accept when:** an `onprem_only` hint on a cloud-eligible app routes on-prem or is
+rejected (never sent to cloud), on both the ordinary and streaming paths, on failover and
+on a semantic-cache hit. An unparseable hint fails closed. A hint can never widen
+placement or change a protection axis (property test).
+
+## B96 — FEATURE (SMARt G1b): close the gaps in gateway-only evidence on the response  🔴 OPEN
+
+**Why.** A controller's best triggers are the ones only RouteForge sees. Most are already
+on every response's `policy` block (`sp.detected_entity_types`,
+`sp.cross_axis_rules_fired`, `sp.checks`, placement). **Shape:** audit what's missing
+(likely the step-9 verification verdict, the failover attempt count and the backend error
+class), add only those, keep them content-free, and document them as the controller's
+evidence contract in B94's spec. No new state is kept.
+
+## B97 — FEATURE (SMARt G2): forecast a narrowing policy in the policy simulator  🔴 OPEN
+
+**Shape.** Extend `scripts/policy_simulate.py` / `app/eval/simulate.py` with a scenario:
+"calls matching X carry narrowing Y". Example: every call an app makes in state M is
+forced on-prem. It reports routes moved, rejections (conflicting cores), on-prem load per
+endpoint and cost, with the existing bootstrap ranges. It is driven by B95's recorded
+`sp.governance_state` once that exists, or by a declared share before then. It is labelled
+a **fixed-feature replay**. It doesn't predict how the harness's trajectory
+would change. Replaying anchor changes over task trajectories is the harness's job.
+
+## B99 — FEATURE (optional, after B80): bounded local uncertainty probes  🔴 OPEN
+
+**Shape.** For workloads where B80's benchmark shows ambiguous qualification, add an
+opt-in probe: N short samples from a local endpoint, semantic clustering by a local
+entailment model or deterministic equivalence, and cluster entropy as one more scoring
+input. UQLM is the pilot candidate, and it stays fully local. Probe calls stay inside
+residency, count against budget, and appear on the trace. **Ship only if** a held-out
+comparison against a cheap-answer-plus-verifier cascade shows a net benefit after
+probe cost.
+
+*(B98 is unused: the anchor-replay phase belongs to the calling application.)*
+
 > **Filed 2026-11-04 (B80–B84)** from a review of Artificial Analysis's talk on the cost
 > of agentic workloads. The same review revised **B73**. Ranked: B80 and B81 first, then
 > B82, B73, B83, B84. None is designed yet; each needs a spec before code.
@@ -149,6 +253,19 @@ the eligible set. Unknown quality does not clear a floor.
 **Open questions:** where the floor is declared (per app, per workload, or both); whether
 the live router reads the posterior or only applied, human-approved scores (today it reads
 only applied ones); what a floor means for a workload with no labels.
+
+**Extended 2026-11-10 (SMARt Proposal 2, see the B94–B99 note).** B80 is also the home of the
+proposal's "uncertainty-aware routing". Add to its scope:
+- Replace the **length-derived tier target** (`complexity = tokens_after/2000`,
+  `app/pipeline.py:954` and `:1348`) behind a switch: `routing.tier_targeting: length |
+  qualify_cheapest`. Length stays for context-window fit and cost, not for suitability.
+  Unknown or out-of-distribution workloads fall back to `length` (the documented
+  conservative path). Risk floor, escalation floor and model pins remain hard
+  constraints.
+- Before switching the default, run FeasibleRouteBench on held-out cases against the
+  `length`, `cheapest`, fixed-pair and cheap-plus-verifier baselines, reporting quality,
+  coverage and all-in cost together. Then shadow it on live traffic. A negative result
+  is reported, not hidden.
 
 ## B81 — FEATURE: reasoning effort as a routing choice  🔴 OPEN
 
@@ -184,6 +301,18 @@ Extends B72 steps 4–5.
 
 Keep three kinds of caching apart in names and reports: provider prompt caching,
 self-hosted KV or prefix caching, and RouteForge's semantic response cache.
+
+**Extended 2026-11-10 (governance program).** Task- and trajectory-level budgets,
+reservations and CPU+GPU admission belong to the calling application's harness, which
+knows what a task is. RouteForge's share is the part only the gateway can enforce:
+- A **per-credential spend cap**, set when a token is issued (`TokenIn`), so a harness
+  that issues one token per attempt gets that attempt's model budget enforced at the
+  gateway. Enforce it atomically at the meter: reserve the worst case (output cap,
+  failover attempts) before dispatch and reconcile after.
+- **Per-endpoint concurrency admission** with a reject/queue path, across all apps.
+
+Step 1's "per-trajectory" limits become per-credential, plus the existing per-app daily
+cap. RouteForge keeps no task concept.
 
 ## B83 — FEATURE: date the prices and the savings baseline  ✅ RESOLVED (2026-11-05, fix/ops-batch-b62)
 

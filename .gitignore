@@ -45,3 +45,7 @@ docs/architecture/decisions/
 BUILD_PLAN.md
 docs/research/arxiv.md
 docs/research/paper-draft.md
+
+# Internal governance-program working docs (external proposal + harness handoff)
+docs/research/RouteForge-SMARt-Three-Enhancements-Implementation-Guide.md
+docs/research/SMARt-DevFoundry-Handoff.md
