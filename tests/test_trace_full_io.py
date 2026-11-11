@@ -26,7 +26,8 @@ from tests._litellm_fake import make_recording_acompletion, make_response
 from tests.test_admin_api import _login
 
 pytest.importorskip("opentelemetry.sdk.trace")
-from tests.test_raw_completion_capture import _wire_app_tracer  # noqa: E402
+from tests.test_raw_completion_capture import (  # noqa: E402
+    _wire_app_tracer, force_full_capture_with_enforced_client)
 
 _TOOLS = [{
     "type": "function",
@@ -42,7 +43,8 @@ _TOOL_CALL = {"id": "call-1", "type": "function",
               "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
 
 
-def _make_full_app(client, app_id: str, *, stream_mode: str | None = None) -> str:
+def _make_full_app(client, app_id: str, *, stream_mode: str | None = None,
+                   enforced_client: bool = False) -> str:
     _login(client)
     r = client.post("/admin/applications", json={"id": app_id, "name": app_id})
     assert r.status_code == 200, r.text
@@ -51,7 +53,13 @@ def _make_full_app(client, app_id: str, *, stream_mode: str | None = None) -> st
                     json={"host": "http://lf.test:3000", "public_key": "pub",
                           "secret_key": "sek", "project_id": f"proj-{app_id}"})
     assert lf.status_code == 200, lf.text
-    policy = {"capture_io": "full"}
+    # B31: raw capture needs a declared no-protection posture at every
+    # residency; detection off is the one that leaves client_output alone.
+    policy = {"capture_io": "full", "pii_detection": "off"}
+    if enforced_client:
+        # Stays `enforced`; the caller forces `full` at the export boundary
+        # (see `force_full_capture_with_enforced_client`).
+        policy = {"capture_io": "redacted"}
     if stream_mode:
         policy["stream_mode"] = stream_mode
     pr = client.put(f"/admin/applications/{app_id}/policy", json=policy)
@@ -114,7 +122,8 @@ def test_full_trace_stores_raw_tool_call_arguments_despite_egress_redaction(
         litellm_backend, "acompletion",
         make_recording_acompletion(make_response(content=None, tool_calls=[tc])))
     mem, provider = _wire_app_tracer(monkeypatch)
-    token = _make_full_app(client, "full-tools-ssn")
+    force_full_capture_with_enforced_client(monkeypatch)
+    token = _make_full_app(client, "full-tools-ssn", enforced_client=True)
 
     r = client.post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
                     json={"model": "auto", "tools": _TOOLS, "tool_choice": "auto",

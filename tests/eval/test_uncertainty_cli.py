@@ -154,7 +154,7 @@ def test_shadow_only_run_has_the_block_head_and_shadow_ranges(tmp_path):
     out = tmp_path / "out"
     assert run_mode("shadow", out, *FAST) == 0
     doc = _doc("shadow", out)
-    assert set(doc) == {"schema", "inputs", "shadow_prices", "uncertainty"}
+    assert set(doc) == {"schema", "inputs", "rows", "shadow_prices", "uncertainty"}
     assert "totals" not in doc["uncertainty"] and doc["uncertainty"]["replicates"] == 60
     ranges = doc["shadow_prices"]["uncertainty"]
     assert len(ranges["constraints"]) == len(doc["shadow_prices"]["constraints"]) > 0

@@ -1,9 +1,14 @@
 # Secrets — never commit
 .env
+.env.*
+!.env.example
 *.pem
 *.key
 sec.txt
 secrets/
+
+# Built HPE chart bundle (build with deploy/hpe/scripts/package.sh)
+deploy/hpe/*.tgz
 
 # Python
 __pycache__/

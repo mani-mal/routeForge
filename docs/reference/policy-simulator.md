@@ -710,18 +710,18 @@ the §4.2 caveat followed by the "Shadow prices" section. **With `--proposal`**,
 P3a output is unchanged in full, `shadow_prices` is added as one more top-level key, and the
 "Shadow prices" section is appended to the end of the report.
 
-**Shadow-prices-only hides the new exclusion and the estimated-row count (B63 backlog
-item).** `shadow_prices` selects rows the same way `simulate()` does (`select_rows`), so a
-row recorded before `routing_tokens` existed that is not `ok` and carries no size is excluded
-here too, counted as `missing_routing_tokens` — but with no `--proposal` there is no `rows`
-block in `simulation.json` or `report.md`, so this mode prints no count of how many rows were
-excluded or sized from an estimate. A `rejections_avoided` row's share of a constraint's
-`cost_usd` is still an admission estimate (its routing tokens plus the router's output-token
-estimate, §6), the same estimate `rows.estimated_tokens` would count if this mode reported
-it; `cost_saved_per_day` is unaffected, since it is computed only over rows routed in both
-arms. To see the excluded and estimated counts, run with `--proposal` alongside
-`--shadow-prices` — an empty proposal (`{"schema": "routeforge.policy-proposal/v1"}`)
-predicts no change and still produces the `rows` block.
+**Shadow-prices-only carries a `rows` block (B63).** `shadow_prices` selects rows the same way
+`simulate()` does (`select_rows`), so a row recorded before `routing_tokens` existed that is
+not `ok` and carries no size is excluded here too, counted as `missing_routing_tokens`. With no
+`--proposal`, `simulation.json` therefore carries the same `rows` block proposal mode does:
+`simulated`, `estimated_tokens` and `excluded` (a count per exclusion reason), computed over
+the baseline snapshot's apps and the same `--since` window the shadow pass uses. `report.md`
+ends with an "Excluded rows" section giving `simulated` and `estimated_tokens` and the
+per-reason table. A `rejections_avoided` row's share of a constraint's `cost_usd` is still an
+admission estimate (its routing tokens plus the router's output-token estimate, §6), the same
+estimate `rows.estimated_tokens` counts; `cost_saved_per_day` is unaffected, since it is
+computed only over rows routed in both arms. The key is additive: `schema` stays
+`routeforge.simulation/v1`.
 
 ### 8.6 Flags
 

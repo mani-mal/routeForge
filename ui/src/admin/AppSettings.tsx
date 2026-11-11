@@ -1120,11 +1120,15 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // server does NOT fold that into its downgrade clamp. Named here only for the
   // summary line; the clamp below still keys on the per-app override alone.
   const effPii = p.pii_detection ?? deployment?.default_pii_detection ?? null;
-  // `full` is refused for an onprem_only app that has not declared the
-  // no-protection posture. SERVER-DRIVEN, not a mirror: the rule is
-  // `model_input == "raw" AND client_output == "raw"` (app/policy/compile.py,
-  // CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION) — two independent axes, not a
-  // `policy_mode` string. This used to test `effPolicyMode !== "passthrough"`
+  // `full` is refused, at ANY residency (B31), for an app that has not
+  // declared the no-protection posture. SERVER-DRIVEN, not a mirror: the rule
+  // is `has_no_protection_posture` (app/policy/compile.py,
+  // CAPTURE_FULL_NEEDS_NO_PROTECTION) — for onprem_only, `model_input ==
+  // "raw" AND client_output == "raw"` only (unchanged by B31); elsewhere that
+  // OR detection off — independent axes, not a `policy_mode` string. (Server-side, detection off counts only when the app
+  // or its passthrough preset turned it off, not when it merely inherits an
+  // "off" deployment default; `effective` does not carry that source, so the
+  // console is the lenient side there and the server's 422 has the last word.) This used to test `effPolicyMode !== "passthrough"`
   // and had already drifted stricter than the API: an app configured over the
   // admin API as onprem_only + model_input: raw + client_output: raw +
   // capture_io: full with NO policy_mode set is legal server-side, yet the
@@ -1138,7 +1142,8 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // reads as "unknown, don't block", same as `redactedBlocked`: the server
   // refuses the write and its 422 renders under Save.
   const effNoProtection = app.effective
-    ? app.effective.model_input === "raw" && app.effective.client_output === "raw"
+    ? (app.effective.model_input === "raw" && app.effective.client_output === "raw")
+      || (effResidency !== "onprem_only" && app.effective.detection === "off")
     : true;
   // The posture is a PARAMETER rather than read directly, because a recipe
   // sets it itself: the preview must ask "would this be refused AFTER the
@@ -1146,9 +1151,15 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
   // leaving.
   const fullBlockedForPosture = (noProtection: boolean) => !hasOwnProject
     ? "needs this app's own Langfuse project"
-    : effResidency === "onprem_only" && !noProtection
-      ? "onprem_only without a declared no-protection posture — set model_input and client_output to raw (policy_mode = passthrough is the preset for both)"
+    : !noProtection
+      ? effResidency === "onprem_only"
+        ? "onprem_only needs a declared no-protection posture — policy_mode = passthrough (model_input and client_output raw); pii detection off alone does not qualify"
+        : "needs a declared no-protection posture — policy_mode = passthrough (model_input and client_output raw), or pii detection off"
       : null;
+  // A row saved before B31 can hold `full` without the posture; the server
+  // serves it as `redacted` until the policy is re-saved. Say so.
+  const fullServedRedacted = p.capture_io === "full"
+    && app.effective?.telemetry_io === "redacted";
   const fullBlocked = fullBlockedForPosture(effNoProtection);
   // `redacted` needs a detector to redact WITH. THIS control is now
   // server-driven, not a mirror (Task 9 review round 1 — a Fix-round-1
@@ -1707,15 +1718,16 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
             <>
               What this app's traces carry. Raw I/O only ever reaches this app's own Langfuse
               project — never the shared one, which fails closed to{" "}
-              <code className="font-mono">redacted</code> if the project is missing. An onprem_only
-              app must first declare a no-protection posture before{" "}
+              <code className="font-mono">redacted</code> if the project is missing. At any
+              residency, an app must first declare a no-protection posture before{" "}
               <code className="font-mono">full</code> is permitted — that is{" "}
               <code className="font-mono">model_input = raw</code> AND{" "}
-              <code className="font-mono">client_output = raw</code>, the two axes the server
-              actually checks. <code className="font-mono">policy_mode = passthrough</code> (step 3)
-              is the preset that resolves both, and setting the axes directly over the admin API
-              does the same. Residency is placement; these are protection, and it is the protection
-              posture the capture ceiling keys on.
+              <code className="font-mono">client_output = raw</code>, or (except for an
+              onprem_only app) <code className="font-mono">pii detection = off</code>.{" "}
+              <code className="font-mono">policy_mode = passthrough</code> (step 3) is the preset
+              that resolves both data axes, and setting them directly over the admin API does the
+              same. Residency is placement; these are protection, and it is the protection posture
+              the capture ceiling keys on.
             </>
           }>
           <select id={`${uid}-capture`} value={p.capture_io ?? ""}
@@ -1733,6 +1745,13 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
               full{fullBlocked ? ` — ${fullBlocked}` : ""}
             </option>
           </select>
+          {fullServedRedacted && (
+            <p className="mt-1 text-xs text-frontier">
+              Saved as <code className="font-mono">full</code> without a declared no-protection
+              posture, so it is served as <code className="font-mono">redacted</code> until this
+              policy is re-saved with a posture or a different capture.
+            </p>
+          )}
         </Row>
 
         {saveFor(4)}
