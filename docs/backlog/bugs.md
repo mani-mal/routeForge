@@ -125,6 +125,269 @@ the audit trail in that sweep's task report.
 > [`docs/reference/routing-observability.md`](../reference/routing-observability.md) §4
 > for the operator-facing contract.
 
+> **Filed 2026-11-12 (B100–B112) — NVIDIA NeMo Switchyard as an optional, upstream-pinned
+> routing advisor.** Source:
+> [`docs/research/RouteForge-Switchyard-Feature-Comparison-and-Integration-Recommendation.md`](../research/RouteForge-Switchyard-Feature-Comparison-and-Integration-Recommendation.md),
+> reviewed against RouteForge `main` at `4c62dbd` and Switchyard `main` at `84b35ae`
+> (tags through `v0.4.0-rc.2`, 2026-11-10; PyPI `nemo-switchyard` 0.3.0 with abi3 wheels
+> for linux x86_64 and aarch64, plus `0.4.0a1`).
+>
+> **The research doc's verdict stands.** Switchyard is an optional advisor *inside*
+> RouteForge. It chooses only among candidates RouteForge has already made feasible.
+> RouteForge stays the policy, execution, metering and audit authority. Don't put
+> `switchyard-server` or the LiteLLM plugin in the path. Start in shadow mode.
+>
+> **Separation rule (owner requirement).** Switchyard stays an unmodified upstream open-source
+> dependency. RouteForge does not vendor or fork it. RouteForge-specific needs go through
+> Switchyard's public API or get proposed upstream. Exactly one RouteForge package imports
+> `switchyard`, so an upstream release changes one adapter and its contract tests, nothing
+> else (B100, B110).
+>
+> **Corrections to the research doc, from reading both codebases:**
+> 1. **`rank()` is the wrong seam for Phase 1.** `RoutingStrategy.rank()` only reorders the
+>    candidates *inside the tier `Router.select` already targeted* (`app/routing/router.py`
+>    step 5, `_rank`). Switchyard's whole decision is **efficient vs capable**, which is a
+>    *cross-tier* choice. A Switchyard `rank()` would choose between same-tier models and add
+>    nothing. The real seam is **tier targeting**: it replaces the length-derived
+>    `complexity = min(1, tokens_after/2000)` target (`app/pipeline.py:987`, `:1410`), and it
+>    stays bounded by the hard floor (`max(risk floor, min_tier)`) and the best allowed tier.
+>    Complexity is not a floor, so a Switchyard "efficient" pick may lower the target, but
+>    never below the floor (rule 8). This is the same gap B80 named as "genuinely new". It
+>    also has to be **async**: the Python binding is `async for step in
+>    router.run_stream(request, models)`, and `rank()` is sync. So the call sits in the
+>    pipeline before `Router.select`, not inside the strategy.
+> 2. **Pin 0.4.x, not 0.3.0.** `v0.4.0` is at rc.2. Its host API is source-breaking compared
+>    with 0.3.0: async `call.respond`, caller-owned `State`, and `DecisionRequest.context` →
+>    `input`. An adapter built on 0.3.0 would need rework almost at once. Spike on the rc, and
+>    merge only on an exact `0.4.x` final.
+> 3. **Caller-owned state is a Phase-1 need.** The doc said to reassess it later, but it can't
+>    wait. Stage-router *holds* live in in-process session state. They're lost on restart and
+>    split across replicas, and RouteForge runs multi-replica. 0.4's serializable `State` lets
+>    RouteForge persist it per (app, trajectory) with a TTL, using the same machinery as
+>    `app/policy/trajectory.py` (B106). `State.extra` allows `String` values, so persisted
+>    keys must be allowlisted and treated as possibly carrying content.
+> 4. **Telemetry containment is missing from the doc.** Switchyard's OTel reference says the
+>    host owns exporters, and that "algorithm logs may include content" and "custom evidence
+>    is checked for field names and types, not string contents". Rule 2 therefore requires an
+>    evidence allowlist and suppressed Switchyard logging. Only RouteForge's exporter may
+>    emit Switchyard facts (B104).
+> 5. **Stage routing is calibrated for coding agents.** Its signal vocabulary reads coding-agent
+>    tool results (file reads/writes, shell, tests). A request with no tool-result history goes
+>    to the picker default. So the value is concentrated in agentic apps, and the per-app
+>    opt-in in the doc is essential, not just cautious. The "no classifier calls" claim holds
+>    only with `classifier` unset. With a classifier configured, it judges every ambiguous turn.
+> 6. **"Task success" isn't observable at the gateway.** Agent loops are client-driven, so
+>    RouteForge never sees whether a task succeeded. The go/no-go needs an agentic benchmark
+>    driven *through* RouteForge, or client feedback scores. Shadow traffic alone can't decide
+>    it (B109).
+> 7. **Name collision.** RouteForge already calls its own step-6 router "Switchyard"
+>    (CLAUDE.md architecture and routing-scopes, routing skill, dashboard guide). This must be
+>    renamed before the real one lands, or every trace and doc becomes ambiguous (B101).
+> 8. **Speculative/advisor calls bill after cancel.** Upstream notes "provider generation and
+>    billing may continue after disconnect". Phase-3 budget accounting must charge cancelled
+>    speculative calls (B111).
+>
+> **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
+> B110 starts as soon as B100 lands. B111 is gated on B109's go decision. B112 is optional.
+
+## B100 — FEATURE (Switchyard S0): dependency contract — upstream stays separate  🔴 OPEN
+
+**Shape.**
+- Add an optional extra `routeforge[switchyard]` with an **exact** pin `nemo-switchyard==0.4.x`.
+  It is never a core dependency. RouteForge boots and passes every test without it.
+- Add one adapter package, `app/routing/switchyard/`, as the **only** importer of
+  `switchyard`. A test fails if any other module imports it, including test helpers outside
+  `tests/routing/switchyard/`.
+- No vendoring, no fork and no monkey-patching. A needed behaviour change is filed upstream,
+  and RouteForge adapts in the adapter until it ships.
+- Config: a `switchyard:` block in `config/routing.yaml` (it is step-6 policy, so routing owns
+  it), plus lint rules:
+  - `mode: on` (`shadow` or `enforce`) without the package importable fails boot as
+    `SWITCHYARD_NOT_INSTALLED`.
+  - An unknown algorithm fails as `SWITCHYARD_ALGORITHM_UNKNOWN`. Only `stage_router` without
+    `classifier` is allowed until B111.
+  - An installed version outside the supported range fails as `SWITCHYARD_VERSION_UNSUPPORTED`.
+- Docs: `docs/reference/switchyard-integration.md` covers the ownership boundary, a
+  supported-version matrix, the upgrade playbook (read the CHANGELOG's breaking entries, bump
+  the pin, run the B110 contract suite) and Apache-2.0 NOTICE attribution.
+
+**Accept when:** the import-guard test passes, a boot without the extra is unchanged, and
+each lint code fires on its own fixture.
+
+## B101 — DOCS (Switchyard S0a): retire RouteForge's internal "Switchyard" codename  🔴 OPEN
+
+Rename RouteForge's own step-6 router in `CLAUDE.md` (the architecture table, "Routing
+scopes"), `.claude/skills/routing-and-gateway/SKILL.md`,
+`docs/guides/reading-the-dashboard-and-trace.md` and
+`docs/architecture/routing-tier-selection.md`. A plain name such as "Model Router" works. The
+name "Switchyard" then means NVIDIA's library only, and a trace field `sp.switchyard.*` is
+unambiguous. Check UI strings and the drawio diagram for the same codename.
+
+**Accept when:** `grep -ri switchyard` hits only references to NVIDIA's project.
+
+## B102 — SPEC (Switchyard S1): where the advisor decides, and what it may see  🔴 OPEN
+
+**Deliver** `docs/superpowers/specs/<date>-switchyard-advisor-design.md`. It must answer:
+- **Seam.** An async advisor call in the pipeline after step 5 and before `Router.select`.
+  It outputs a **role proposal** (`efficient | capable`), which becomes a tier target. The
+  target is clamped to `[hard floor, best allowed tier]`. It replaces only the
+  complexity-derived target, never the risk floor, `min_tier`, escalation or quality floors
+  (correction 1).
+- **Role mapping, three tiers onto two roles.** Proposal to decide: efficient = the lowest
+  feasible tier at or above the hard floor, and capable = the highest feasible tier. The
+  spec must also say what `mid` means. The role map handed to Switchyard holds **only**
+  feasible model ids (post-residency, scope, declarations, budget and circuit).
+- **B80 interaction.** When a quality floor applies, its qualifiers are the feasible set
+  Switchyard sees, and the cheapest-qualifier rule keeps precedence.
+- **What content it sees (rules 1 and 7).** The post-gate, `model_input`-shaped messages, and
+  never raw text the gate redacted. Decide whether it sees them before or after compression:
+  Headroom may compress away the tool-result signals stage routing reads. That is decided by
+  measurement in B109, with "post-compression" as the safe default because it matches what
+  the model sees.
+- **Failure.** On timeout (`switchyard.timeout_ms`), error, or a returned id outside the
+  input set, it falls back to today's target. Never reject on advisor failure. Record the
+  cause.
+- **Fallback ownership.** RouteForge's failover and circuit breaker stay authoritative.
+  Switchyard's own context-window/availability fallback target is not used.
+- **Streaming and step 9.** The advisor affects only model choice, so the step-9 floor is
+  unchanged.
+
+**Accept when:** the owner signs off. No code.
+
+## B103 — FEATURE (Switchyard S2): the adapter  🔴 OPEN
+
+In `app/routing/switchyard/`, add `SwitchyardAdvisor.propose(messages, roles, *, state) ->
+SwitchyardProposal | None`. It builds the algorithm once from config and reuses the handle.
+It drives `run_stream`, and refuses (`call.fail` / host abort) **every** `CallModel` or
+`CallDecision`, because none are allowed before B111. It enforces `timeout_ms` and validates
+that the selected id is in `roles`. It returns a frozen, content-free proposal: role, model
+id, confidence, allowlisted evidence (B104), advisor latency, `switchyard_version` and
+algorithm. It never raises into the request path.
+
+**Accept when:**
+- Contract tests pin the binding's behaviour: the efficient pick on a clean-production
+  history, the capable pick on repeated tool errors, and the picker default with no tool
+  history.
+- A property test confirms the selected id is always in the input role map.
+- A routing-time model call is refused and the run still ends with a proposal or `None`.
+
+## B104 — FEATURE (Switchyard S2b): telemetry containment (rule 2)  🔴 OPEN
+
+- Allowlist evidence fields by name **and** type (enums, numbers, bools, model ids). Drop
+  everything else, and drop every free string except known enums (correction 4).
+- Silence Switchyard's Python/Rust logging below WARN. Never let a global OTel provider pick
+  up its spans toward any sink: if the binding emits spans, they go only through
+  `app/obs/export.py`'s redaction path.
+- Add trace fields (emitted regardless of `capture_io`, like `sp.candidates`):
+  `sp.switchyard.mode`, `.role`, `.model`, `.confidence`, `.agreed` (proposal equal to served
+  model), `.fallback_cause`, `.latency_ms` and `.version`. Add the same columns to
+  `routing_outcomes`.
+
+**Accept when:** a property test feeds random PII-shaped content through the advisor and finds
+none of it in any trace attribute, outcome row or log line.
+
+## B105 — FEATURE (Switchyard P1): shadow mode  🔴 OPEN
+
+`switchyard.mode: shadow` computes the proposal and records it, but never changes the target.
+The console decision inspector shows "advisor proposed X (role, confidence)" next to the
+served model. The policy simulator / `routing_outcomes` report shows the agreement rate and
+the counterfactual cost of following the advisor, per app and per workload.
+
+**Accept when:**
+- **Identity:** with `shadow`, the response bodies, the served model and metering are
+  identical to `off` for the same fixture traffic. Only trace and outcome fields differ.
+- Advisor overhead p50 and p99 are measured on the DGX `rf-pytest` pod and recorded.
+- A failure or timeout in shadow mode leaves the request untouched.
+
+## B106 — FEATURE (Switchyard P1b): persist routing state across replicas  🔴 OPEN
+
+Store Switchyard's serialized `State` per `(app_id, trajectory or session id)`, with a TTL,
+reusing the `TrajectoryStore` patterns (DB-backed, app-scoped, expiring, pruned). Persist
+only allowlisted `State.extra` keys. Any `String` value that is not a known enum is dropped,
+and the drop is counted (correction 3). With no trajectory/session id, the run is stateless,
+which means no holds.
+
+**Accept when:** a hold set on replica A is honoured on replica B, it expires at the TTL, it
+survives a restart, and two apps with the same session id never share state.
+
+## B107 — PACKAGING (Switchyard P1c): images, arches, air-gap  🔴 OPEN
+
+- Build the API image with the extra, as a variant or as default. Choose by measured image
+  size and startup cost.
+- Verify the abi3 wheels on linux x86_64 and aarch64 (DGX Spark) under Python 3.12.
+- Write a wheel-mirroring procedure for air-gapped installs.
+- Add a Helm/compose value that enables it.
+- Confirm there is no network access at import or at run time with the classifier unset.
+
+**Accept when:** both arches boot in compose and on the DGX lab with `mode: shadow`, and an
+offline install from the mirror succeeds.
+
+## B108 — FEATURE (Switchyard P2): per-app enforce, gradual rollout  🔴 OPEN
+
+- Add a deployment ceiling `switchyard.mode: enforce` plus a per-app
+  `adaptive_routing: off | shadow | enforce` and an optional `sample_rate`.
+- It is not a placement or protection axis (rule 2a). It's folded into `app_policy_version`
+  and named on the response certificate.
+- Under enforce, the proposal sets the tier target within the B102 clamp. Every chosen model
+  and every failover target is revalidated against the original feasible set.
+
+**Accept when:** property tests show the advisor can never:
+- change placement or `allowed_providers`,
+- serve below the hard floor,
+- reach a cloud candidate under `onprem_only` (including failover, streaming and a
+  semantic-cache hit), or
+- change a protection axis.
+
+A deterministic fixture also shows behaviour after an endpoint failure is
+policy-compliant.
+
+## B109 — EVAL (Switchyard P2a): go/no-go evidence  🔴 OPEN
+
+- **Offline.** Add `always_capable`, `always_efficient`, `random_two` and `switchyard_stage`
+  baselines to FeasibleRouteBench / `app/eval/strategies.py`, and compare them with the
+  default strategy, using traffic-weighted counterfactuals from `routing_outcomes`.
+- **Online.** Drive an agentic benchmark (a Terminal-Bench or DeepSWE subset) *through*
+  RouteForge on the DGX lab with on-prem efficient/capable endpoints onboarded. Task success
+  is observed there, not at the gateway (correction 6). Also measure pre- vs post-compression
+  advisor input (B102).
+- **Gate.** Use the research doc's §7 table: zero out-of-feasible selections or fallbacks,
+  success within a pre-registered noninferiority margin, and lower cost per successful task.
+  Routing overhead must stay within the SLO.
+
+**Deliver** `docs/research/switchyard-pilot-results.md` with a go or no-go decision.
+
+## B110 — CI (Switchyard S3): track upstream without coupling  🔴 OPEN
+
+Add a non-blocking scheduled CI job. It installs the **latest** upstream release or rc in an
+isolated env and runs only the B103/B104 contract suite. A failure opens an issue that links
+the upstream CHANGELOG entry. The blocking CI always runs the pinned version. Together with
+B100's single importer, an upstream bump becomes: read the changelog, bump the pin, fix the
+adapter and go green.
+
+## B111 — FEATURE (Switchyard P3, gated on B109 = go): policy-safe routing-time calls  🔴 OPEN
+
+This enables the classifier, escalation judge, Advisor Gate and VGR. The adapter serves
+`CallModel` / `CallDecision` through an internal dispatcher:
+- **Policy.** Each call runs under the originating `ExecutionPolicyContext`. Its target must be
+  in that request's feasible set, so residency and retention hold by construction.
+- **Metering and tracing.** Each call is metered to the originating app and trajectory and
+  traced as a child span.
+- **No re-entry.** Each call is marked as not re-entering the advisor.
+- **Refusal.** A call outside policy gets a host **abort**.
+- **Budget.** Count cancelled speculative calls (correction 8).
+- **Step 9.** Define how Advisor Gate and VGR "redo" answers interact with step-9
+  verification and the streaming floor before enabling them.
+
+**Accept when:** zero judge or advisor calls fall outside the feasible set under property
+tests, and the budget includes every intermediate call.
+
+## B112 — RESEARCH (optional): policy-constrained learned routing  🔴 OPEN
+
+This is the paper experiment from research doc §9. Compare unconstrained Switchyard,
+RouteForge-only routing and Switchyard inside RouteForge on task success, total cost,
+overhead and violations, plus the regret of learned routing under changing policy. It reuses
+the B109 harness.
+
 > **Filed 2026-11-10 (B94–B99) — governance program (SMARt managed autonomy), RouteForge's share only.**
 > Source: an external design proposal (kept locally, not in the repo) with three parts:
 > a per-task authority controller (Stable / Meta-cognitive / Assisted / Regulated),
