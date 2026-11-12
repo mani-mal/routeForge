@@ -187,6 +187,13 @@ class AppPolicy(Base):
     # type-independent complement to pii_entity_denylist. US_SSN can never be
     # exempted (FilteredDetector.PROTECTED_ENTITIES). null/[] = no exemption.
     pii_exempt_patterns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # B69: minimum detector score [0,1] for a span inside tool-call ARGUMENTS
+    # to be rewritten (the "tool-argument bar"). null = inherit serving.yaml
+    # policy.tool_args_min_score (0.5). Rewriting only -- detection,
+    # classification and message text are unchanged; US_SSN, unscored regex
+    # and custom-recognizer matches are never exempted. Added after the table
+    # shipped: a deployed DB needs the ALTER in docs/guides/admin-setup.md.
+    tool_args_min_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # --- P1a data-handling axes. null = inherit (resolved by
     # app/policy/compile.py). `policy_mode` remains a PRESET over
     # model_input/client_output; an explicit value here beats the preset, and
@@ -225,6 +232,13 @@ class AppPolicy(Base):
     # Added after the table shipped: a deployed DB needs the ALTER in
     # docs/reference/per-app-config.md.
     model_aliases: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # B80 per-app quality floors {workload -> floor in (0, 1]} and floor mode
+    # (off | shadow | enforce). Null = inherit the deployment's. Raise-only:
+    # the effective floor is the max of the two, never a lower app value. Added
+    # after the table shipped: a deployed DB needs the ALTERs in
+    # docs/guides/admin-setup.md, run before rolling the image.
+    quality_floors: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    quality_floor_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 
@@ -411,6 +425,14 @@ class RoutingOutcome(Base):
     reply_has_text: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     reply_tool_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # B69: what the tool-argument bar did on this request (ingress + egress
+    # summed): spans rewritten inside tool-call arguments, spans that passed
+    # through below `tool_args_min_score`, and the latter's entity TYPES --
+    # never a value. Null on rows written before the columns existed.
+    # Deployed DBs need the three ALTERs in docs/reference/routing-outcomes.md.
+    tool_arg_redactions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_arg_skipped: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_arg_skipped_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class OutcomeFeedback(Base):
@@ -504,6 +526,24 @@ class ModelQuality(Base):
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
+class ModelQualityBound(Base):
+    """Calibrated LOWER credible bound on a (model, workload) quality, written
+    by a calibration apply beside the `model_quality` score rows (B80). The
+    quality-floor router reads it; it never feeds the ranking score. NEW table
+    -> create_all, no migration. Ids, enums and numbers only -- content-free."""
+
+    __tablename__ = "model_quality_bounds"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(100), index=True)
+    task_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lower: Mapped[float] = mapped_column(Float)
+    ci_level: Mapped[float] = mapped_column(Float)
+    set_id: Mapped[str] = mapped_column(String(64), index=True)
+    calibrated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
 class OnboardedModel(Base):
     """A registered on-prem model routeForge routes to but never deploys.
     Self-sufficient: identity + routing + pricing + endpoint. Replaces the
@@ -526,6 +566,14 @@ class OnboardedModel(Base):
     price_cached_input: Mapped[float | None] = mapped_column(Float, nullable=True)
     endpoint: Mapped[str] = mapped_column(String(255))
     api_key_env: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # B68: the endpoint's API key, given at onboarding time, as a Fernet token
+    # under ENCRYPTION_KEY (`app/apps/secret_box.py`). Never plaintext: with no
+    # usable ENCRYPTION_KEY the admin route refuses the key (422). Write-only --
+    # no admin read, snapshot, trace or outcome row carries it. At most one of
+    # api_key_env / api_key_enc is set per row. Added after the table's first
+    # release: `ALTER TABLE onboarded_models ADD COLUMN IF NOT EXISTS
+    # api_key_enc TEXT;` (scripts/migrate_app_policies.py).
+    api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Where `context_window` came from: "operator" (a human typed it) or
     # "probed" (read from the endpoint's own /v1/models max_model_len). NULL

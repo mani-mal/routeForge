@@ -14,6 +14,7 @@ from typing import AsyncIterator
 
 from litellm import ContextWindowExceededError, acompletion
 
+from app.apps.secret_box import scrub_secrets, scrubbed_exception
 from app.config.schema import PriceCfg, Settings
 from app.errors import ContextWindowExceeded
 from app.gateway.backends.base import BackendHealth, StreamChunk
@@ -34,8 +35,30 @@ async def _acompletion(model: str, call: dict):
     try:
         return await acompletion(**call)
     except ContextWindowExceededError as exc:
+        exc = scrubbed_exception(exc)
         raise ContextWindowExceeded(
-            f"{model}: {_LITELLM_PREFIX.sub('', str(exc))}") from exc
+            f"{model}: {_LITELLM_PREFIX.sub('', scrub_secrets(str(exc)))}") from None
+    except Exception as exc:
+        # B68: an upstream error may echo the request kwargs or the bearer
+        # token. Scrub it here, at the source, so no later log line, traceback,
+        # client error or DB field can carry a live endpoint key.
+        clean = scrubbed_exception(exc)
+        if clean is exc:
+            raise
+        raise clean from None
+
+
+async def _scrubbed_stream(stream):
+    """Iterate a LiteLLM stream, scrubbing any exception raised mid-stream the
+    same way `_acompletion` does."""
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as exc:
+        clean = scrubbed_exception(exc)
+        if clean is exc:
+            raise
+        raise clean from None
 
 
 _FINISH_REASONS = frozenset({"stop", "length", "tool_calls", "content_filter",
@@ -86,20 +109,17 @@ def _cached_tokens(u) -> int | None:
 def _usage_dict(u) -> dict:
     """Normalize a litellm usage object (pydantic-ish), a plain dict, or a
     SimpleNamespace-style object into a `{prompt_tokens, completion_tokens,
-    cached_tokens}` dict -- streaming's terminal usage chunk shape varies by
-    provider."""
-    if isinstance(u, dict):
-        return {"prompt_tokens": u.get("prompt_tokens", 0),
-                "completion_tokens": u.get("completion_tokens", 0),
-                "cached_tokens": _cached_tokens(u)}
-    if hasattr(u, "model_dump"):
-        d = u.model_dump()
-        return {"prompt_tokens": d.get("prompt_tokens", 0),
-                "completion_tokens": d.get("completion_tokens", 0),
-                "cached_tokens": _cached_tokens(d)}
-    return {"prompt_tokens": getattr(u, "prompt_tokens", 0),
-            "completion_tokens": getattr(u, "completion_tokens", 0),
-            "cached_tokens": _cached_tokens(u)}
+    cached_tokens, reasoning_tokens}` dict -- streaming's terminal usage chunk
+    shape varies by provider. Cached and reasoning counts come from the same
+    helpers the non-stream path uses (B85), so the two paths cannot disagree."""
+    src = u.model_dump() if not isinstance(u, dict) and hasattr(u, "model_dump") else u
+    if isinstance(src, dict):
+        prompt, completion = src.get("prompt_tokens", 0), src.get("completion_tokens", 0)
+    else:
+        prompt, completion = getattr(src, "prompt_tokens", 0), getattr(src, "completion_tokens", 0)
+    return {"prompt_tokens": prompt, "completion_tokens": completion,
+            "cached_tokens": _cached_tokens(src),
+            "reasoning_tokens": _reasoning_tokens(src)}
 
 
 def _to_wire(m) -> dict:
@@ -220,17 +240,20 @@ class LiteLLMBackend:
                 "(guardrail 3: cloud must be unreachable by construction)")
         litellm_model = cand.litellm_model or f"{pcfg.litellm_prefix}/{cand.name}"
         kwargs: dict = {}
-        # onprem: base_url + optional auth env come from the onboarded model's
-        # registered endpoint (per-model reachability probed at onboard time).
+        # onprem: base_url + optional per-model key come from the onboarded
+        # model's registered endpoint (per-model reachability probed at onboard
+        # time). The key is the model's stored (encrypted, B68) key, else the
+        # value of its api_key_env; with neither, the provider-level
+        # api_key_env below is the fallback.
         if cand.provider == "onprem":
             ep = self._reg.endpoint_for(cand.name) if self._reg else None
             if ep is None:
                 raise RuntimeError(
                     f"onprem model {model!r} has no registered endpoint")
-            base, key_env = ep
-            kwargs["api_base"] = base
-            if key_env:
-                kwargs["api_key"] = os.environ.get(key_env, "sk-noauth")
+            kwargs["api_base"] = ep[0]
+            key = self._reg.api_key_for(cand.name)
+            if key:
+                kwargs["api_key"] = key
         if pcfg.api_base_env:   # cloud, unchanged
             kwargs["api_base"] = os.environ.get(pcfg.api_base_env) or kwargs.get("api_base")
         if pcfg.api_key_env and "api_key" not in kwargs:
@@ -325,7 +348,7 @@ class LiteLLMBackend:
         usage: dict = {}
         finish = None
         assembler = _ToolCallAssembler()
-        async for chunk in await _acompletion(model, call):
+        async for chunk in _scrubbed_stream(await _acompletion(model, call)):
             choices = getattr(chunk, "choices", None)
             content = None
             if choices:
@@ -360,7 +383,8 @@ class LiteLLMBackend:
             latency_ms=latency_ms, cost_usd=cost_usd, confidence=None,
             tool_calls=assembler.calls,
             cached_prompt_tokens=cached_in,
-            finish_reason=_finish_reason(finish)))
+            finish_reason=_finish_reason(finish),
+            reasoning_tokens=usage.get("reasoning_tokens")))
 
     async def health(self) -> BackendHealth:
         # Per-model reachability is probed at onboard time (registry), not at

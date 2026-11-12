@@ -11,10 +11,11 @@ fall back to the shared project — serving is never blocked by telemetry setup.
 """
 from __future__ import annotations
 
-import base64
 import logging
 import os
 from dataclasses import dataclass
+
+from app.apps.secret_box import fernet
 
 log = logging.getLogger("serving.obs")
 
@@ -22,22 +23,11 @@ log = logging.getLogger("serving.obs")
 # --- secret encryption ------------------------------------------------------
 
 def _fernet():
-    """Fernet built from ENCRYPTION_KEY (the Langfuse 64-hex / 32-byte key).
-    Returns None if unset — callers then store the secret unencrypted (dev)."""
-    key = os.environ.get("ENCRYPTION_KEY")
-    if not key:
-        return None
-    try:
-        from cryptography.fernet import Fernet
-        try:
-            raw = bytes.fromhex(key)
-        except ValueError:
-            raw = key.encode()
-        raw = raw[:32].ljust(32, b"\0")
-        return Fernet(base64.urlsafe_b64encode(raw))
-    except Exception:  # pragma: no cover - defensive
-        log.warning("could not build Fernet from ENCRYPTION_KEY (storing plaintext)")
-        return None
+    """Fernet built from ENCRYPTION_KEY (shared helper in
+    `app/apps/secret_box.py`). Returns None if unset -- callers here then store
+    the Langfuse secret unencrypted (dev). Onboarded endpoint keys do not get
+    that fallback (see `secret_box.encrypt_required`)."""
+    return fernet()
 
 
 def encrypt_secret(plaintext: str) -> bytes:

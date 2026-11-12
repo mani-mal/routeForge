@@ -11,7 +11,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { STEPS, stepMeta, TIER_COLOR, api } from "../api";
-import type { ChatResponse, RequestSummary, TraceRecord } from "../api";
+import type { ChatResponse, QualityFloorRecord, RequestSummary, TraceRecord } from "../api";
 import { TIER_HEX, SIGNAL_HEX } from "../tokens";
 import type { Tier } from "../tokens";
 import { Panel, StatTile, TierDot, formatUsd, formatUsdPrecise, formatMs, formatPct } from "../components/common";
@@ -67,11 +67,38 @@ const CODE_LABEL: Record<string, string> = {
   region_not_allowed: "excluded · region",
   prompt_retention_not_allowed: "excluded · prompt retention",
   raw_sensitive_not_accepted: "excluded · raw sensitive content",
+  // B80 quality-floor rejections.
+  quality_floor: "below quality floor",
+  context_window: "context window too small",
+  higher_cost: "costlier than the chosen model",
 };
 
 function compactReason(reason: string, code?: string | null): string {
   if (code && CODE_LABEL[code]) return CODE_LABEL[code];
   return REASON_LABEL[reason] ?? reason;
+}
+
+// B80: one line per router hop. null when the hop carried no floor.
+function floorLine(q: QualityFloorRecord | null | undefined): string | null {
+  if (!q || q.status === "none" || q.floor == null) return null;
+  const head = `quality floor ${q.floor.toFixed(2)}${q.workload ? ` (${q.workload})` : ""}`;
+  const lower = q.chosen_lower != null
+    ? `lower bound ${q.chosen_lower.toFixed(2)}${q.chosen_lower_source ? ` (${q.chosen_lower_source})` : ""}`
+    : null;
+  if (q.status.startsWith("shadow_")) {
+    const unmet = q.status !== "shadow_met";
+    const would = q.shadow_choice
+      ? `would choose ${q.shadow_choice}${q.shadow_est_cost_usd != null ? ` (est ${formatUsd(q.shadow_est_cost_usd)})` : ""}`
+      : unmet ? "no model would qualify" : null;
+    return [head, "shadow", unmet ? "would be unmet" : "would be met", would, lower].filter(Boolean).join(" · ");
+  }
+  if (q.status === "met") return [head, "met", lower].filter(Boolean).join(" · ");
+  const why: Record<string, string> = {
+    unmet_no_qualifier: "unmet (no qualifying model)",
+    unmet_context: "unmet (context window too small)",
+    unmet_budget: "unmet (over budget)",
+  };
+  return [head, why[q.status] ?? q.status].join(" · ");
 }
 
 // `sp.checks` (design P1a §6): a request-level proof, so its only honest
@@ -119,6 +146,9 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
         )}
       </div>
       {r.reason && <div className="mt-1 text-xs text-gray-400">{r.reason}</div>}
+      {floorLine(r.scoring?.quality_floor) && (
+        <div className="mt-1 text-xs text-gray-400">{floorLine(r.scoring?.quality_floor)}</div>
+      )}
       {r.rejected && r.rejected.length > 0 && (
         <div className="mt-2">
           <div className="uppercase tracking-wide text-[10px] text-gray-600 mb-0.5">rejected spurs</div>

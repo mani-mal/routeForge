@@ -55,8 +55,10 @@ POLICY-eligible set first and only then drops open names among that tier's
 final candidates (labelled by `feasible_set`'s LAST stage, `circuit_open`) --
 so it can only remove a candidate policy already admitted, cannot widen
 placement and cannot lower a risk floor or an escalation (rule 8). When
-every candidate in the target tier is open, the router bypasses the breaker
-within that tier (`circuit_bypass`).
+every candidate in the chosen tier is open, the router steps down to a lower
+tier only if the chosen tier is above the request's hard floor and a lower tier
+at or above it has a closed, in-budget candidate (`tier_downgrade`, B71);
+otherwise it bypasses the breaker within that tier (`circuit_bypass`).
 
 Per-process and in-memory, like `SignalStore`: each API replica trips on its
 own failures, and a restart starts every circuit closed. Every method takes

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.apps.secret_box import register_secret, scrub_secrets
+
 
 @dataclass(frozen=True)
 class ProbeResult:
@@ -72,16 +74,23 @@ def parse_max_model_len(entry: object) -> int | None:
     return parsed
 
 
-async def probe_endpoint(endpoint: str, slug: str, api_key_env: str | None
-                         ) -> ProbeResult:
+async def probe_endpoint(endpoint: str, slug: str, api_key_env: str | None,
+                         api_key: str | None = None) -> ProbeResult:
     """GET `{endpoint}/models` and confirm `slug` is among the served ids.
     Any failure (network error, non-2xx, missing slug) returns a failed
     `ProbeResult` rather than raising — the caller persists the row disabled
     either way. `max_model_len` is captured from the matching entry when the
     probe succeeds; it is never allowed to turn a successful probe into a
-    failure (B50)."""
+    failure (B50).
+
+    `api_key` (B68) is a key given at onboarding / stored encrypted; it wins
+    over `api_key_env`. It is registered for scrubbing and never appears in
+    the returned `detail`."""
     headers = {}
-    if api_key_env and os.environ.get(api_key_env):
+    if api_key:
+        register_secret(api_key)
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif api_key_env and os.environ.get(api_key_env):
         headers["Authorization"] = f"Bearer {os.environ[api_key_env]}"
     url = endpoint.rstrip("/") + "/models"
     try:
@@ -91,8 +100,8 @@ async def probe_endpoint(endpoint: str, slug: str, api_key_env: str | None
                 return ProbeResult(
                     False,
                     f"endpoint rejected the credentials (HTTP {resp.status_code}); "
-                    "is api_key_env the name of an environment variable that is set "
-                    "in the API container?",
+                    "check the stored API key, or that api_key_env is the name of an "
+                    "environment variable that is set in the API container",
                     unauthorized=True)
             resp.raise_for_status()
             entries = resp.json().get("data", [])
@@ -106,4 +115,4 @@ async def probe_endpoint(endpoint: str, slug: str, api_key_env: str | None
                 break
         return ProbeResult(True, "ok", max_model_len)
     except Exception as e:
-        return ProbeResult(False, str(e))
+        return ProbeResult(False, scrub_secrets(str(e)))

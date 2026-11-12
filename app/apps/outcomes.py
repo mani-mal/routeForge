@@ -158,21 +158,26 @@ def outcome_context(ctx, *, max_tokens: int | None = None,
 
 # --- trace parsing (build_ok_outcome helpers) --------------------------
 
+def decision_trace(records) -> list[dict]:
+    """Gateway DecisionRecords dumped WITHOUT any free-text `reason` (the
+    record's own and every rejected candidate's). What remains is ids, enums,
+    numbers and scoring provenance -- enough for `trace_features` to read,
+    nothing a leak could ride on. Takes the pydantic records (duck-typed on
+    `model_dump`) so no caller ever holds a reason string even transiently.
+    A failed request's routing detail rides on this (B70 item 2)."""
+    dropped = {"reason": True, "rejected": {"__all__": {"reason"}}}
+    return [r.model_dump(exclude=dropped) for r in records]
+
+
 def outcome_trace(records, vrec) -> list[dict]:
     """The content-free trace a `verify_failed` outcome row is built from:
-    each gateway DecisionRecord and the VerificationRecord, dumped WITHOUT
-    any free-text `reason` (the record's own and every rejected candidate's).
-    What remains is ids, enums, numbers and scoring provenance -- enough for
-    `trace_features` to read, nothing a leak could ride on. Takes the
-    pydantic records (duck-typed on `model_dump`) so the stash never holds a
-    reason string even transiently."""
-    dropped = {"reason": True, "rejected": {"__all__": {"reason"}}}
-    return ([r.model_dump(exclude=dropped) for r in records]
-            + [vrec.model_dump(exclude={"reason"})])
+    `decision_trace(records)` plus the VerificationRecord, also without its
+    `reason`."""
+    return decision_trace(records) + [vrec.model_dump(exclude={"reason"})]
 
 
-ROUTE_REASONS = ("failover", "escalation", "placement", "risk_floor", "length_tier",
-                 "only_eligible", "other")
+ROUTE_REASONS = ("failover", "escalation", "quality_floor", "placement", "risk_floor",
+                 "length_tier", "only_eligible", "other", "no_failover")
 
 _TIER_RANK = {"cheap": 0, "mid": 1, "frontier": 2}
 
@@ -184,7 +189,9 @@ def _rank(tier: str | None) -> int | None:
 def derive_route_reason(*, cache_hit: bool, attempts: list[str],
                         chosen_tier: str | None, tier_target: str | None,
                         complexity_tier: str | None, rejected: list[dict],
-                        n_eligible: int | None, served_hops: int = 1) -> str | None:
+                        n_eligible: int | None, served_hops: int = 1,
+                        floor_status: str | None = None,
+                        tier_downgraded: bool = False) -> str | None:
     """Why the served model is in the tier it is. Content-free enum; first
     match wins. Unknown tier strings compare as not-below / not-above.
 
@@ -192,8 +199,14 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
     `n_eligible` is None when the first hop carries no `scoring` record (that
     is "unknown", never evidence of a single eligible candidate).
 
-    - `failover`: some attempted model was not served (attempts > served hops).
+    - `failover`: some attempted model was not served (attempts > served hops),
+      or (B71) an open circuit moved the served tier below the targeted one
+      (`tier_downgraded`) -- the tier is then explained by the diversion.
     - `escalation`: more than one served hop (confidence escalation), no failure.
+    - `quality_floor` (B80): an ENFORCED quality floor was met
+      (`floor_status == "met"`), so the served model is the cheapest
+      qualifier. Shadow and unmet statuses never claim it -- the floor did not
+      pick the model then.
     - `placement`: a placement-rejected candidate sat at or above the length
       tier but below the served tier -- placement, not length, forced the tier up.
     """
@@ -202,10 +215,12 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
                                      RESIDENCY)
     if cache_hit or not attempts:
         return None
-    if len(attempts) > served_hops:
+    if len(attempts) > served_hops or tier_downgraded:
         return "failover"
     if served_hops > 1:
         return "escalation"
+    if floor_status == "met":
+        return "quality_floor"
     placement = {RESIDENCY, REGION_NOT_ALLOWED, PROMPT_RETENTION_NOT_ALLOWED,
                  RAW_SENSITIVE_NOT_ACCEPTED}
     chosen_r, tt, ct = _rank(chosen_tier), _rank(tier_target), _rank(complexity_tier)
@@ -244,13 +259,21 @@ def _rejected_rows(rejected) -> list[dict]:
 
 
 def _attempts(trace: list[dict]) -> list[str]:
-    """Every model tried, in hop order: a failed gateway hop's own first-
-    scored candidate name, interleaved with each router hop's served
-    `chosen`, sorted by `hop_index` (defaulting to 0 for a hand-built
-    fixture that omits it -- real trace entries always carry one)."""
+    """Every model tried, in hop order: a failed gateway hop's `attempted`
+    model, interleaved with each router hop's served `chosen`, sorted by
+    `hop_index` (defaulting to 0 for a hand-built fixture that omits it --
+    real trace entries always carry one).
+
+    `attempted` is authoritative: under an enforced quality floor (B80) the
+    tried model is the cheapest qualifier, not necessarily the top-scored
+    one. Only a record written before `attempted` existed falls back to its
+    first-scored candidate, which is what the gateway tried back then."""
     ordered: list[tuple[int, str]] = []
     for e in trace:
         if e.get("step") == "gateway" and e.get("chosen") is None and e.get("scoring"):
+            if e.get("attempted"):
+                ordered.append((e.get("hop_index", 0), e["attempted"]))
+                continue
             candidates = (e.get("scoring") or {}).get("candidates") or []
             if candidates:
                 ordered.append((e.get("hop_index", 0), candidates[0]["name"]))
@@ -369,6 +392,13 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "reply_has_text": outcome_ctx.get("reply_has_text"),
         "reply_tool_calls": outcome_ctx.get("reply_tool_calls"),
         "reasoning_tokens": outcome_ctx.get("reasoning_tokens"),
+        # B69: the tool-argument bar's counts -- two ints and entity TYPES.
+        # None on a row written before the gate ran.
+        "tool_arg_redactions": outcome_ctx.get("tool_arg_redactions"),
+        "tool_arg_skipped": outcome_ctx.get("tool_arg_skipped"),
+        "tool_arg_skipped_types": (list(outcome_ctx["tool_arg_skipped_types"])
+                                   if outcome_ctx.get("tool_arg_skipped_types")
+                                   is not None else None),
     }
 
 
@@ -391,6 +421,10 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
       it never falls back to a later router hop.
     - `circuit_bypass` is True when ANY decision hop -- router or failed
       gateway -- bypassed an open circuit.
+    - `scoring.tier_downgrade` (B70/B71) is the LAST decision hop's
+      `tier_downgrade` -- the step below the targeted tier that a prior
+      failure or an open circuit forced (usually on a later hop than the
+      one `scoring` describes, so it is copied in); absent when none did.
     - `chosen` is the SERVED model: the last router hop with a `chosen`.
     - `attempts` is every model tried, in hop order.
     - `cache_hit` is True when a semantic-cache entry served the request (no
@@ -416,6 +450,15 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
     cache_hit = any(e.get("step") == "cache" and e.get("hit") for e in trace)
     full_rejected = (first.get("rejected") or []) if first else []
     chosen_tier = chosen_hops[-1].get("chosen_tier") if chosen_hops else None
+    # B80: the floor status of the FIRST served router hop. With more than
+    # one served hop, escalation/failover win the reason anyway.
+    first_floor = (((chosen_hops[0].get("scoring") or {}).get("quality_floor") or {})
+                   if chosen_hops else {})
+    downgrades = [h["tier_downgrade"] for h in decision_hops if h.get("tier_downgrade")]
+    if isinstance(scoring, dict):
+        scoring = {k: v for k, v in scoring.items() if k != "tier_downgrade"}
+        if downgrades:
+            scoring["tier_downgrade"] = downgrades[-1]
     return {
         "tier_target": tier_target,
         "eligible": eligible,
@@ -425,7 +468,9 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
             tier_target=tier_target, complexity_tier=complexity_tier,
             rejected=full_rejected,
             n_eligible=len(eligible) if scoring else None,
-            served_hops=len(chosen_hops)),
+            served_hops=len(chosen_hops),
+            floor_status=first_floor.get("status"),
+            tier_downgraded=bool(downgrades)),
         "attempts": attempts,
         "chosen": chosen,
         "scoring": scoring,
@@ -451,7 +496,9 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
                            prompt_tokens: int = 0,
                            completion_tokens: int = 0,
                            cost_usd: float = 0.0,
-                           conflicting_core: dict | None = None) -> dict:
+                           conflicting_core: dict | None = None,
+                           routing_trace: list[dict] | None = None,
+                           no_failover: bool = False) -> dict:
     """A `routing_outcomes` row for a request that never reached (or never
     completed) a served response. Fills what it is given -- `status`, the
     ids/versions, the policy-context features (known once the gate ran,
@@ -478,6 +525,19 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
     core in `ConflictingCore.to_record()` shape -- requirement ids and their
     content-free details, endpoint state, and a count. Stored as given; the
     caller passes `None` for every other status.
+
+    `routing_trace` (B70 item 2; a `backend_failed`/`context_overflow` row
+    whose request reached the router): the content-free `decision_trace` of
+    the gateway's records up to the failure. Its routing columns --
+    `tier_target`, `eligible`, `rejected`, `scoring`, `circuit_bypass` --
+    are read through `trace_features` exactly as for an `ok` row, and
+    `attempts` falls back to its attempt chain when the caller gave none.
+    Nothing was served, so `chosen`, cost and tokens stay empty.
+
+    `no_failover` (B70 item 1): the request's only eligible endpoint failed
+    and nothing was left to fail over to -- `route_reason` reads
+    `no_failover`, distinguishing a feasible set of one from a generic
+    backend failure.
     """
     row = {
         "request_id": request_id,
@@ -513,6 +573,14 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "verify_mode": None,
         "conflicting_core": conflicting_core,
     }
+    if trace is None and routing_trace:
+        f = trace_features(routing_trace, outcome_ctx.get("complexity_tier"))
+        row.update({k: f[k] for k in ("tier_target", "eligible", "rejected",
+                                      "scoring", "circuit_bypass")})
+        if not row["attempts"]:
+            row["attempts"] = f["attempts"]
+    if no_failover and trace is None:
+        row["route_reason"] = "no_failover"
     if trace is not None:
         row.update(trace_features(trace, outcome_ctx.get("complexity_tier")))
         row.update({

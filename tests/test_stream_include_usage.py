@@ -115,3 +115,48 @@ def test_stream_options_not_forwarded_upstream(client, monkeypatch):
     # the backend always asks upstream for usage (its own metering), whatever
     # the client sent -- the client's False is never forwarded
     assert _litellm_fake.CALLS[-1]["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.parametrize("mode", ["stream_unverified", "incremental_verify",
+                                  "verified_then_stream"])
+def test_terminal_usage_frame_carries_nested_cached_tokens(client, monkeypatch, mode):
+    """B43: the stream's terminal usage frame uses OpenAI's nested
+    `prompt_tokens_details.cached_tokens`, exactly like the non-stream body,
+    and the chunk parses with the real SDK model."""
+    from tests import _litellm_fake
+    from tests._litellm_fake import FakeResponse, _FakeStreamChunk
+
+    usage = {"prompt_tokens": 12, "completion_tokens": 7,
+             "prompt_tokens_details": {"cached_tokens": 8}}
+    if mode == "verified_then_stream":
+        monkeypatch.setattr(litellm_backend, "acompletion",
+                            _litellm_fake.make_recording_acompletion(FakeResponse({
+                                "choices": [{"message": {"role": "assistant",
+                                                         "content": "Hello, world!"}}],
+                                "usage": usage})))
+    else:
+        async def _call(**kwargs):
+            async def _gen():
+                for d in _DELTAS:
+                    yield _FakeStreamChunk(content=d)
+                yield _FakeStreamChunk(empty_choices=True, usage=usage)
+            return _gen()
+        monkeypatch.setattr(litellm_backend, "acompletion", _call)
+
+    token = _make_app(client, f"iu-cached-{mode}", stream_mode=mode)
+    frames = _frames(_post(client, token, include_usage=True).text)
+    chunk = frames[-2]
+    assert chunk["usage"]["prompt_tokens_details"] == {"cached_tokens": 8}
+    assert chunk["usage"]["cached_prompt_tokens"] == 8       # deprecated duplicate
+    ChatCompletionChunk = pytest.importorskip(
+        "openai.types.chat").ChatCompletionChunk
+    parsed = ChatCompletionChunk.model_validate(chunk)
+    assert parsed.usage.prompt_tokens_details.cached_tokens == 8
+
+
+def test_terminal_usage_frame_omits_nested_details_when_unreported(client, monkeypatch):
+    _patch_backend(monkeypatch, "stream_unverified")   # fake reports no cache
+    token = _make_app(client, "iu-nocache", stream_mode="stream_unverified")
+    u = _frames(_post(client, token, include_usage=True).text)[-2]["usage"]
+    assert "prompt_tokens_details" not in u
+    assert u["cached_prompt_tokens"] == 0

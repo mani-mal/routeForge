@@ -42,6 +42,10 @@ class AppPolicyView:
     pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
     pii_score_threshold: float | None = None  # min Presidio confidence; None = no floor
     pii_exempt_patterns: frozenset[str] | None = None  # regexes; VALUE fullmatch => not redacted
+    # B69: min detector score for rewriting a span inside tool-call arguments.
+    # None = inherit serving.yaml policy.tool_args_min_score. Resolved by
+    # app/policy/compile.py (effective = max(pii_score_threshold, this)).
+    tool_args_min_score: float | None = None
     # --- P1a data-handling axes. null = inherit; resolved by
     # app/policy/compile.py::compile_policy, not here.
     model_input: str | None = None            # None = inherit (policy_mode preset)
@@ -59,6 +63,11 @@ class AppPolicyView:
     # Pinned model aliases as sorted (alias, slug) pairs: a tuple keeps the
     # frozen view hashable. None = no aliases.
     model_aliases: tuple[tuple[str, str], ...] | None = None
+    # B80: this app's own quality floors as sorted (workload, floor) pairs
+    # (hashable, like model_aliases) and floor mode. None = inherit. Raise-only:
+    # resolved against the deployment's floors elsewhere, never lowering them.
+    quality_floors: tuple[tuple[str, float], ...] | None = None
+    quality_floor_mode: str | None = None
 
     def alias_target(self, name: str) -> str | None:
         """The slug this app's alias `name` points at, or None if it has none."""
@@ -124,6 +133,9 @@ class AppPolicyView:
                 self.escalate_residency_on_detection
         if self.trajectory_mode is not None:
             fields["trajectory_mode"] = self.trajectory_mode
+        # B69: same "fold in only when set" rule.
+        if self.tool_args_min_score is not None:
+            fields["tool_args_min_score"] = self.tool_args_min_score
         # P1b data-handling requirements: same "fold in only when set" rule.
         if self.allowed_regions is not None:
             fields["allowed_regions"] = sorted(self.allowed_regions)
@@ -132,6 +144,11 @@ class AppPolicyView:
         # Aliases change which model a request name means: same rule.
         if self.model_aliases is not None:
             fields["model_aliases"] = dict(self.model_aliases)
+        # B80 floors change which model serves a request: same rule.
+        if self.quality_floors is not None:
+            fields["quality_floors"] = dict(self.quality_floors)
+        if self.quality_floor_mode is not None:
+            fields["quality_floor_mode"] = self.quality_floor_mode
         blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -142,6 +159,14 @@ def _fs(v) -> frozenset[str] | None:
 
 def alias_pairs(v) -> tuple[tuple[str, str], ...] | None:
     return tuple(sorted(v.items())) if v else None
+
+
+def floor_pairs(v) -> tuple[tuple[str, float], ...] | None:
+    """A {workload: floor} dict (or an already-paired list) as sorted pairs."""
+    if not v:
+        return None
+    items = v.items() if isinstance(v, dict) else v
+    return tuple(sorted((str(k), float(f)) for k, f in items))
 
 
 def policy_view_from(app: Application) -> AppPolicyView:
@@ -174,7 +199,10 @@ def policy_view_from(app: Application) -> AppPolicyView:
         allowed_regions=_fs(p.allowed_regions),
         require_no_retention=p.require_no_retention,
         trajectory_mode=p.trajectory_mode,
+        tool_args_min_score=p.tool_args_min_score,
         model_aliases=alias_pairs(p.model_aliases),
+        quality_floors=floor_pairs(p.quality_floors),
+        quality_floor_mode=p.quality_floor_mode,
     )
 
 

@@ -162,13 +162,14 @@ def test_ce1_onprem_raw_capture_is_refused_at_write_time_not_relabelled():
     """What replaced the clamp. `onprem_only` + raw capture without a declared
     no-protection posture is now a named 422 at save time, so the operator is
     told; it is no longer accepted and quietly downgraded to a label the
-    export could not honour (CLAUDE.md rule 2, amended 2026-09-05)."""
+    export could not honour (CLAUDE.md rule 2, amended 2026-09-05). Since B31
+    the same refusal applies at every residency."""
     eff = compile_policy(
         AppPolicyView(residency="onprem_only", policy_mode="enforced",
                       capture_io="full"), OPEN)
     with pytest.raises(PolicyViolation) as exc:
         validate_effective(eff, OPEN, has_own_langfuse_project=True)
-    assert exc.value.code == "CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION"
+    assert exc.value.code == "CAPTURE_FULL_NEEDS_NO_PROTECTION"
 
 
 # =============================================================================

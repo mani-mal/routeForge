@@ -31,12 +31,14 @@ const RISK: Record<string, { icon: string; label: string }> = {
 };
 
 const REASON_LABEL: Record<string, string> = {
-  failover: "cheaper model failed",
+  failover: "endpoint failed or circuit open",
   escalation: "confidence escalation",
   placement: "placement rule",
   risk_floor: "risk floor",
+  quality_floor: "quality floor",
   length_tier: "request length",
   only_eligible: "only eligible model",
+  no_failover: "failed: no failover candidate",
   other: "other",
 };
 

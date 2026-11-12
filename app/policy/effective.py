@@ -7,15 +7,16 @@ from collections.abc import Iterable
 
 from app.models import Entity
 from app.policy.detectors import Detector, RegexDetector
-from app.policy.merge import dedupe
+from app.policy.merge import PROTECTED_ENTITIES, dedupe, is_protected
 from app.policy.recognizers import CustomRecognizer
 
-# The one entity type that carries an absolute privacy guarantee (CLAUDE.md
-# rules 3/8): an SSN must never slip the gate, so an app can neither denylist it
-# nor threshold it away. PresidioDetector seeds it with score=1.0 precisely so
-# it survives dedupe; FilteredDetector honors the same contract on egress from
-# the filter, so no per-app tuning can ever un-redact an SSN.
-PROTECTED_ENTITIES = frozenset({"US_SSN"})
+# `PROTECTED_ENTITIES` (defined in app/policy/merge.py, re-exported here): the
+# one entity type that carries an absolute privacy guarantee (CLAUDE.md rules
+# 3/8): an SSN must never slip the gate, so an app can neither denylist it nor
+# threshold it away. PresidioDetector seeds it with score=1.0 precisely so it
+# survives dedupe; FilteredDetector honors the same contract on egress from the
+# filter, so no per-app tuning can ever un-redact an SSN.
+__all__ = ["PROTECTED_ENTITIES", "FilteredDetector", "EffectiveDetector"]
 
 
 class FilteredDetector:
@@ -53,13 +54,19 @@ class FilteredDetector:
         self._exempt = [re.compile(p) for p in (exempt_patterns or ())]
 
     def _keep(self, e: Entity) -> bool:
+        # `is_protected`, not `e.type in PROTECTED_ENTITIES`: a span the base
+        # detector's `dedupe` merged may be TYPED after a non-protected best
+        # member (PHONE_NUMBER 0.75 absorbing US_SSN 0.4) while still covering
+        # the SSN. Checking the type alone let a denylist, threshold or
+        # exempt pattern drop that SSN from detection and redaction.
+        if is_protected(e):
+            return True
         if e.type in self._deny:
             return False
-        if (self._threshold is not None and e.type not in PROTECTED_ENTITIES
+        if (self._threshold is not None
                 and e.score is not None and e.score < self._threshold):
             return False
-        if (e.type not in PROTECTED_ENTITIES and self._exempt
-                and any(p.fullmatch(e.value or "") for p in self._exempt)):
+        if self._exempt and any(p.fullmatch(e.value or "") for p in self._exempt):
             return False
         return True
 

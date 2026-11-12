@@ -66,7 +66,10 @@ guarantees.
    **only** to that app's **own** provisioned Langfuse project. It requires the
    deployment ceiling to permit it (`allow_app_pii_downgrade` for
    `pii_detection=off`, `allow_app_passthrough` for `policy_mode=passthrough`) and
-   the app to be in a declared no-protection posture. The shared project never
+   the app to be in a declared no-protection posture at any residency:
+   `model_input` and `client_output` both `raw` (for `onprem_only`, nothing
+   else qualifies), or, off-prem, also its own `pii_detection=off`.
+   The shared project never
    receives raw I/O; the exporter fails closed to `redacted` if the app's project
    is missing.
 
@@ -84,8 +87,11 @@ guarantees.
    is shown), `client_output` (`raw | redact` — what the client receives),
    `capture_io` (`off | redacted | full` — what telemetry stores), `pii_detection`
    (`off | regex | presidio` — which detector), `content_integrity`
-   (`transformations_allowed | exact` — whether lossy compression may run) and
-   `stream_mode`. `policy_mode` is a **preset**, not a seventh axis: `enforced`
+   (`transformations_allowed | exact` — whether lossy compression may run),
+   `stream_mode` and `tool_args_min_score` (0–1 — the minimum detector score for
+   rewriting a span of a deployment-listed noisy type inside tool-call arguments;
+   other types always rewritten; rewriting only, never detection).
+   `policy_mode` is a **preset**, not a seventh axis: `enforced`
    resolves to `model_input: redact` + `client_output: redact`, `passthrough` to
    `raw` + `raw` (and, only when the app names no detector, `pii_detection: off`).
 
@@ -132,7 +138,8 @@ guarantees.
 8. **Residency beats the risk floor.** The residency filter runs before the risk
    floor. A high-risk `onprem_only` request floors to the best *allowed* (on-prem)
    tier and sets `require_verification` — it is **never** lifted to a cloud tier to
-   satisfy the floor. (High-risk + PHI is the hospital persona — the most important case
+   satisfy the floor. Only policy lowers the floor: failover and the circuit breaker never
+   serve a request below its risk/escalation floor. (High-risk + PHI is the hospital persona — the most important case
    to get right; both step 6 routing and step 9 verification obey this.)
 
 ## Architecture — the ten steps
@@ -201,7 +208,10 @@ effect before anyone applies it — see `docs/reference/policy-simulator.md`. Si
 empty feasible set's 422 names the minimal conflicting core — the smallest set of
 requirements no available endpoint meets together, with endpoint state kept separate and
 remediation hints that never relax a security requirement — see
-`docs/reference/conflicting-core.md`.
+`docs/reference/conflicting-core.md`. Since B80, an opt-in quality-floor path
+(`routing.yaml` `quality_floors`, raise-only per app) picks the cheapest eligible model whose
+calibrated quality lower bound clears a per-workload floor, and falls back to tier routing,
+never to rejection, when none does — see `docs/reference/per-app-config.md`.
 
 ## Configuration — everything switchable at startup
 
@@ -262,7 +272,17 @@ non-zero with a named violation on any of:
   check any more;
 - every `model_pool` entry has a price in `pricing.yaml`;
 - no concern owned by two files (no duplicated `max_spend_usd`, thresholds, etc.);
-- one sensitivity enum, used by name wherever sensitivity is matched.
+- one sensitivity enum, used by name wherever sensitivity is matched, and equal to
+  `app/policy/enums.py::SENSITIVITY`;
+- `routing.tiers` is exactly `cheap | mid | frontier` (`TIER_SET_NONCANONICAL`);
+- `onprem` is declared under `serving.providers`, enabled or not
+  (`ONPREM_PROVIDER_MISSING`);
+- `routing.risk_floors` has exactly the `low | medium | high` keys, and every
+  sensitivity rule's `risk_class` is one of them (`RISK_FLOOR_CLASS_*`,
+  `RULE_RISK_CLASS_UNKNOWN`);
+- one owner per concern, by top-level key: a key sitting in a file that does not
+  own it fails the boot (`CONCERN_IN_WRONG_FILE`); a key no file owns only logs a
+  warning (`UNKNOWN_CONFIG_KEY`), so a stale key never takes down a customer's boot.
 
 This turns every drift class into a **boot failure instead of a silent misconfiguration**,
 and keeps working as configs evolve. It is the single highest-leverage guardrail in the

@@ -692,3 +692,42 @@ def test_statuses_constant():
     assert set(STATUSES) == {
         "ok", "backend_failed", "verify_failed", "no_eligible", "context_overflow",
         "cancelled"}
+
+
+# --- B80: a floor can serve a model that is not the top-scored one ----------
+
+def test_attempts_uses_attempted_when_floor_reorders():
+    """Under an enforced quality floor the router serves the CHEAPEST
+    qualifier, which need not be `scoring.candidates[0]` (scoring stays
+    score-ranked). A failed gateway hop therefore names its model explicitly
+    in `attempted`, and `attempts` must read that, never the top-scored name."""
+    scoring = {"weights": {}, "signals_enabled": False, "latency_scale_ms": 1.0,
+               "max_latency_norm": 1.0,
+               "candidates": [{"name": "top-scored", "score": 0.9},
+                              {"name": "cheap-qualifier", "score": 0.4}],
+               "quality_floor": {"floor": 0.8, "mode": "enforce",
+                                 "workload": "claims", "status": "met"}}
+    failed = DecisionRecord(
+        step="gateway", chosen=None, reason="cheap-qualifier failed",
+        hop_index=0, scoring=scoring, attempted="cheap-qualifier").model_dump()
+    trace = [failed, _router_hop("next-qualifier", hop_index=1), _verify()]
+    row = build_ok_outcome(
+        _resp(trace), request_id="req-2", application_id="app-1",
+        outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+        workload="claims", workload_source="client")
+    assert row["attempts"] == ["cheap-qualifier", "next-qualifier"]
+    assert row["route_reason"] == "failover"
+
+
+def test_attempts_falls_back_to_first_scored_for_old_records():
+    """A record written before `attempted` existed still reads as before."""
+    trace = [_gateway_failed_hop("a", hop_index=0), _router_hop("b", hop_index=1),
+             _verify()]
+    assert "attempted" in trace[0] and trace[0]["attempted"] is None
+    old = {k: v for k, v in trace[0].items() if k != "attempted"}
+    for first in (trace[0], old):
+        row = build_ok_outcome(
+            _resp([first, *trace[1:]]), request_id="req-2", application_id="app-1",
+            outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
+            workload=None, workload_source="none")
+        assert row["attempts"] == ["a", "b"]

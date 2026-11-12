@@ -312,7 +312,7 @@ def test_apply_reports_version_match_and_forced_and_audits(caplog):
             "quality_calibration_reverted"]
         assert lines[1]["forced"] is True and lines[1]["units"] == 1
         assert lines[1]["set_id"] == stale["set_id"]
-        assert lines[2]["units"] == 1
+        assert lines[2]["units"] == 2  # score row + bound row
         assert all(line["admin_id"] for line in lines)
 
 
@@ -455,3 +455,35 @@ def test_end_to_end_calibration_round_trip_and_round_two():
         u2 = next(u for u in est2["units"] if u["model"] == model and u["workload"] is None)
         assert (u2["q0"], u2["q0_source"]) == (unit["q0"], unit["q0_source"])
         assert u2["reason"] != "no prior"
+
+
+# --------------------------------------------------------------------------- #
+# B80 final fix: a failure building the overrides keeps BOTH last-good snapshots
+# --------------------------------------------------------------------------- #
+def test_refresh_quality_failure_building_overrides_keeps_both_snapshots(monkeypatch):
+    with _client() as c:
+        q = c.app.state.quality
+
+        async def go():
+            good_rows = {("local-8b", None): {"calibrated": (0.4, "good")}}
+            good_bounds = {("local-8b", None): (0.3, "good")}
+            q.set_overrides({k: [QualityScore(s, src, sid)
+                                 for src, (s, sid) in v.items()]
+                             for k, v in good_rows.items()})
+            q.set_bounds(good_bounds)
+
+            async def bad_rows(session):
+                return {("local-8b", None): 5}        # malformed: no .items()
+
+            async def new_bounds(session):
+                return {("local-8b", None): (0.9, "new")}
+
+            monkeypatch.setattr(store, "load_quality_overrides", bad_rows)
+            monkeypatch.setattr(store, "load_quality_bounds", new_bounds)
+            ok = await refresh_quality(c.app)
+            return ok, q.resolve("local-8b"), q.resolve_lower("local-8b", None)
+
+        ok, score, lower = c.portal.call(go)
+        assert ok is False
+        assert (score.score, score.set_id) == (0.4, "good")
+        assert lower == (0.3, "calibrated")

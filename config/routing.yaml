@@ -120,3 +120,11 @@ fallback:
 # (store.load_quality_overrides) into the shared QualityResolver snapshot.
 # Apply/revert also refresh at once. Single-owned here; must be > 0.
 quality_refresh_s: 60
+
+# B80 quality-floor routing: pick the cheapest model whose calibrated quality
+# lower bound clears a per-workload floor. mode: off | shadow | enforce
+# (deployment default; per-app override -- see docs/reference/per-app-config.md).
+# workloads: lower-case workload key -> floor in (0, 1].
+quality_floors:
+  mode: "off"   # quoted: bare off is a YAML boolean
+  workloads: {}

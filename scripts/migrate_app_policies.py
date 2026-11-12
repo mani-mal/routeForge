@@ -59,6 +59,8 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("compression_enabled", "BOOLEAN", "BOOLEAN"),
     ("trajectory_mode", "VARCHAR(16)", "VARCHAR(16)"),
     ("model_aliases", "JSON", "JSON"),
+    ("quality_floors", "JSON", "JSON"),
+    ("quality_floor_mode", "VARCHAR(16)", "VARCHAR(16)"),
     ("capture_io", "VARCHAR(16)", "VARCHAR(16)"),
     ("pii_detection", "VARCHAR(16)", "VARCHAR(16)"),
     ("stream_mode", "VARCHAR(24)", "VARCHAR(24)"),
@@ -86,6 +88,9 @@ COLUMNS: list[tuple[str, str, str]] = [
     # 2026-11-05 model metrics slice 4 — display-only monthly budget. NULL = no
     # budget shown; never read by enforcement or by AppPolicy.version().
     ("monthly_budget_usd", "DOUBLE PRECISION", "FLOAT"),
+    # 2026-11-11 B69 — the tool-argument bar. NULL = inherit serving.yaml
+    # policy.tool_args_min_score.
+    ("tool_args_min_score", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 # The endpoint-side half of the same feature: what an operator DECLARED about
@@ -106,6 +111,10 @@ MODEL_COLUMNS: list[tuple[str, str, str]] = [
     # NULL on every existing row, which reads as "unknown provenance" and
     # changes no stored context_window.
     ("context_window_source", "VARCHAR(16)", "VARCHAR(16)"),
+    # 2026-11-11 B68 -- the endpoint's API key as a Fernet token under
+    # ENCRYPTION_KEY. NULL on every existing row = no stored key; the row keeps
+    # using its api_key_env (or the provider default) exactly as before.
+    ("api_key_enc", "TEXT", "TEXT"),
 ]
 
 # 2026-09-19 P2a cached-token accounting. Nullable with no default: an existing
@@ -150,6 +159,10 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("reply_has_text", "BOOLEAN", "BOOLEAN"),
     ("reply_tool_calls", "INTEGER", "INTEGER"),
     ("reasoning_tokens", "INTEGER", "INTEGER"),
+    # 2026-11-11 B69 — the tool-argument bar's content-free counts.
+    ("tool_arg_redactions", "INTEGER", "INTEGER"),
+    ("tool_arg_skipped", "INTEGER", "INTEGER"),
+    ("tool_arg_skipped_types", "JSON", "JSON"),
 ]
 
 APPLICATIONS_TABLE = "applications"

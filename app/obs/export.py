@@ -409,6 +409,24 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 root.set_attribute(
                     "sp.detected_entity_types",
                     ",".join(policy.get("detected_entity_types", [])))
+            if policy.get("tool_args_min_score") is not None:
+                # B69: the effective tool-argument bar and what it did on
+                # this request -- spans rewritten inside tool-call arguments,
+                # spans that passed through below the bar, and the latter's
+                # entity TYPES (a bounded vocabulary, never a value). A
+                # skipped match is counted and named here, never silent.
+                root.set_attribute("sp.tool_args_min_score",
+                                   float(policy["tool_args_min_score"]))
+                # The entity types the bar applies to (deployment-level);
+                # every other type is always rewritten in tool arguments.
+                root.set_attribute("sp.tool_args_bar_types",
+                                   ",".join(policy.get("tool_args_bar_types") or []))
+                root.set_attribute("sp.tool_arg_redactions",
+                                   int(policy.get("tool_arg_redactions") or 0))
+                root.set_attribute("sp.tool_arg_skipped",
+                                   int(policy.get("tool_arg_skipped") or 0))
+                root.set_attribute("sp.tool_arg_skipped_types",
+                                   ",".join(policy.get("tool_arg_skipped_types") or []))
             checks = policy.get("checks")
             if checks:
                 # sp.checks (design §6): the one per-request proof the
@@ -489,6 +507,18 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                         if rec.get("scoring"):
                             sp.set_attribute("sp.scoring",
                                              json.dumps(redact_tree(rec["scoring"])))
+                            # B80: the hop's quality-floor status, a fixed
+                            # enum -- filterable without parsing sp.scoring.
+                            floor = rec["scoring"].get("quality_floor")
+                            if isinstance(floor, dict) and floor.get("status"):
+                                sp.set_attribute("sp.quality_floor_status",
+                                                 redact_value(str(floor["status"])))
+                        if isinstance(rec.get("tier_downgrade"), dict):
+                            # B70/B71: the hop was served below the tier its
+                            # targeting picked, by a prior failure or an open
+                            # circuit. Tier names + a cause enum only.
+                            sp.set_attribute("sp.tier_downgrade",
+                                             json.dumps(redact_tree(rec["tier_downgrade"])))
                         for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                             if rec.get(k) is not None:
                                 sp.set_attribute(f"sp.{k}", float(rec[k]))

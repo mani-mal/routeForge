@@ -174,14 +174,31 @@ def _pricey(slug: str, tier: str) -> dict:
 
 
 def test_budget_fallback_tier_is_computed_before_circuits():
-    """Frontier is over budget -> budget fallback to mid. The only mid is open:
-    the fallback must still land on mid (bypass within it), not on cheap."""
+    """Frontier is over budget -> budget fallback to mid, computed before
+    circuits. The only mid is open; mid is above the hard floor (low risk:
+    cheap) -- only complexity raised the target -- so since B71 item 1 the
+    breaker steps down to the closed cheap model and records it (`from` is the
+    targeted tier, frontier), instead of bypassing within mid."""
     reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid"),
                 "f": _pricey("f", "frontier")})
     d = Router(S, registry=reg).select(_ctx(reg, {"onprem"}, onprem=True), 20, 0.9,
                                         open_circuits=frozenset({"m"}))
-    assert d.chosen.name == "m" and d.circuit_bypass is True
+    assert d.chosen.name == "a" and d.circuit_bypass is False
     assert "budget fallback from frontier" in d.reason
+    assert d.tier_downgrade == {"from": "frontier", "to": "cheap", "cause": "circuit_open"}
+    assert any(r.name == "m" and r.code == "circuit_open" for r in d.rejected)
+
+
+def test_budget_fallback_open_tier_at_the_hard_floor_still_bypasses():
+    """The same pool with medium risk (hard floor mid): the open mid IS the
+    hard floor, so the router bypasses within it -- never cheap."""
+    reg = _reg({"a": _onprem("a"), "m": _onprem("m", tier="mid"),
+                "f": _pricey("f", "frontier")})
+    d = Router(S, registry=reg).select(
+        _ctx(reg, {"onprem"}, onprem=True, risk="medium"), 20, 0.9,
+        open_circuits=frozenset({"m"}))
+    assert d.chosen.name == "m" and d.circuit_bypass is True
+    assert d.tier_downgrade is None
 
 
 def test_budget_fallback_prefers_closed_peer_in_fallback_tier():

@@ -3,7 +3,7 @@
 Operator-facing reference for the per-app override knobs — `residency`, `policy_mode`,
 `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`,
 `escalate_residency_on_detection`, `pii_entity_denylist`, `pii_score_threshold`,
-`pii_exempt_patterns` and `stream_mode`. For the *why* (which knobs are safe to expose
+`pii_exempt_patterns`, `tool_args_min_score` and `stream_mode`. For the *why* (which knobs are safe to expose
 per-app and which aren't), read the per-app-config flexibility design note
 first — this page is the how-to. If the question is *"I have a new app, what should I
 set?"* rather than *"what does this field do?"*, start with
@@ -32,7 +32,7 @@ to prevent:
 | | Governs | Fields |
 |---|---|---|
 | **Placement** | *Where compute may run.* Nothing else. | `residency`, and the placement-adjacent `allowed_regions` / `require_no_retention` |
-| **Protection** | *How much is done to the data.* Nothing else. | `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`, `stream_mode` |
+| **Protection** | *How much is done to the data.* Nothing else. | `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`, `stream_mode`, `tool_args_min_score` |
 
 `allowed_regions` and `require_no_retention` are placement-adjacent **constraints** rather
 than a second placement axis: they can only narrow which endpoints a request may reach,
@@ -74,6 +74,7 @@ true in the compiler *and* in `app/policy/context.py`, which calls the same
 | `pii_detection` | `off` \| `regex` \| `presidio` | Which **detector** the above use when one is needed. `null` inherits `serving.policy.pii_detection`. |
 | `content_integrity` | `transformations_allowed` (default) \| `exact` | `exact` disables all lossy compression (Headroom) for the app, so its content survives byte-for-byte. A **data** control, not a privacy control: it never changes placement. |
 | `stream_mode` | `off` \| `verified_then_stream` \| `stream_unverified` \| `incremental_verify` | How `stream: true` is served. No deployment-wide default — `null` means the app never opted in. See [`stream_mode`](#stream_mode) below. |
+| `tool_args_min_score` | float in `[0.0, 1.0]` (deployment default `0.5`) | The **tool-argument bar**: inside tool-call `function.arguments` only, a detected span of a type in the deployment's `tool_args_bar_types` list is rewritten only if its detector score is at least this; every other type is always rewritten. Rewriting only — detection, classification and message text are unchanged. See [`tool_args_min_score`](#tool_args_min_score--the-tool-argument-bar) below. |
 | `escalate_residency_on_detection` | `true` (default when `null`) \| `false` | Whether a declared `sensitivity_rules` entry may **raise** this app's residency. It can only ever prevent a tightening; it can never loosen placement, and `false` does not stop the rule from setting `require_verification` or the sensitivity label. |
 
 `policy_mode` is **not a seventh axis.** It is a preset over two of them — see below.
@@ -162,7 +163,7 @@ falls back to. A rejected write applies nothing at all. Codes are from
 | `PASSTHROUGH_FORBIDDEN` | `policy_mode: passthrough`, or `model_input: raw`, or `client_output: raw`, while `allow_app_passthrough` is false | lift the deployment ceiling, or stay protected |
 | `PII_DOWNGRADE_FORBIDDEN` | a per-app `pii_detection` of `off`/`regex` while `allow_app_pii_downgrade` is false | lift the ceiling, or use the narrow levers (`pii_entity_denylist` etc.), which this ceiling does not gate |
 | `CAPTURE_FULL_NEEDS_OWN_PROJECT` | `capture_io: full` with no provisioned per-app Langfuse project | attach the app's own project first, or use `redacted` |
-| `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` | `capture_io: full` on an `onprem_only` app that has not declared `model_input: raw` **and** `client_output: raw` | declare the posture (`policy_mode: passthrough` resolves both), or use `redacted`/`off` |
+| `CAPTURE_FULL_NEEDS_NO_PROTECTION` | `capture_io: full` on an app — **at any residency** — that has not declared a no-protection posture. **`onprem_only`:** `model_input: raw` **and** `client_output: raw` only (unchanged by B31 — `pii_detection: off` alone does not qualify); **any other residency:** that, **or** `pii_detection: off` set by the app (or by its `passthrough` preset). The message names the condition for the app's residency. Replaced the `onprem_only`-only `CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION` on 2026-11-11 (B31); the code was never on the wire (the 422 carries the message only) | declare the posture (`policy_mode: passthrough` resolves both data axes; off-prem, `pii_detection: off` also qualifies), or use `redacted`/`off` |
 | `CAPTURE_REDACTED_NEEDS_A_DETECTOR` | `capture_io: redacted` with `pii_detection` resolving to `off` | set `pii_detection` to `regex` or `presidio`, or use `off`/`full` |
 | `STREAM_UNVERIFIED_FORBIDDEN_ONPREM` | `stream_mode: stream_unverified` on an `onprem_only` app | use `verified_then_stream` or `incremental_verify` |
 | `STREAM_UNVERIFIED_FORBIDDEN_REDACTED_OUTPUT` | `stream_mode: stream_unverified` with an **explicitly set** `client_output: redact` | use `incremental_verify` or `verified_then_stream`, or set `client_output: raw` |
@@ -196,8 +197,11 @@ consumer its own view of the data, and each is a deliberate contract change:
    `redact`, whatever the model was shown.
 
 Every other combination behaves exactly as it did. In particular these stay **rejected**:
-`onprem_only + enforced + capture_io: full`; `capture_io: full` with no own Langfuse
-project; `capture_io: redacted` with no detector; `stream_unverified + onprem_only`.
+`capture_io: full` without a declared no-protection posture (at any residency since B31,
+2026-11-11; before that, only `onprem_only` apps were checked, and their rule — raw/raw
+only — is unchanged); `capture_io: full` with no
+own Langfuse project; `capture_io: redacted` with no detector; `stream_unverified +
+onprem_only`.
 
 ### Recipes
 
@@ -251,6 +255,9 @@ sp.cross_axis_rules_fired, sp.detected_entity_types     # types only, never valu
 sp.candidates, sp.app_policy_version, sp.routing_policy_version
 sp.endpoint_registry_version, endpoint_data_handling    # the endpoint declarations a decision rested on
 sp.checks: {chosen_in_eligible_set, fallback_in_eligible_set}
+sp.tool_args_min_score, sp.tool_args_bar_types,          # the tool-argument bar, its types
+sp.tool_arg_redactions, sp.tool_arg_skipped,             # and what it did (counts,
+sp.tool_arg_skipped_types                                #   types -- never values)
 ```
 
 `sp.detection_mode` reports the detector that **actually ran on this request**, not the
@@ -456,7 +463,7 @@ off does not turn RouteForge into a proxy — it is still the router and the met
   `app_policy_version` stamp — so a customer's conformance probe detects the change
   instead of silently passing on a stale result.
 - **Raw capture stays tenant-isolated.** `capture_io: "full"` still requires the app's
-  own provisioned Langfuse project. `passthrough` relaxes the *residency* condition on
+  own provisioned Langfuse project. `passthrough` satisfies the *posture* condition on
   `full`, never the own-project one: one customer's raw data must never land in
   another's traces or in the shared project.
 - **`capture_io: "redacted"` needs a detector, not a posture.** A `passthrough` app that
@@ -615,21 +622,24 @@ request body value if provided, else the app's stored policy, else its default):
   projects independently, so the rule is exactly "is there a detector", nothing more.
 - An unrecognized value is a 422, never a silent fallback to `off`.
 
-  **Net envelope for an `onprem_only` app:** while the app is in the `enforced`
-  posture, `pii_detection: "off"` may only be paired with `capture_io: "off"` — the
-  other two capture modes are each rejected by their own clamp. (`pii_detection: "regex"`
-  is not subject to this `redacted` restriction — see above.) No telemetry I/O is
-  captured for `off` + `off`, so there is no egress path for the unsanitized prompt, and
-  the runtime cannot widen it: `_set_io` returns early on `"off"`, and the fail-closed
-  downgrade in `app/obs/export.py` only ever steps `full` down to `redacted`, never `off`
-  up.
+  **Net envelope:** with `pii_detection: "off"`, `capture_io: "redacted"` is refused at
+  any residency (no detector to redact with). `"off"` is always legal. `"full"` into the
+  app's **own** Langfuse project is legal off-prem; an `onprem_only` app additionally
+  needs `model_input: raw` **and** `client_output: raw` (`policy_mode: "passthrough"`). (`pii_detection: "regex"` is not subject to this
+  `redacted` restriction — see above.) No telemetry I/O is captured for `off` + `off`, so
+  there is no egress path for the unsanitized prompt, and the runtime cannot widen it:
+  `_set_io` returns early on `"off"`, and the fail-closed downgrade in
+  `app/obs/export.py` only ever steps `full` down to `redacted`, never `off` up.
 
-  *Amended by PR #34.* The `full` half of that envelope is a property of the
-  **`enforced` posture**, not of `onprem_only` itself. An `onprem_only` app the
-  operator has explicitly placed in `policy_mode: "passthrough"` — a declared
-  no-protection posture — may use `capture_io: "full"` into **its own** Langfuse
-  project. See the `capture_io` clamp under [`policy_mode`](#policy_mode--the-protection-posture)
-  above. The own-project condition is never relaxed by anything.
+  *Amended by PR #34, and again by B31 (2026-11-11).* Raw capture needs a declared
+  no-protection posture at every residency. For an `onprem_only` app that is
+  `model_input: raw` **and** `client_output: raw` — exactly as before B31; detection off
+  alone does not qualify (residency beats eval, and with detection off a privacy
+  profile's custom recognizers can still redact the model input). For any other
+  residency, the app's own `pii_detection: "off"` qualifies too. B31 only tightened: an
+  `enforced` app with a detector running can no longer hold `full` anywhere. See the `capture_io` clamp
+  under [`policy_mode`](#policy_mode--the-protection-posture) above. The own-project
+  condition is never relaxed by anything.
 
 ### Operator-gated raw eval capture (`pii_detection=off` + `capture_io=full`)
 
@@ -639,17 +649,42 @@ exception to "telemetry is redacted on egress" (CLAUDE.md rule 2), approved by t
 product owner — not a bug. Every one of these must hold, and each is enforced
 independently:
 
-- **An `onprem_only` app must first declare `policy_mode: "passthrough"`.** For an
-  `onprem_only` app still in the `enforced` posture the clamp rejects the write
-  outright, whether or not detection is downgraded — the gate is running, so residency
-  beats eval convenience (CLAUDE.md rule 8). *Before PR #34, `onprem_only` was used as
-  a proxy for "maximum protection" and `full` was refused for on-prem apps
-  unconditionally. Removing that proxy is the whole point of `policy_mode`: placement
-  and protection are separate axes, and an app whose operator has explicitly declared a
-  no-protection posture is coherent with raw capture at any residency. `passthrough`
-  changes nothing about placement — `onprem_only` stays absolute in either posture.*
-  Independently of all this, an `onprem_only` app may take the detection downgrade with
-  `capture_io="off"` in either posture.
+- **The app must have declared a no-protection posture — at any residency.** For an
+  **`onprem_only`** app that is `model_input: raw` **and** `client_output: raw` (what
+  `policy_mode: "passthrough"` resolves to) — unchanged by B31; `pii_detection: "off"`
+  alone does not qualify. For **any other residency** it is that, **or**
+  `pii_detection: "off"` set by the app itself or by its `passthrough` preset (a
+  detector that is off only because the *deployment* default is off is not the app's
+  declaration). One predicate defines it:
+  `app/policy/compile.py::has_no_protection_posture`; the refusal is
+  `CAPTURE_FULL_NEEDS_NO_PROTECTION`, whose message names the condition for the app's
+  residency. The compiled policy applies only the residency-independent half (a
+  compiled protection value never depends on placement); the stricter `onprem_only`
+  half is enforced when the policy is written, as it always was.
+  *History: before PR #34, `full` was refused for `onprem_only` apps unconditionally —
+  residency as a proxy for "maximum protection". PR #34 replaced the proxy with the
+  posture for `onprem_only` apps only, which left an `enforced` non-`onprem_only` app
+  free to hold `full` (B31). Since 2026-11-11 every residency needs a posture; B31 only
+  tightened, so `onprem_only` keeps its stricter raw/raw rule.*
+- **Rows saved before B31.** An app saved earlier with `capture_io: full` and no
+  declared posture is **treated as `redacted` until its policy is re-saved.**
+  `compile_policy` denies the axis to its protective end (`telemetry_io: redacted`,
+  source `ceiling`) — every request still runs, the trace and the console's `display`
+  carry a redacted copy, and raw I/O is never exported. The admin `GET` shows the stored
+  `capture_io: "full"` beside `effective.telemetry_io: "redacted"`, and the console says
+  so under the capture control. **A policy write to such an app is refused until
+  `capture_io` is changed or a posture declared** — every write is judged on the
+  post-write state, including one that only edits an unrelated field such as
+  `max_rpm`.
+- **Where the `onprem_only` half is checked, and where it is not.** The stricter
+  `onprem_only` rule is enforced when a policy is written: by the policy `PUT`, and by
+  `PATCH /admin/applications/{app_id}` when it changes `default_residency` (a policy with
+  no residency of its own inherits that default, so moving it is judged like a policy
+  write and refused with the same 422). The compiled policy itself never reads
+  residency (a placement value may not change a protection value), so one path is
+  *not* clamped: a per-request `sensitivity_rules` escalation that raises an off-prem
+  `pii_detection: off` + `capture_io: full` app to `onprem_only` for that request still
+  exports that request's raw I/O to the app's own project — the same as before B31.
 - **Raw I/O only ever reaches the app's own provisioned Langfuse project**, never the
   shared/default project. `capture_io=full` is rejected (422) unless
   `load_app_langfuse(app)` resolves — the app must have its own project, either
@@ -664,8 +699,9 @@ independently:
   content under a `redacted` label — that was counterexample CE-1, and it shipped once.
 - **`allow_app_pii_downgrade` still gates it.** A deployment with the ceiling set
   `false` cannot reach this combination either, same as any other PII downgrade.
-- **Still blocked:** `onprem_only` + `enforced` + `full`
-  (`CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION`); `full` with no own Langfuse project
+- **Still blocked:** `full` without a declared no-protection posture, at any residency —
+  for `onprem_only`, anything short of raw/raw, `pii_detection: off` included
+  (`CAPTURE_FULL_NEEDS_NO_PROTECTION`); `full` with no own Langfuse project
   (`CAPTURE_FULL_NEEDS_OWN_PROJECT`); `pii_detection` resolving to `off` +
   `capture_io=redacted` (`CAPTURE_REDACTED_NEEDS_A_DETECTOR` — `regex` and `presidio` +
   `redacted` are both allowed, in either posture); either deployment ceiling off
@@ -788,6 +824,49 @@ console's inline check is an early warning, not the authority.
 **`US_SSN` is exempt from being exempted.** The pattern check skips
 `PROTECTED_ENTITIES` entirely, so no regex — however SSN-shaped — can un-redact one.
 Same guarantee as the denylist and the threshold, enforced at the same seam.
+
+## `tool_args_min_score` — the tool-argument bar
+
+**API:** `PUT /admin/applications/{app_id}/policy` with `{"tool_args_min_score": 0.5}`.
+**Deployment default:** `config/serving.yaml` → `policy.tool_args_min_score` (`0.5`).
+
+Tool-call `function.arguments` are not prose: they are a **command channel the client
+executes** — a shell command, a file path, a SQL query. A weak, context-free pattern
+match rewritten there breaks the command. B69 is the case that made this a setting:
+Presidio's `US_DRIVER_LICENSE` recognizer scores any letter followed by digits at `0.3`,
+so `xargs -0 -n1` came back as `xargs -0 -REDACTED_US_DRIVER_LICENSE_1` and the client ran
+it. `n20` (`tail -n20`) and `c1500` (`head -c1500`) match the same way.
+
+So inside tool-call arguments — and only there — a span of a **listed type** is rewritten
+only if its detector score is **at least** the bar; below the bar it passes through byte
+for byte. **Only the listed types are subject to the bar. Every other type is always
+redacted in tool arguments, whatever its score**, with the inert `REDACTED_TYPE_N`
+placeholder — exactly as before B69. That restriction matters: Presidio scores real PII
+low too (`PHONE_NUMBER` `0.4` with no context word; `US_BANK_NUMBER` and `US_PASSPORT`
+reach only `0.4` even with one), so a bar over every type would pass those raw.
+
+The list is **deployment-level only** — `config/serving.yaml` → `policy.tool_args_bar_types`,
+default `[US_DRIVER_LICENSE, PERSON, LOCATION, NRP, DATE_TIME, URL]`, the types seen
+misfiring on shell text in B69. There is no per-app list. Each entry must be a non-empty
+string (`TOOL_ARGS_BAR_TYPES_INVALID`), and naming `US_SSN` is a named boot failure
+(`TOOL_ARGS_BAR_TYPE_PROTECTED`). A listed span whose score clears the bar (a `PERSON` at
+`0.85`) is redacted as usual.
+
+| | |
+|---|---|
+| **Values** | a number from `0.0` to `1.0`, or `null` (inherit the deployment default). Either direction is allowed: `0.0` rewrites every detected span (the pre-B69 behaviour); `0.9` lets nearly every span of a listed type through (unlisted types are still always redacted). Out of range is a 422 at write time, and a named boot failure (`TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE`) in `serving.yaml`. |
+| **Effective bar** | `max(pii_score_threshold or 0, tool_args_min_score)`. The app's `pii_score_threshold` already drops every scored match below it everywhere, so the bar the certificate reports is the one that actually applied (its source then reads `pii_score_threshold`). |
+| **Overlaps** | a below-bar span that overlaps a span being redacted is redacted with it — never left half-raw next to the placeholder. |
+| **Both directions** | ingress (an assistant turn's replayed `tool_calls` the client sends back) and egress (the model's own `tool_calls`, under `client_output: redact`) use the same helper and the same bar. |
+| **Never exempts** | `US_SSN`, whatever its score (the same absolute guarantee `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` can never lift — CLAUDE.md rules 3/8; the SSN backstop scores `1.0` anyway); every **unscored** match, which is every `pii_detection: regex` match, so the bar never drops a regex hit; and every **custom-recognizer** match, whose pattern and score the operator declared. |
+| **Does not change** | detection. Every detected type — skipped ones included — still sets sensitivity, still fires a `sensitivity_rules` entry (and so still escalates residency), and still appears in `detected_entity_types` on the response, the trace and the outcome row. Message text (`content`) is redacted exactly as before, whatever the score. |
+| **Never silent** | every response's `policy` block and trace carry `tool_args_min_score` (the effective value), `tool_args_bar_types` (the listed types), `tool_arg_redactions` (spans rewritten), `tool_arg_skipped` (spans that passed through below the bar) and `tool_arg_skipped_types` (their entity **types**, never values); the outcome row records the last three ([routing-outcomes](routing-outcomes.md)). Ingress and egress are summed. |
+| **Version** | a set value is folded into `app_policy_version`; `null` leaves the hash exactly as it was before this field existed. |
+
+To go back to the deployment default send `{"reset": ["tool_args_min_score"]}`.
+
+A deployed database needs the column before this field can be set — see
+[Manual DB migration](#manual-db-migration-for-already-deployed-databases).
 
 ## `model_input` and `client_output`
 
@@ -937,6 +1016,85 @@ a full outage for all applications, not just aliased ones:
 ```sql
 ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS model_aliases JSON;
 ```
+
+## `quality_floors` and `quality_floor_mode` -- cheapest model that clears a quality floor
+
+A quality floor says: for this workload, a model must have a calibrated quality **lower
+bound** of at least this value before it may serve. Among the eligible models that clear
+it, the router picks the cheapest, whatever its tier. It is **off by default**. How the
+router uses it: [`docs/architecture/routing-tier-selection.md`](../architecture/routing-tier-selection.md)
+(the quality-floor path). What it records: [`routing-observability.md`](./routing-observability.md)
+§6. Where the bounds come from: [`quality-calibration.md`](./quality-calibration.md) §11.
+
+A floor is **placement-neutral and protection-neutral**. It only chooses among models the
+request may already use, after residency, regions, retention, allow-lists and the risk
+floor have run. It never makes a model eligible, never reaches a provider `onprem_only`
+excluded, and never lifts a high-risk request above the best allowed tier. A model with no
+calibrated bound for the workload never clears a floor.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `quality_floors` | `{workload: number} \| null` | This app's floor per workload, each in `(0, 1]`. Workload keys are the lower-case workload slug (`^[a-z0-9][a-z0-9._-]{0,63}$`, the same tag a request carries). `null` = no app floors; the deployment's apply. |
+| `quality_floor_mode` | `off \| shadow \| enforce \| null` | `off`: no floor is applied for this app. `shadow`: compute what the floor would choose and record it, but route as today. `enforce`: route by the floor. `null` = inherit the deployment `mode`. |
+
+**Deployment side.** `config/routing.yaml` owns the deployment default and the per-workload
+floors:
+
+```yaml
+quality_floors:
+  mode: "off"          # off | shadow | enforce; quote it, a bare off is a YAML boolean
+  workloads:
+    claims: 0.80
+    extraction: 0.70
+```
+
+The config lint refuses to boot on `QUALITY_FLOOR_MODE_UNKNOWN`,
+`QUALITY_FLOOR_WORKLOAD_INVALID` (not a valid lower-case workload slug) and
+`QUALITY_FLOOR_OUT_OF_RANGE` (not a finite number in `(0, 1]`). The block is part of
+`routing_policy_version`, so changing it changes that hash.
+
+**Precedence.**
+
+- **Floor: raise-only.** The effective floor for an (app, workload) is the **larger** of the
+  deployment floor and the app floor. An app may add a floor for a workload the deployment
+  does not list. An app value *below* the deployment floor is accepted but has no effect;
+  it is not an error, so raising the deployment floor later never breaks a saved policy.
+- **Mode: not raise-only.** The app's `quality_floor_mode`, else the deployment `mode`. The
+  mode cannot widen eligibility, so an app may set `enforce` under a `shadow` deployment
+  (a pilot) or `off` under an `enforce` one.
+- A request with no workload, or whose workload has no floor, or an effective mode of
+  `off`, routes exactly as it does without this feature.
+
+**Validation (422, named message).** `quality_floor_mode` not one of the three values;
+`quality_floors` not a non-empty map (clear it with `reset: ["quality_floors"]`); a
+workload key that is not a lower-case slug; a floor that is not a finite number in
+`(0, 1]` (a boolean is refused). Like every field here, a PUT carrying `quality_floors`
+**replaces** the whole map, and `reset: ["quality_floors", "quality_floor_mode"]` returns
+both to inherit.
+
+**Version.** Set values are folded into `app_policy_version`, so changing a floor or mode
+changes the version; an app that sets neither keeps its hash.
+
+**Example.** The deployment floors `claims` at 0.80 in mode `shadow`. This app enforces,
+raises `claims` and adds a floor of its own for `summaries`:
+
+```json
+{"quality_floor_mode": "enforce",
+ "quality_floors": {"claims": 0.90, "summaries": 0.60}}
+```
+
+`claims` requests need a lower bound of 0.90 (the larger of 0.80 and 0.90); `summaries`
+requests need 0.60. Every other app stays in `shadow`. A value of `0.70` for `claims`
+would change nothing: the deployment's 0.80 wins.
+
+**Fallback, never reject.** When no eligible model qualifies, the request is routed as
+today and the response and trace say why (`floor_status`, see the architecture note). A
+floor never turns a servable request into a rejection.
+
+**Deploy.** Two nullable columns on `app_policies`. Run the `ALTER`s in
+[`docs/guides/admin-setup.md`](../guides/admin-setup.md) (the "Per-app quality floors (B80)"
+paragraph) **before rolling the image**: the policy row is read on every request, so an
+unmigrated table fails every `/v1/*` request.
 
 ## Model eligibility is two-sided
 
@@ -1263,6 +1421,7 @@ ALTER TABLE app_policies ADD COLUMN escalate_residency_on_detection BOOLEAN; -- 
 ALTER TABLE app_policies ADD COLUMN allowed_regions JSON;          -- 2026-09-19 (P1b)
 ALTER TABLE app_policies ADD COLUMN require_no_retention BOOLEAN;  -- 2026-09-19 (P1b)
 ALTER TABLE app_policies ADD COLUMN monthly_budget_usd FLOAT;      -- 2026-11-05 (metrics slice 4)
+ALTER TABLE app_policies ADD COLUMN tool_args_min_score FLOAT;     -- 2026-11-11 (B69)
 ```
 
 P1b also adds three columns to a **second** table, `onboarded_models` — the endpoint side

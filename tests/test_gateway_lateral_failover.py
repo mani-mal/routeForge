@@ -237,3 +237,52 @@ def test_success_first_try_no_failover_records():
     result, records = _run(backend, _ctx(reg, {"onprem"}, onprem=True), reg)
     assert len(backend.calls) == 1
     assert not any(r.step == "gateway" and r.chosen is None for r in records)
+
+
+# --- B80 Review Focus 2: failover on a floor-chosen request ----------------
+
+def _priced(slug: str, price: float, *, tier: str = "cheap") -> dict:
+    return {**_onprem(slug, tier=tier), "price_input": price, "price_output": price}
+
+
+def test_failover_under_floor_records_next_cheapest_qualifier():
+    """Under an enforced floor the router serves the cheapest QUALIFIER. When
+    the backend fails it, the replacement is the next-cheapest qualifier --
+    never the cheaper non-qualifier -- and the failed hop names the model it
+    actually tried (`attempted`), which `attempts`/`route_reason` read."""
+    from app.apps.outcomes import trace_features
+    from app.routing.quality import QualityResolver
+
+    # qm (mid) is priced just above qa, so its higher tier-default quality
+    # makes it the TOP-SCORED candidate while qa is still the cheapest
+    # qualifier -- the case where `scoring.candidates[0]` is not what was tried.
+    reg = _reg({"nq": _priced("nq", 0.01),             # cheapest, below the floor
+                "qa": _priced("qa", 0.1),              # cheapest qualifier
+                "qm": _priced("qm", 0.11, tier="mid"),  # next-cheapest qualifier
+                "qb": _priced("qb", 0.5)})             # dearest qualifier
+    quality = QualityResolver(S, registry=reg)
+    quality.set_bounds({("nq", "claims"): (0.5, "set-1"), ("qa", "claims"): (0.9, "set-1"),
+                        ("qm", "claims"): (0.95, "set-1"), ("qb", "claims"): (0.9, "set-1")})
+    backend = _FailForModels(S, {"qa"})
+    gw = Gateway(S, backend, Router(S, registry=reg, quality_resolver=quality), reg)
+    ctx = _ctx(reg, {"onprem"}).model_copy(update={
+        "workload": "claims", "quality_floor": 0.8, "quality_floor_mode": "enforce"})
+    result, records = asyncio.run(
+        gw.run(ctx, [Message(role="user", content="hello")], 20, 0.1, {}))
+
+    assert backend.calls == ["qa", "qm"]     # never nq, never the dearer qb
+    failed, served = records
+    assert failed.step == "gateway" and failed.chosen is None
+    assert failed.attempted == "qa"
+    assert failed.scoring["candidates"][0]["name"] != "qa"   # the floor reordered
+    assert failed.scoring["quality_floor"]["status"] == "met"
+    assert failed.scoring["quality_floor"]["chosen_lower"] == 0.9
+    assert served.step == "router" and served.chosen == "qm"
+    assert served.attempted is None
+    assert served.scoring["quality_floor"]["status"] == "met"
+    assert served.scoring["quality_floor"]["chosen_lower"] == 0.95
+
+    features = trace_features([r.model_dump() for r in records], complexity_tier="cheap")
+    assert features["attempts"] == ["qa", "qm"]
+    assert features["chosen"] == "qm"
+    assert features["route_reason"] == "failover"

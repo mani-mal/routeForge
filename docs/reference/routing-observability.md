@@ -219,9 +219,12 @@ four report **where their value came from**. Source of truth:
 **Per router hop, never collapsed.** A failover or confidence escalation
 produces a second hop with a different eligible set and different signal state;
 each hop emits its own record. A hop whose backend call *failed* also carries
-one (its `chosen` is `null`, because nothing was served, but the failed
-candidate is recoverable as `scoring.candidates[0].name` — the strategy sorts
-best-first and the router takes `ordered[0]`). Without that, a failed
+one (its `chosen` is `null`, because nothing was served; the model the gateway
+actually tried is on the record as `attempted`. Before B80 it was recoverable as
+`scoring.candidates[0].name`, because the router always took the top-scored candidate.
+Under an enforced quality floor the tried model is the cheapest qualifier, which need not
+be the top-scored one, so read `attempted` and fall back to `candidates[0]` only for a
+record written before the field existed). Without that, a failed
 candidate's pre-failure provenance would be lost permanently, and failover is
 exactly where availability matters.
 
@@ -281,7 +284,7 @@ candidate's score) stays a trace-only property.
 | `peer_prior` | **latency only.** No usable measurement of this model (as for `tier_default`), but at least one other *eligible* candidate in the **same tier** is `measured`. The value is the median of those peers' measured latencies. `n` still reports this model's own true count. (B51) |
 | `tier_default` | **latency only.** No usable measurement — fewer than `min_samples` observations, or the newest one is older than `signals.staleness_s` — **and** no measured same-tier peer in the eligible set. The value is `signals.tier_latency_ms[tier]`. `n` still reports the true count, which may be non-zero. |
 | `neutral` | **availability only.** Fewer than `min_samples` observations; the value is `1.0`, which is exactly the pre-P2a hardcoded constant. |
-| `disabled` | `signals.enabled: false`. Tier default / `1.0`, and `n` is reported as `0` even when observations exist (see the caveat below). |
+| `disabled` | `signals.enabled: false`. Tier default / `1.0`; `n` still reports the true observation count (informational — it is what flipping `signals.enabled` back on would recover). |
 
 A stale latency falls back to the peer prior or the tier default **outright** rather than drifting
 toward it: a drifted number would be neither measured nor default and could not
@@ -364,9 +367,10 @@ escape hatch and restores the same numbers with `src: "disabled"`.
   and one `error` observation per failed attempt that
   `counts_as_endpoint_unhealth`; a request-shaped 4xx is metered as an `error`
   row but is not observed — see §4 below and `usage_summary.error_count`.
-- **`n` is `0` on the `disabled` path** even when the store holds observations,
-  unlike `tier_default`/`neutral`, which report the true count. Still
-  backlogged (B42) — unrelated to this slice.
+- **`n` on the `disabled` path is the true observation count (fixed
+  2026-11-11; was B42).** It used to be a hardcoded `0`; it now matches
+  `tier_default`/`neutral`. The count is informational — the value used is
+  still the default, so the recompute-from-record property is unchanged.
 - **A semantic-cache hit still never pollutes latency, by construction rather
   than by luck.** A cache hit never calls a backend, so `SignalStore`'s
   observation methods are never invoked for it and no `endpoint_observations`
@@ -547,12 +551,17 @@ half_open --first reported failure-------------------------------> open       (c
   request fails that one call.
 - **Where it acts:** after the tier is chosen. The router picks the target tier —
   complexity, risk floor, escalation, the clamp to the best allowed tier, and the budget
-  fallback — from the **policy**-eligible set, with open circuits still in it. Only then are
-  open circuits dropped, and only among that tier's final candidates, labelled by the last
-  stage of the one eligibility seam (`feasible_set` stage 7, code `circuit_open`, reason
-  "excluded · circuit open", §2). **The breaker never changes the target tier**: an open
-  frontier model does not move a high-risk request to mid (CLAUDE.md rule 8). It can only
-  remove a candidate policy admitted; it cannot widen placement.
+  fallback — and the **hard floor** (`max(risk floor, escalation min_tier)`, clamped the
+  same way) from the **policy**-eligible set, with open circuits and this request's prior
+  failures still in it. Only then are open circuits dropped, and only among that tier's
+  final candidates, labelled by the last stage of the one eligibility seam (`feasible_set`
+  stage 7, code `circuit_open`, reason "excluded · circuit open", §2). **The breaker may
+  lower a complexity-raised tier, never the hard floor** (2026-11-11, B71 item 1): an open
+  frontier model never moves a high-risk request to mid (CLAUDE.md rule 8), but a low-risk
+  request that only its length sent to frontier is served on the highest lower tier at or
+  above its hard floor that has a closed, in-budget candidate, and the decision records
+  `tier_downgrade` (below). It can only remove a candidate policy admitted; it cannot widen
+  placement.
 - **Cloud models are covered too.** The breaker keys on model name, so the YAML cloud pool
   (`azure-*`, `bedrock-*`) is excluded when open exactly like an onboarded model. Cloud
   models just have no `circuit` row in the admin view, which lists onboarded models only. `Gateway.run` and `Gateway.run_stream` pass the
@@ -560,18 +569,41 @@ half_open --first reported failure-------------------------------> open       (c
   A streamed request has no failover, so the up-front exclusion is the only protection it
   gets.
 
-### `circuit_bypass`
+### `tier_downgrade` and `circuit_bypass`
 
-If every final candidate in the target tier is open, the router does not reject the
-request, and it does not step to another tier either. It bypasses the breaker **within that
-tier**: it ranks all of the tier's candidates, open ones included, sets
-`circuit_bypass: true` on the router's `DecisionRecord`, and appends
-`"; circuit bypass: every candidate in the target tier is open"` to the decision's reason
-(so the Langfuse span's `sp.reason` shows it). Closed candidates in *other* tiers are not
-used; picking one would change the tier policy chose. Trying an endpoint that may have
-recovered is what the request would have done with no breaker, so the breaker never makes
-a request worse off than no breaker would: it only ever removes an open model when a
-closed peer in the same tier can take its place. The bypass only restores candidates policy
+If every final candidate in the chosen tier is open, the router does not reject the
+request. Two cases:
+
+- **The tier is above the hard floor** (complexity raised it there) **and a lower tier at
+  or above the hard floor has a closed, in-budget, non-excluded candidate.** The router
+  steps down one tier at a time, highest first, and serves from the first such tier. The
+  decision carries `tier_downgrade: {"from": <tier>, "to": <tier>, "cause":
+  "circuit_open"}` -- on the `DecisionRecord`, inside its scoring record (`sp.scoring`),
+  as its own span attribute `sp.tier_downgrade` (JSON; tier names and a fixed cause enum,
+  content-free) and in the outcome row's `scoring.tier_downgrade` -- and the reason gains
+  `"; tier downgrade from <tier>: circuit open"`. This is B71 item 1: an endpoint alone
+  in its tier and down no longer costs every request a wasted attempt.
+- **Otherwise** -- the tier IS the hard floor, or no lower qualifying tier has a closed
+  candidate -- it bypasses the breaker **within that tier**: it ranks all of the tier's
+  candidates, open ones included, sets `circuit_bypass: true` on the router's
+  `DecisionRecord`, and appends `"; circuit bypass: every candidate in the target tier is
+  open"` to the decision's reason (so the Langfuse span's `sp.reason` shows it). Trying an
+  endpoint that may have recovered is what the request would have done with no breaker.
+
+The same hard-floor rule governs **failover** (2026-11-11, B70 items 1-3): a model that
+failed on this request is excluded from the re-select, but the target tier and the hard
+floor are still computed from the policy-eligible set, so the failure cannot clamp them
+down. A same-tier peer serves first, then the next tier up; failing both, only a tier
+that complexity alone raised the target over may step down (to the highest surviving tier
+at or above the hard floor; `tier_downgrade` with cause `prior_failure`). If nothing
+survives at or above the hard floor the request fails with the exhausted `502`, whose
+message names the floor. When exactly one distinct endpoint was attempted and, after it
+failed, the router had no candidate left at or above the floor (including because the
+others were over budget), the 502 says "no failover candidate" and the outcome row reads
+`route_reason: no_failover`; the attempt cap ending the loop (e.g.
+`max_failover_attempts: 0`) does not set it (`docs/reference/routing-outcomes.md`).
+Upward failover comes first: a failed tier's request moves to the next tier UP before any
+step down, since going up never undercuts a floor. The bypass only restores candidates policy
 already admitted: an `onprem_only` request whose on-prem models are all open still never
 reaches cloud. If the set is empty for a policy reason, the request is rejected as before.
 
@@ -634,6 +666,52 @@ mean chosen cost in that scenario). An operator trades outage-time latency again
 post-recovery cost through `cooldown_s` and `max_cooldown_s`.
 
 ---
+
+## 6. The quality-floor record (B80)
+
+Present only when a request decided under a quality floor in mode `shadow` or `enforce`
+(see [`per-app-config.md`](./per-app-config.md) `quality_floors`). With the mode `off`, no
+workload or no floor, decisions are identical and none of the record below is emitted; two keys are additive: the response `policy` block always carries `"quality_floor": null`, and every DecisionRecord gains an `attempted` key (null except on failed gateway hops). The record
+is ids, numbers and enums only, so like `sp.scoring` it is emitted regardless of
+`capture_io`.
+
+| Surface | Carries |
+|---|---|
+| **Trace** — `sp.scoring.quality_floor`, on each router hop's span, beside the ranking | the full record below, including every eligible candidate's bound |
+| **Trace** — `sp.quality_floor_status` | the hop's `status` alone, a fixed enum, so a trace search can filter without parsing `sp.scoring` |
+| **HTTP response** — `policy.quality_floor` | the served hop's full record; `null` when no router ran (a semantic-cache hit) or that hop decided under no floor |
+| **Outcome row** — `route_reason` | `quality_floor` when an enforced floor was met (see [`routing-outcomes.md`](./routing-outcomes.md)) |
+
+```json
+{"floor": 0.8, "mode": "enforce", "workload": "claims", "status": "met",
+ "chosen_lower": 0.84, "chosen_lower_source": "calibrated",
+ "bounds": {"qwen3-8b": [0.84, "calibrated"], "local-mid": [null, null]},
+ "shadow_choice": null, "shadow_est_cost_usd": null}
+```
+
+- `floor` is the effective floor (the larger of the deployment and app values), `mode` the
+  effective mode.
+- `status` is one of `met`, `unmet_no_qualifier`, `unmet_context`, `unmet_budget`, or the
+  same four prefixed `shadow_` (`shadow_met`, ...). See
+  [`routing-tier-selection.md`](../architecture/routing-tier-selection.md).
+- `chosen_lower` and `chosen_lower_source` are the served model's lower bound and where
+  it came from. The source is `calibrated`, or `null` with a `null` bound when the model
+  has none (possible on an `unmet_*` fallback).
+- `bounds` maps **every eligible candidate** to `[lower, source]`, `[null, null]` when it
+  has no calibrated bound. A model absent from it was not eligible.
+- `shadow_choice` and `shadow_est_cost_usd` are filled only in `shadow` mode, when a
+  qualifier existed: the model the floor would have chosen and its estimated cost. The
+  request was routed by the tiered path regardless.
+
+`sp.scoring` itself is unchanged: it stays ordered by score and remains sufficient to
+recompute the ranking offline. Under an enforced floor the served model is chosen by cost
+among the qualifiers, so it is **not necessarily `candidates[0]`**. Read the decision's
+chosen model, not the first scoring entry. The decision reason names the floor, for
+example `quality floor 0.80 (workload claims): cheapest qualifying, lower bound 0.84
+(calibrated)`, or `quality floor 0.80 unmet (no qualifying model): ...` on a fallback.
+Rejected candidates carry the reasons listed in the architecture note.
+
+Prometheus is unchanged: the decision counter still carries only `tier` and `escalated`.
 
 ## Quick verification checklist
 

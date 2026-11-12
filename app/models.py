@@ -118,6 +118,27 @@ class Entity(BaseModel):
     # can break same-span/same-length ties deterministically (highest wins).
     # Built-in RegexDetector entities leave this None (longest-span-wins only).
     score: float | None = None
+    # Where the match came from, when that matters to a consumer: "custom" for
+    # an operator-declared CustomRecognizer. The tool-argument bar (B69,
+    # app/policy/gate.py) never drops a custom match whatever its score -- the
+    # operator declared that pattern, exactly as `pii_score_threshold` never
+    # culls one (FilteredDetector wraps only the base detector). None = a
+    # built-in recognizer.
+    source: str | None = None
+    # Set by `dedupe` on a MERGED span when any member of its overlap cluster
+    # was itself exempt from the tool-argument bar (`merge.exempt_from_score_bar`:
+    # unscored, custom, a PROTECTED type). The merged span takes type/score/
+    # source from its best member only, so without this a weak Presidio match
+    # overlapping an SSN or a custom match could carry the whole span below the
+    # bar. Read by the bar only; detection, placeholders and types ignore it.
+    bar_exempt: bool = False
+    # Set by `dedupe` on a MERGED span when any member of its overlap cluster
+    # was a PROTECTED type (US_SSN) -- the merged span may be TYPED after a
+    # non-protected best member (PHONE_NUMBER 0.75 absorbing US_SSN 0.4).
+    # Narrower than `bar_exempt` (which also covers unscored/custom members):
+    # this one is what FilteredDetector's denylist / threshold / exempt
+    # patterns must never drop. Read via `merge.is_protected`.
+    contains_protected: bool = False
 
 
 class ExecutionPolicyContext(BaseModel):
@@ -165,6 +186,12 @@ class ExecutionPolicyContext(BaseModel):
     # router's quality term reads -- a RANKING input only. Eligibility
     # (`app/policy/feasible.py`), placement and residency never read it.
     workload: str | None = None
+    # B80: the effective quality floor and mode for this request's workload,
+    # resolved once by `app/routing/quality_floor.py::resolve_floor` in
+    # `build_context`. The router reads these two fields and never re-derives
+    # the floor. Content-free: a number and an enum.
+    quality_floor: float | None = None
+    quality_floor_mode: str = "off"
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str
@@ -268,9 +295,20 @@ class DecisionRecord(BaseModel):
     # scored, and inventing terms for them would be exactly the overstatement
     # P2a exists to remove.
     scoring: dict | None = None
+    # B80: on a FAILED gateway hop (`chosen` is None, nothing served), the
+    # model the gateway actually tried. Needed because under an enforced
+    # quality floor the router serves the cheapest qualifier, which is not
+    # necessarily `scoring["candidates"][0]` (scoring stays score-ranked).
+    # A model id only; None on every other record.
+    attempted: str | None = None
     # Step-7 breaker: True when every candidate policy admitted was held open
     # and the router tried one anyway (app/routing/router.py::select).
     circuit_bypass: bool = False
+    # B70/B71: RoutingDecision.tier_downgrade -- `{"from", "to", "cause"}`
+    # when a prior failure or an open circuit moved the served tier below the
+    # one tier targeting picked (never below the hard floor). Tier names and
+    # a fixed cause enum only; None otherwise.
+    tier_downgrade: dict | None = None
 
 
 class VerificationRecord(BaseModel):

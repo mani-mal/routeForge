@@ -335,3 +335,31 @@ def test_decision_quality_is_the_ranked_term():
     top = d.scoring.ordered[0]
     assert top.candidate.name == d.chosen.name
     assert (d.quality_score, d.quality_source) == (top.quality.value, top.quality.source)
+
+
+# --------------------------------------------------------------------------- #
+# B80: refresh_quality installs calibrated lower bounds with the overrides
+def test_refresh_installs_bounds_and_keeps_both_snapshots_on_failure(monkeypatch):
+    with _client() as c:
+        q = c.app.state.quality
+        assert q.resolve_lower("local-8b", None) == (None, None)
+
+        async def go():
+            async with c.app.state.db.session() as session:
+                await store.write_calibration_set(
+                    session, set_id="set-b",
+                    units=[{"model": "local-8b", "workload": None, "score": 0.7}],
+                    bounds=[{"model": "local-8b", "workload": None,
+                             "lower": 0.6, "ci_level": 0.9}])
+                await session.commit()
+        c.portal.call(go)
+        assert _refresh(c) is True
+        assert q.resolve_lower("local-8b", None) == (0.6, "calibrated")
+        assert q.resolve("local-8b") == QualityScore(0.7, "calibrated", "set-b")
+
+        async def boom(session):
+            raise RuntimeError("db down")
+        monkeypatch.setattr(store, "load_quality_bounds", boom)
+        assert _refresh(c) is False
+        assert q.resolve_lower("local-8b", None) == (0.6, "calibrated")
+        assert q.resolve("local-8b") == QualityScore(0.7, "calibrated", "set-b")

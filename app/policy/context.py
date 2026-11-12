@@ -19,6 +19,7 @@ from app.policy.feasible import (  # noqa: F401  (re-exported: app/pipeline.py i
     feasible_set,
     registry_permits,
 )
+from app.routing.quality_floor import resolve_floor
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -258,6 +259,8 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
              or app_policy.allowed_models is not None)
     )
 
+    quality_floor, quality_floor_mode = resolve_floor(settings, app_policy, workload)
+
     return ExecutionPolicyContext(
         request_id=request_id,
         tenant_id=tenant_id,
@@ -288,6 +291,8 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         # P2b-3: carried for the router's quality term ONLY. Nothing above --
         # placement, `feasible_set`, `allowed_models` -- reads it.
         workload=workload,
+        quality_floor=quality_floor,
+        quality_floor_mode=quality_floor_mode,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
         # The COMPILED axis, never the raw nullable column: one authority

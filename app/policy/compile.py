@@ -36,7 +36,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from app.config.schema import Settings
-from app.policy.enums import PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES
+from app.policy.enums import (PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES,
+                              TOOL_ARGS_BAR_TYPES_DEFAULT)
 from app.policy.trajectory import resolve_trajectory_mode
 
 if TYPE_CHECKING:
@@ -144,6 +145,24 @@ class Protection:
     stream_mode: StreamMode
     #: axis name -> "app_policy" | "preset:<mode>" | "ceiling" | "deployment_default"
     sources: Mapping[str, str]
+    #: B69: the EFFECTIVE tool-argument bar -- the minimum detector score a
+    #: span inside tool-call arguments needs to be rewritten:
+    #: `max(app pii_score_threshold or 0, resolved tool_args_min_score)`.
+    #: Rewriting only: detection, classification and message text never read
+    #: it. `sources["tool_args_min_score"]` names where the resolved axis
+    #: value came from (`app_policy` / `deployment_default` / `ceiling` when
+    #: an unparseable stored value denied to 0.0), or `pii_score_threshold`
+    #: when the app's threshold is what raised the effective bar.
+    tool_args_min_score: float = 0.0
+    #: B69: the resolved `tool_args_min_score` axis value BEFORE the app's
+    #: `pii_score_threshold` is folded in -- what the save-time monotonicity
+    #: invariant compares, since the effective value above can sit at the
+    #: threshold for both extremes.
+    tool_args_min_score_axis: float = 0.0
+    #: B69: the entity types the bar applies to at all -- the deployment's
+    #: `serving.yaml` `policy.tool_args_bar_types` (deployment-level only, no
+    #: per-app list). Every other type is always rewritten in tool arguments.
+    tool_args_bar_types: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -200,6 +219,14 @@ class EffectivePolicy:
     #: exactly as unprotected whether the passthrough came from its own row or
     #: from the default.
     clamped: tuple[tuple[str, str], ...] = ()
+    #: B31: the app resolved to `capture_io: full` WITHOUT a declared
+    #: no-protection posture (`has_no_protection_posture`), so the compiler
+    #: denied telemetry to `redacted` -- the request still runs, it just never
+    #: exports raw I/O. Kept as evidence for `validate_effective`, which refuses
+    #: the WRITE with `CAPTURE_FULL_NEEDS_NO_PROTECTION`; a row stored before
+    #: the rule applied at every residency is served as `redacted` until it is
+    #: re-saved, never failed and never exported raw.
+    capture_full_refused: bool = False
 
 
 # --- helpers -----------------------------------------------------------------
@@ -309,7 +336,80 @@ def resolve_allowed_regions(value) -> tuple[frozenset[str] | None, bool]:
     return frozenset(tokens), True
 
 
+def resolve_tool_args_min_score(value, default) -> tuple[float, bool]:
+    """Resolve one stored `tool_args_min_score` (B69) to `(score, parsed)`.
+
+    * `None` (unset) inherits the deployment default and counts as parsed.
+    * A real number in [0.0, 1.0] resolves to itself.
+    * Anything else -- a bool, a string, NaN, out of range -- **denies** to
+      0.0, this axis's protective end (a bar of 0 rewrites every detected
+      span, today's pre-B69 behaviour), with `parsed=False` so the caller
+      records it in `rejected` and the write is refused (CLAUDE.md rule 5).
+
+    The deployment default is range-checked by the config lint at boot; a
+    malformed one reaching here denies the same way.
+    """
+    def _ok(v) -> bool:
+        return (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and 0.0 <= v <= 1.0)
+    if value is None:
+        return (float(default), True) if _ok(default) else (0.0, False)
+    if _ok(value):
+        return float(value), True
+    return 0.0, False
+
+
 # --- the compiler ------------------------------------------------------------
+
+def _declares_no_protection(model_input: str, client_output: str,
+                            detection: str, detection_source: str) -> bool:
+    """The PLACEMENT-FREE half of `has_no_protection_posture`: raw/raw, or PII
+    detection off by the app's own choice (its explicit `pii_detection: off`,
+    or the `passthrough` preset's -- not an inherited deployment default).
+
+    `compile_policy` uses only this half to deny an unpostured `full` to
+    `redacted`, because a compiled protection value may never depend on
+    residency (rule 2a; the noninterference invariant, design §7.3). The
+    stricter `onprem_only` half is a write-time rule in `validate_effective`."""
+    if model_input == "raw" and client_output == "raw":
+        return True
+    return detection == "off" and (detection_source == _APP
+                                   or detection_source.startswith("preset:"))
+
+
+def has_no_protection_posture(model_input: str, client_output: str,
+                              detection: str, detection_source: str,
+                              residency: str) -> bool:
+    """Has the app DECLARED the no-protection posture raw telemetry capture
+    (`capture_io: full`) requires? (CLAUDE.md rule 2.) Two cases:
+
+    * **`onprem_only`**: `model_input == raw` AND `client_output == raw` --
+      exactly the pre-B31 rule. Detection off alone does NOT qualify: residency
+      beats eval (rule 8), and with detection off an app's custom recognizers
+      can still redact the model input, so it has not declared itself
+      unprotected.
+    * **any other residency**: the same raw/raw, OR PII detection off by the
+      app's own choice (`_declares_no_protection`).
+
+    B31 only ever TIGHTENED: it added the check for non-`onprem_only` apps and
+    left `onprem_only` exactly as it was. Like the pre-B31 rule, the residency
+    half is enforced at WRITE time only (`validate_effective`); the compiled
+    protection never reads residency."""
+    if residency == "onprem_only":
+        return model_input == "raw" and client_output == "raw"
+    return _declares_no_protection(model_input, client_output, detection,
+                                   detection_source)
+
+
+def _posture_requirement(residency: str) -> str:
+    """The posture `capture_io: full` needs at this residency, for messages."""
+    if residency == "onprem_only":
+        return ("model_input='raw' AND client_output='raw' (for an onprem_only "
+                "app pii_detection='off' alone does not qualify)")
+    return ("model_input='raw' AND client_output='raw', or pii_detection='off' "
+            "set explicitly on the app (an 'off' inherited from the deployment "
+            "default does not count)")
+
 
 def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     """Compile one application's stored policy plus the deployment's settings
@@ -415,6 +515,22 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
     if telemetry_io not in TELEMETRY_IOS:              # malformed deployment value
         rejected.append(("telemetry_io", str(telemetry_io)))
         telemetry_io, sources["telemetry_io"] = _DENY["telemetry_io"], _CEILING
+    # Raw capture needs a declared no-protection posture (B31). Without one,
+    # deny to `redacted`. That normally has a detector to redact with, since
+    # detection the APP turned off would itself be the posture. The exception
+    # is detection off only by inheriting an "off" deployment default: then
+    # `redacted` has no detector, and the export boundary
+    # (`resolve_capture_io`) steps it down to `off` -- still never raw, and
+    # the write is refused all the same. Only the placement-free half
+    # is applied here (a compiled protection value never reads residency);
+    # `validate_effective` adds the stricter onprem_only half at write time.
+    # A write is refused on `capture_full_refused`; a stored row is served
+    # redacted.
+    capture_full_refused = False
+    if telemetry_io == "full" and not _declares_no_protection(
+            model_input, client_output, detection, sources["detection"]):
+        capture_full_refused = True
+        telemetry_io, sources["telemetry_io"] = "redacted", _CEILING
 
     content_integrity, sources["content_integrity"] = _resolve(
         "content_integrity", _get(app_policy, "content_integrity"),
@@ -424,6 +540,30 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         "stream_mode", _get(app_policy, "stream_mode"), STREAM_MODES,
         None, None, "off", rejected)
 
+    # B69: the tool-argument bar. A float axis with no preset and no ceiling:
+    # explicit per-app value, else the deployment default. The EFFECTIVE bar
+    # folds in the app's `pii_score_threshold`, which already culls every
+    # scored match below it everywhere (FilteredDetector) -- so the bar the
+    # certificate reports is the one that actually applied.
+    stored_bar = _get(app_policy, "tool_args_min_score")
+    bar, bar_parsed = resolve_tool_args_min_score(
+        stored_bar, getattr(deployment.serving, "tool_args_min_score", 0.5))
+    if not bar_parsed:
+        rejected.append(("tool_args_min_score", str(stored_bar)))
+        sources["tool_args_min_score"] = _CEILING
+    else:
+        sources["tool_args_min_score"] = _APP if stored_bar is not None else _DEFAULT
+    bar_axis = bar
+    threshold = _get(app_policy, "pii_score_threshold")
+    if (isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
+            and 0.0 <= threshold <= 1.0 and threshold > bar):
+        bar = float(threshold)
+        sources["tool_args_min_score"] = "pii_score_threshold"
+    # Deployment-level only; the config lint guarantees no PROTECTED type is
+    # in it, and `below_tool_arg_bar` never exempts one regardless.
+    bar_types = frozenset(getattr(deployment.serving, "tool_args_bar_types",
+                                  TOOL_ARGS_BAR_TYPES_DEFAULT) or ())
+
     protection = Protection(
         model_input=model_input,
         client_output=client_output,
@@ -432,6 +572,9 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         content_integrity=content_integrity,
         stream_mode=stream_mode,
         sources=MappingProxyType(dict(sources)),
+        tool_args_min_score=bar,
+        tool_args_min_score_axis=bar_axis,
+        tool_args_bar_types=bar_types,
     )
 
     escalate = _get(app_policy, "escalate_residency_on_detection")
@@ -462,6 +605,7 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         version=version,
         rejected=tuple(rejected),
         clamped=tuple(clamped),
+        capture_full_refused=capture_full_refused,
         allowed_regions=allowed_regions,
         require_no_retention=require_no_retention,
         trajectory_mode=trajectory_mode,
@@ -550,15 +694,15 @@ _OPERATOR_NAME = {
 }
 
 
-def _capture_alternatives(residency: str) -> str:
+def _capture_alternatives(posture: bool) -> str:
     """The legal `capture_io` values to offer when `redacted` is refused.
 
-    `full` is offered only off-prem. For an `onprem_only` app raw capture needs
-    the declared no-protection posture as well, so naming it here would send
-    the operator straight into the next 422 — and a test asserts the word
-    "full" never appears in that app's message.
+    `full` is offered only when the app has declared a no-protection posture
+    (`has_no_protection_posture`) -- raw capture needs it at every residency,
+    so naming `full` otherwise would send the operator straight into the next
+    422.
     """
-    if residency == "onprem_only":
+    if not posture:
         return "capture_io='off'."
     return "capture_io='full' with the app's own Langfuse project, or capture_io='off'."
 
@@ -605,6 +749,12 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
     # persisted and silently behaved as "off").
     for axis, value in eff.rejected:
         name = _OPERATOR_NAME.get(axis, axis)
+        if axis == "tool_args_min_score":
+            raise PolicyViolation(
+                "TOOL_ARGS_MIN_SCORE_INVALID",
+                f"bad tool_args_min_score {value!r}; legal values: a number "
+                "from 0.0 to 1.0. To inherit the deployment default send "
+                'reset: ["tool_args_min_score"].')
         if axis == "allowed_regions":
             # No enum to offer (design §3 has no _LEGAL vocabulary for this
             # axis, unlike the P1a rungs below) -- the message names the
@@ -651,8 +801,13 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 f"(refused pii_detection={value!r}; "
                 "serving.policy.allow_app_pii_downgrade is false).")
 
-    # --- 3. telemetry capture.
-    if p.telemetry_io == "full":
+    # --- 3. telemetry capture. `compile_policy` has already denied a `full`
+    # without the posture to `redacted`; `capture_full_refused` is how this
+    # rule still sees what the app asked for.
+    posture = has_no_protection_posture(p.model_input, p.client_output,
+                                        p.detection, p.sources.get("detection", ""),
+                                        residency)
+    if p.telemetry_io == "full" or eff.capture_full_refused:
         # (a) Own provisioned Langfuse project — NEVER relaxed, by anything.
         # Raw I/O stays tenant-isolated: one customer's raw prompts must never
         # land in another's traces or in the shared project (CLAUDE.md rule 2).
@@ -668,25 +823,21 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 "for an application with its own provisioned Langfuse project "
                 "(raw I/O must never reach the shared project; CLAUDE.md rule 2). "
                 "Use 'redacted'.")
-        # (b) Posture. Before `policy_mode` existed, `onprem_only` was used as a
-        # proxy for "maximum protection", so raw capture was refused for onprem
-        # apps outright. That proxy is what this feature removes: an app the
-        # operator has explicitly put in a no-protection posture has declared
-        # it, and raw capture into its OWN project is then coherent at any
-        # residency — the whole point of onprem_only + passthrough. Spelled on
-        # the axes now rather than on `policy_mode`, which is exactly what
-        # `policy_mode: passthrough` compiles to; an app still showing the gate
-        # a redacted view keeps the old rule (rule 8: residency beats eval).
-        if residency == "onprem_only" and not (p.model_input == "raw"
-                                               and p.client_output == "raw"):
+        # (b) Posture, at ANY residency (B31). Before B31 only `onprem_only`
+        # apps were checked, which left an `enforced` app elsewhere free to
+        # hold raw capture. B31 only tightens: `onprem_only` keeps its stricter
+        # raw/raw rule, every other residency now needs a posture too
+        # (`has_no_protection_posture` holds both cases).
+        if eff.capture_full_refused or not posture:
+            where = ("an onprem_only application" if residency == "onprem_only"
+                     else "an application")
             raise PolicyViolation(
-                "CAPTURE_FULL_ONPREM_NEEDS_NO_PROTECTION",
-                "capture_io='full' stores raw telemetry and is not allowed for "
-                "an onprem_only application that has not declared a "
-                "no-protection posture — that is model_input='raw' AND "
-                "client_output='raw' (residency beats eval; CLAUDE.md rules "
-                "2/8). Use 'redacted', or set policy_mode='passthrough' (which "
-                "resolves both axes to 'raw') to declare the app unprotected.")
+                "CAPTURE_FULL_NEEDS_NO_PROTECTION",
+                "capture_io='full' stores raw telemetry and is allowed for "
+                f"{where} only once it has declared a no-protection posture — "
+                f"{_posture_requirement(residency)} (CLAUDE.md rules 2/8). Use "
+                "'redacted', or set policy_mode='passthrough' (which resolves "
+                "both axes to 'raw') to declare the app unprotected.")
 
     if p.telemetry_io == "redacted" and p.detection == "off":
         # Redacted telemetry needs something to redact with. This is the one
@@ -705,12 +856,12 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
                 "policy_mode='passthrough': passthrough leaves PII detection "
                 "off, so there is nothing to redact telemetry with. Set "
                 "pii_detection='regex' or 'presidio' to keep redacted "
-                "telemetry, or use " + _capture_alternatives(residency))
+                "telemetry, or use " + _capture_alternatives(posture))
         raise PolicyViolation(
             "CAPTURE_REDACTED_NEEDS_A_DETECTOR",
             "capture_io='redacted' cannot be combined with pii_detection "
             "off: redacted telemetry needs a detector to redact with, and "
-            "none is configured. Use " + _capture_alternatives(residency))
+            "none is configured. Use " + _capture_alternatives(posture))
 
     # --- 4. streaming. `stream_unverified` streams real backend tokens and
     # explicitly waives step 9, so it can only ever be an app's own, narrow
@@ -781,13 +932,16 @@ _RESIDENCY_BY_RANK: tuple[str, ...] = tuple(
 #: protection axis alone can never move placement, and (b) to probe that
 #: asking for the strict end never resolves to something less protective than
 #: asking for the loose end.
-_PROTECTION_EXTREMES: tuple[tuple[str, str, str], ...] = (
+_PROTECTION_EXTREMES: tuple[tuple[str, str | float, str | float], ...] = (
     ("model_input", "raw", "redact"),
     ("client_output", "raw", "redact"),
     ("capture_io", "full", "off"),
     ("pii_detection", "off", "presidio"),
     ("content_integrity", "transformations_allowed", "exact"),
     ("stream_mode", "stream_unverified", "off"),
+    # B69: a higher bar rewrites fewer spans inside tool-call arguments, so
+    # 1.0 is the loose end and 0.0 (rewrite everything detected) the strict.
+    ("tool_args_min_score", 1.0, 0.0),
 )
 
 #: `AppPolicyView` field name -> the `Protection` attribute it resolves to.
@@ -800,6 +954,10 @@ _FIELD_TO_PROTECTION_ATTR = {
     "pii_detection": "detection",
     "content_integrity": "content_integrity",
     "stream_mode": "stream_mode",
+    # The raw resolved axis, not the effective bar: the effective value folds
+    # in `pii_score_threshold`, which can pin both extremes to the threshold
+    # and make the monotonicity check below compare nothing.
+    "tool_args_min_score": "tool_args_min_score_axis",
 }
 
 #: A fixed, small set of detected-entity signals, ordered from no signal to
@@ -811,8 +969,8 @@ _ENTITY_TUPLES: tuple[tuple[str, ...], ...] = ((), ("PERSON",), ("US_SSN",))
 
 #: The fixed, bounded grid the save-time check compiles over for the one app
 #: being saved: the full residency axis (3, "the residency neighbours" of
-#: any point on it), both extremes of every protection axis (12), and the
-#: three detected-entity signals (3) -- 18 points total. A module-level
+#: any point on it), both extremes of every protection axis (14), and the
+#: three detected-entity signals (3) -- 20 points total. A module-level
 #: constant, built once at import time from literals: no I/O, no dependence
 #: on the app or deployment being checked, so the write path's cost is the
 #: same for every app and every write. `test_policy_save_validation.py`
@@ -855,7 +1013,7 @@ def check_invariants(view: "AppPolicyView", deployment: Settings) -> None:
     this app still cannot be saved.
 
     Bounded and I/O-free by construction: `_INVARIANT_GRID` is a module-level
-    constant (18 points), and every grid point is one `compile_policy` call
+    constant (20 points), and every grid point is one `compile_policy` call
     (pure, no DB/clock/request) plus, for the three entity points, one
     `apply_signals` call. The admin write path pays a small, fixed number of
     extra pure-function calls, never unbounded work.
@@ -976,10 +1134,17 @@ def check_invariants(view: "AppPolicyView", deployment: Settings) -> None:
         # ceiling clamps still lands on `strict` (ceilings only ever deny
         # towards the protective end -- see `_resolve`/`_DENY` above), so
         # this holds even for a deployment whose ceilings are locked down.
-        rank = {loose: 0, strict: 1}
-        if loose_value not in rank or strict_value not in rank:
-            continue
-        if rank[strict_value] < rank[loose_value]:
+        if isinstance(loose, float):
+            # A numeric axis (B69's tool-argument bar): lower is stricter.
+            # Compared directly rather than by rank, so no resolved value can
+            # fall outside the pair and be skipped silently.
+            less_protective = float(strict_value) > float(loose_value)
+        else:
+            rank = {loose: 0, strict: 1}
+            if loose_value not in rank or strict_value not in rank:
+                continue
+            less_protective = rank[strict_value] < rank[loose_value]
+        if less_protective:
             raise PolicyViolation(
                 "INVARIANT_PROTECTION_AXIS_NOT_MONOTONIC",
                 f"requesting {axis}={strict!r} (the strict end) resolved to "

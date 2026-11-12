@@ -60,6 +60,8 @@ export interface TraceRecord {
   latency_ms?: number;
   hop_index?: number;
   tokens_priced?: number;
+  // router hops: the P2a scoring record; B80 adds `quality_floor` beside it.
+  scoring?: { quality_floor?: QualityFloorRecord | null; [k: string]: unknown } | null;
   // verify
   required?: boolean;
   performed?: boolean;
@@ -314,6 +316,29 @@ export interface AdminPolicy {
   pii_entity_denylist: string[] | null;   // null = inherit (nothing exempt); detect-but-don't-redact types
   pii_score_threshold: number | null;   // null = inherit (no floor); 0.0–1.0 min Presidio confidence
   pii_exempt_patterns: string[] | null;   // null = inherit (none); regexes fullmatched against the entity VALUE
+  // B80 quality floors. Raise-only over the deployment's floors (a lower app
+  // value is accepted but has no effect); null = inherit.
+  quality_floors?: Record<string, number> | null;   // workload -> floor in (0, 1]
+  quality_floor_mode?: QualityFloorMode | null;   // null = inherit the deployment mode
+}
+
+export type QualityFloorMode = "off" | "shadow" | "enforce";
+
+// `scoring.quality_floor` on a router hop (app/routing/router.py).
+export type QualityFloorStatus =
+  | "none" | "met" | "unmet_no_qualifier" | "unmet_context" | "unmet_budget"
+  | "shadow_met" | "shadow_unmet_no_qualifier" | "shadow_unmet_context" | "shadow_unmet_budget";
+
+export interface QualityFloorRecord {
+  floor: number | null;
+  mode: QualityFloorMode;
+  workload: string | null;
+  status: QualityFloorStatus;
+  chosen_lower?: number | null;
+  chosen_lower_source?: string | null;
+  bounds?: unknown;
+  shadow_choice?: string | null;
+  shadow_est_cost_usd?: number | null;
 }
 
 // The PUT body: a policy plus the one escape from its merge semantics. `null`
@@ -341,6 +366,15 @@ export interface AdminEffectivePolicy {
   telemetry_io: string;
   detection: string;
   content_integrity: string;
+}
+
+export interface LangfuseSummary {
+  host: string | null;
+  host_source?: "app" | "deployment";
+  public_key: string | null;
+  project_id: string | null;
+  secret_set: boolean;
+  secret_last4: string | null;
 }
 
 export interface AdminApp {
@@ -426,6 +460,8 @@ export interface DeploymentEnvelope {
   reject_stream_requests: boolean;
   allow_app_passthrough: boolean;
   allow_app_pii_downgrade: boolean;
+  // B80: absent on a server that predates quality floors.
+  quality_floors?: { mode: QualityFloorMode; workloads: Record<string, number> };
 }
 
 // `deployment` is optional so the console still boots (and still authenticates)
@@ -448,11 +484,19 @@ export const adminApi = {
     fetch(`/admin/applications/${id}`, opts("PATCH", body)).then(j<AdminApp>),
   setPolicy: (id: string, body: AdminPolicyWrite) =>
     fetch(`/admin/applications/${id}/policy`, opts("PUT", body)).then(j<AdminApp>),
-  // Manual per-app Langfuse creds (B15) — for an air-gapped operator who can't
-  // reach the org-scoped auto-provisioning API. Secret is write-only: never
-  // echoed back in AdminApp; only `has_langfuse_keys` reflects it was set.
-  setLangfuseCreds: (id: string, body: { host: string; public_key: string; secret_key: string; project_id: string }) =>
-    fetch(`/admin/applications/${id}/langfuse`, opts("PUT", body)).then(j<AdminApp>),
+  // Per-app Langfuse creds (B15, B33). The secret is write-only: reads return
+  // the non-secret fields plus `secret_set` (and the last 4 only for a long
+  // secret). PUT is a partial update and verifies from the API process unless
+  // `verify` is false (air-gapped).
+  getLangfuseCreds: (id: string) =>
+    fetch(`/admin/applications/${id}/langfuse`, { credentials: CRED }).then(j<LangfuseSummary>),
+  setLangfuseCreds: (id: string,
+    body: Partial<{ host: string; public_key: string; secret_key: string; project_id: string }>,
+    verify = true) =>
+    fetch(`/admin/applications/${id}/langfuse${verify ? "" : "?verify=false"}`, opts("PUT", body))
+      .then(j<AdminApp & { verified: boolean; langfuse: LangfuseSummary }>),
+  deleteLangfuseCreds: (id: string) =>
+    fetch(`/admin/applications/${id}/langfuse`, opts("DELETE")).then(j<AdminApp>),
   createToken: (id: string, name: string) =>
     fetch(`/admin/applications/${id}/tokens`, opts("POST", { name })).then(j<{ token: string; id: string; prefix: string }>),
   revokeToken: (tokenId: string) =>
@@ -607,6 +651,8 @@ export interface MetricField {
   scope?: string;
   // `completed` extras
   failures?: number;
+  // of `failures`: the only attempted endpoint failed, nothing to fail over to
+  no_failover?: number;
   // null when a placement filter is on: rejections and cancels have no model
   policy_rejections?: number | null;
   excluded?: number | null;
@@ -752,6 +798,12 @@ function metricsQuery(p: MetricsParams): string {
 export type OnboardedModel = {
   slug: string; display_name: string; tier: string; provider: string;
   endpoint: string; api_key_env: string | null;
+  // B68: where this endpoint's key comes from -- "stored" (given at onboarding,
+  // encrypted at rest, write-only), "env" (api_key_env) or null (no key). The
+  // key itself is never returned; `api_key_hint` is its last 4 characters for
+  // a stored key of 12+ characters, else null.
+  api_key_source?: "stored" | "env" | null;
+  api_key_hint?: string | null;
   price_input: number; price_output: number;
   quality: number | null; context_window: number | null;
   // B50: where `context_window` came from — "operator" (a human typed it),
@@ -785,6 +837,11 @@ export type OnboardIn = {
   quality?: number | null; context_window?: number | null;
   allowed_app_ids?: string[] | null; notes?: string | null;
   enabled?: boolean;
+  // B68: the endpoint key itself (stored encrypted; needs ENCRYPTION_KEY on
+  // the server). Never together with api_key_env. OMITTED = keep the stored
+  // key (the console never has it to resubmit); null = remove it; a string =
+  // replace it (and clear api_key_env).
+  api_key?: string | null;
   // P1b endpoint data-handling declarations (design §2/§8), accepted by
   // POST/PUT /admin/infra/models (app/api/admin_routes.py::OnboardIn) and
   // passed through to store.upsert_onboarded. null/omitted = undeclared
