@@ -615,7 +615,7 @@ the Dockerfile header and defaults now describe reality. Operators' notes are un
 (serving-plane 0.2.0, HPE 0.3.0; there is no CHANGELOG file).
 
 
-## B93 — Repo and packaging hygiene from the same audit  🟡 PARTLY FIXED (2026-11-11, fix/b89-deploy-correctness)
+## B93 — Repo and packaging hygiene from the same audit  ✅ RESOLVED (2026-11-12)
 
 **Severity:** low, except the first item, which can leak secrets.
 **Found:** 2026-11-08, same audit as B89.
@@ -641,6 +641,8 @@ the Dockerfile header and defaults now describe reality. Operators' notes are un
 `postgres` extra, the untracked HPE tgz, the Dockerfile copying only the traffic generator + `tests/personas.yaml`, and the
 HPE README Langfuse-login note. **Remaining (Spark-side, not in the repo):** delete `deploy/spark/.env.bak-*` and
 rotate the secrets in them; drop `API_EXTRAS=agent` from the Spark's `deploy/spark/.env`.
+
+**Spark side done 2026-11-12** (during the 0.40.0 Spark deploy): the three `deploy/spark/.env.bak-*` files were deleted, and `API_EXTRAS` in the Spark's `.env` is now `observability,postgres`. The backups were never tracked or copied off the Spark, so the secrets in them were not rotated; rotate them if that machine's disk is ever shared.
 
 
 ## B85 — Stream path records fewer token details than the non-stream path (reasoning and cached tokens)  ✅ RESOLVED (2026-11-11, fix/b85-stream-token-parity)
