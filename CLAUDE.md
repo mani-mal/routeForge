@@ -181,7 +181,8 @@ step-9 verification — those requests fall back to `verified_then_stream` regar
 and stays on. See `docs/reference/per-app-config.md`.
 
 **Routing scopes** — three distinct routers; don't conflate them:
-- **Switchyard** (step 6) selects model + backend
+- **RouteForge Model Router** (step 6) selects model + backend. NVIDIA NeMo Switchyard, when
+  enabled, is only an optional advisor feeding its tier target (backlog B100–B112)
 - **vLLM Semantic Router** (step 8) selects a model path within a vLLM pool
 - **Dynamo** (step 8) selects/scales inference workers and KV placement
 

@@ -45,9 +45,9 @@ breaker:
 
 # Step-6 scoring strategy (app/routing/strategy.py). "default" reproduces the
 # scoring above exactly. An unknown name fails the config lint at boot -- it
-# never silently falls back. Swap this to try an alternate ranking (e.g. a
-# future NeMo Switchyard strategy) without touching the residency/budget
-# filtering in Router.select.
+# never silently falls back. Swap this to try an alternate within-tier ranking
+# without touching the residency/budget filtering in Router.select. (NVIDIA NeMo
+# Switchyard is not a strategy: it advises the cross-tier target -- backlog B102.)
 strategy: default
 
 # Tier-default quality (the last rung of the quality ladder in app/routing/quality.py).

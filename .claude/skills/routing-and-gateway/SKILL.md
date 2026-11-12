@@ -179,7 +179,7 @@ routers exist in this system and conflating them causes confusion:
 
 | Router | Scope |
 |---|---|
-| Switchyard / our router (6) | model + backend |
+| RouteForge Model Router (6) | model + backend |
 | vLLM Semantic Router (8) | model path within a vLLM pool |
 | Dynamo (8) | inference workers, scaling, KV placement |
 

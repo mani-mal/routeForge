@@ -166,7 +166,7 @@ why" — the part that makes the demo credible.
 - **CCR stored / retrievals / cloud** `0 / 0 / 0` — nothing was cached, retrieved, or
   sent to cloud by the compressor.
 
-### Model Router (step 6, Switchyard) — *pick model + tier per call, by cost & risk*
+### Model Router (step 6) — *pick model + tier per call, by cost & risk*
 - **chosen** `nemotron-nano-8b-v1`, **tier mid (target mid)** — the router targeted the
   mid tier and picked the cheapest eligible model in it.
 - **rejected spurs** — the alternatives and *why* each lost:

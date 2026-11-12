@@ -4,7 +4,7 @@
 // infrastructure section, and a single app's drill-down page. Nothing here
 // talks to the backend directly; each child screen owns its own data.
 //
-// Navigation is the Switchyard "rail": a left column of lit "station" nodes
+// Navigation is the rail-yard "rail": a left column of lit "station" nodes
 // threaded by a single vertical track (spec §12). Extend `STATIONS` (and the
 // `View` union) to add sections — the "infra" station renders the real
 // <InfrastructurePanel/> (Task B5).

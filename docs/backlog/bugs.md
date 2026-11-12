@@ -214,7 +214,16 @@ the audit trail in that sweep's task report.
 **Accept when:** the import-guard test passes, a boot without the extra is unchanged, and
 each lint code fires on its own fixture.
 
-## B101 — DOCS (Switchyard S0a): retire RouteForge's internal "Switchyard" codename  🔴 OPEN
+## B101 — DOCS (Switchyard S0a): retire RouteForge's internal "Switchyard" codename  ✅ RESOLVED (2026-11-12, docs/b101-rename-model-router)
+
+**Resolved.** RouteForge's step-6 router is now the **RouteForge Model Router** ("Model
+Router" for short) in `CLAUDE.md`, the routing skill, the dashboard guide, the
+architecture note and the drawio diagram. The console's rail-yard comment was reworded.
+The `app/routing/strategy.py` and `config/routing.yaml` comments that called NVIDIA's
+library a "future strategy" now point at B102 (it's a cross-tier advisor, not a
+`rank()` strategy). The remaining hits name NVIDIA's project only. The bench golden
+fixture's copy of the old `routing.yaml` comment was left unchanged on purpose.
+
 
 Rename RouteForge's own step-6 router in `CLAUDE.md` (the architecture table, "Routing
 scopes"), `.claude/skills/routing-and-gateway/SKILL.md`,

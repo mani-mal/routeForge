@@ -8,8 +8,9 @@ exactly the candidates `select` decided are admissible and returns them
 ordered best-first. It has no way to add a candidate that wasn't in its
 input, so it can never reintroduce a residency-filtered (e.g. cloud, under
 `onprem_only`) candidate -- that's the residency invariant this seam exists
-to preserve while still letting the ranking itself be swapped (e.g. for a
-future NeMo Switchyard strategy).
+to preserve while still letting the ranking itself be swapped. (NVIDIA NeMo
+Switchyard does NOT plug in here: its efficient-vs-capable choice is cross-tier,
+so it advises tier targeting upstream of `Router.select` -- backlog B102.)
 
 **P2a: measured signals and provenance (spec §6.2, §7.3).** Scoring now
 consumes a `SignalStore` (app/routing/signals.py) for per-model latency and
