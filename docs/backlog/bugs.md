@@ -282,8 +282,18 @@ algorithm. It never raises into the request path.
   `sp.switchyard.mode`, `.role`, `.model`, `.confidence`, `.agreed` (proposal equal to served
   model), `.fallback_cause`, `.latency_ms` and `.version`. Add the same columns to
   `routing_outcomes`.
+- **Langfuse.** The `sp.switchyard.*` attributes reach Langfuse as trace metadata through
+  `app/obs/export.py`. They go to the same project the trace already goes to: the app's
+  own project, or the shared one. Also set Langfuse **trace tags** (`langfuse.trace.tags`)
+  so advisor traffic can be filtered in the Langfuse UI. RouteForge sets no trace tags
+  today, so this adds tag support to the exporter. Tags come from a fixed, bounded
+  vocabulary only, never free text:
+  - `switchyard` on every trace where the advisor ran;
+  - `switchyard:shadow` or `switchyard:enforce`;
+  - `switchyard:agreed`, `switchyard:overridden` or `switchyard:fallback`.
 
-**Accept when:** a property test feeds random PII-shaped content through the advisor and finds
+**Accept when:** an advisor-run trace in Langfuse carries the `switchyard*` tags and
+`sp.switchyard.*` metadata, and a property test feeds random PII-shaped content through the advisor and finds
 none of it in any trace attribute, outcome row or log line.
 
 ## B105 — FEATURE (Switchyard P1): shadow mode  🔴 OPEN
