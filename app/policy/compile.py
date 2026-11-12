@@ -36,7 +36,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from app.config.schema import Settings
-from app.policy.enums import PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES
+from app.policy.enums import (PII_MODES, POLICY_MODES, RESIDENCY, STREAM_MODES,
+                              TOOL_ARGS_BAR_TYPES_DEFAULT)
 from app.policy.trajectory import resolve_trajectory_mode
 
 if TYPE_CHECKING:
@@ -144,6 +145,24 @@ class Protection:
     stream_mode: StreamMode
     #: axis name -> "app_policy" | "preset:<mode>" | "ceiling" | "deployment_default"
     sources: Mapping[str, str]
+    #: B69: the EFFECTIVE tool-argument bar -- the minimum detector score a
+    #: span inside tool-call arguments needs to be rewritten:
+    #: `max(app pii_score_threshold or 0, resolved tool_args_min_score)`.
+    #: Rewriting only: detection, classification and message text never read
+    #: it. `sources["tool_args_min_score"]` names where the resolved axis
+    #: value came from (`app_policy` / `deployment_default` / `ceiling` when
+    #: an unparseable stored value denied to 0.0), or `pii_score_threshold`
+    #: when the app's threshold is what raised the effective bar.
+    tool_args_min_score: float = 0.0
+    #: B69: the resolved `tool_args_min_score` axis value BEFORE the app's
+    #: `pii_score_threshold` is folded in -- what the save-time monotonicity
+    #: invariant compares, since the effective value above can sit at the
+    #: threshold for both extremes.
+    tool_args_min_score_axis: float = 0.0
+    #: B69: the entity types the bar applies to at all -- the deployment's
+    #: `serving.yaml` `policy.tool_args_bar_types` (deployment-level only, no
+    #: per-app list). Every other type is always rewritten in tool arguments.
+    tool_args_bar_types: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -315,6 +334,29 @@ def resolve_allowed_regions(value) -> tuple[frozenset[str] | None, bool]:
     if not tokens:
         return frozenset(), False
     return frozenset(tokens), True
+
+
+def resolve_tool_args_min_score(value, default) -> tuple[float, bool]:
+    """Resolve one stored `tool_args_min_score` (B69) to `(score, parsed)`.
+
+    * `None` (unset) inherits the deployment default and counts as parsed.
+    * A real number in [0.0, 1.0] resolves to itself.
+    * Anything else -- a bool, a string, NaN, out of range -- **denies** to
+      0.0, this axis's protective end (a bar of 0 rewrites every detected
+      span, today's pre-B69 behaviour), with `parsed=False` so the caller
+      records it in `rejected` and the write is refused (CLAUDE.md rule 5).
+
+    The deployment default is range-checked by the config lint at boot; a
+    malformed one reaching here denies the same way.
+    """
+    def _ok(v) -> bool:
+        return (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and 0.0 <= v <= 1.0)
+    if value is None:
+        return (float(default), True) if _ok(default) else (0.0, False)
+    if _ok(value):
+        return float(value), True
+    return 0.0, False
 
 
 # --- the compiler ------------------------------------------------------------
@@ -498,6 +540,30 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         "stream_mode", _get(app_policy, "stream_mode"), STREAM_MODES,
         None, None, "off", rejected)
 
+    # B69: the tool-argument bar. A float axis with no preset and no ceiling:
+    # explicit per-app value, else the deployment default. The EFFECTIVE bar
+    # folds in the app's `pii_score_threshold`, which already culls every
+    # scored match below it everywhere (FilteredDetector) -- so the bar the
+    # certificate reports is the one that actually applied.
+    stored_bar = _get(app_policy, "tool_args_min_score")
+    bar, bar_parsed = resolve_tool_args_min_score(
+        stored_bar, getattr(deployment.serving, "tool_args_min_score", 0.5))
+    if not bar_parsed:
+        rejected.append(("tool_args_min_score", str(stored_bar)))
+        sources["tool_args_min_score"] = _CEILING
+    else:
+        sources["tool_args_min_score"] = _APP if stored_bar is not None else _DEFAULT
+    bar_axis = bar
+    threshold = _get(app_policy, "pii_score_threshold")
+    if (isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
+            and 0.0 <= threshold <= 1.0 and threshold > bar):
+        bar = float(threshold)
+        sources["tool_args_min_score"] = "pii_score_threshold"
+    # Deployment-level only; the config lint guarantees no PROTECTED type is
+    # in it, and `below_tool_arg_bar` never exempts one regardless.
+    bar_types = frozenset(getattr(deployment.serving, "tool_args_bar_types",
+                                  TOOL_ARGS_BAR_TYPES_DEFAULT) or ())
+
     protection = Protection(
         model_input=model_input,
         client_output=client_output,
@@ -506,6 +572,9 @@ def compile_policy(app_policy, deployment: Settings) -> EffectivePolicy:
         content_integrity=content_integrity,
         stream_mode=stream_mode,
         sources=MappingProxyType(dict(sources)),
+        tool_args_min_score=bar,
+        tool_args_min_score_axis=bar_axis,
+        tool_args_bar_types=bar_types,
     )
 
     escalate = _get(app_policy, "escalate_residency_on_detection")
@@ -680,6 +749,12 @@ def validate_effective(eff: EffectivePolicy, deployment: Settings, *,
     # persisted and silently behaved as "off").
     for axis, value in eff.rejected:
         name = _OPERATOR_NAME.get(axis, axis)
+        if axis == "tool_args_min_score":
+            raise PolicyViolation(
+                "TOOL_ARGS_MIN_SCORE_INVALID",
+                f"bad tool_args_min_score {value!r}; legal values: a number "
+                "from 0.0 to 1.0. To inherit the deployment default send "
+                'reset: ["tool_args_min_score"].')
         if axis == "allowed_regions":
             # No enum to offer (design §3 has no _LEGAL vocabulary for this
             # axis, unlike the P1a rungs below) -- the message names the
@@ -857,13 +932,16 @@ _RESIDENCY_BY_RANK: tuple[str, ...] = tuple(
 #: protection axis alone can never move placement, and (b) to probe that
 #: asking for the strict end never resolves to something less protective than
 #: asking for the loose end.
-_PROTECTION_EXTREMES: tuple[tuple[str, str, str], ...] = (
+_PROTECTION_EXTREMES: tuple[tuple[str, str | float, str | float], ...] = (
     ("model_input", "raw", "redact"),
     ("client_output", "raw", "redact"),
     ("capture_io", "full", "off"),
     ("pii_detection", "off", "presidio"),
     ("content_integrity", "transformations_allowed", "exact"),
     ("stream_mode", "stream_unverified", "off"),
+    # B69: a higher bar rewrites fewer spans inside tool-call arguments, so
+    # 1.0 is the loose end and 0.0 (rewrite everything detected) the strict.
+    ("tool_args_min_score", 1.0, 0.0),
 )
 
 #: `AppPolicyView` field name -> the `Protection` attribute it resolves to.
@@ -876,6 +954,10 @@ _FIELD_TO_PROTECTION_ATTR = {
     "pii_detection": "detection",
     "content_integrity": "content_integrity",
     "stream_mode": "stream_mode",
+    # The raw resolved axis, not the effective bar: the effective value folds
+    # in `pii_score_threshold`, which can pin both extremes to the threshold
+    # and make the monotonicity check below compare nothing.
+    "tool_args_min_score": "tool_args_min_score_axis",
 }
 
 #: A fixed, small set of detected-entity signals, ordered from no signal to
@@ -887,8 +969,8 @@ _ENTITY_TUPLES: tuple[tuple[str, ...], ...] = ((), ("PERSON",), ("US_SSN",))
 
 #: The fixed, bounded grid the save-time check compiles over for the one app
 #: being saved: the full residency axis (3, "the residency neighbours" of
-#: any point on it), both extremes of every protection axis (12), and the
-#: three detected-entity signals (3) -- 18 points total. A module-level
+#: any point on it), both extremes of every protection axis (14), and the
+#: three detected-entity signals (3) -- 20 points total. A module-level
 #: constant, built once at import time from literals: no I/O, no dependence
 #: on the app or deployment being checked, so the write path's cost is the
 #: same for every app and every write. `test_policy_save_validation.py`
@@ -931,7 +1013,7 @@ def check_invariants(view: "AppPolicyView", deployment: Settings) -> None:
     this app still cannot be saved.
 
     Bounded and I/O-free by construction: `_INVARIANT_GRID` is a module-level
-    constant (18 points), and every grid point is one `compile_policy` call
+    constant (20 points), and every grid point is one `compile_policy` call
     (pure, no DB/clock/request) plus, for the three entity points, one
     `apply_signals` call. The admin write path pays a small, fixed number of
     extra pure-function calls, never unbounded work.
@@ -1052,10 +1134,17 @@ def check_invariants(view: "AppPolicyView", deployment: Settings) -> None:
         # ceiling clamps still lands on `strict` (ceilings only ever deny
         # towards the protective end -- see `_resolve`/`_DENY` above), so
         # this holds even for a deployment whose ceilings are locked down.
-        rank = {loose: 0, strict: 1}
-        if loose_value not in rank or strict_value not in rank:
-            continue
-        if rank[strict_value] < rank[loose_value]:
+        if isinstance(loose, float):
+            # A numeric axis (B69's tool-argument bar): lower is stricter.
+            # Compared directly rather than by rank, so no resolved value can
+            # fall outside the pair and be skipped silently.
+            less_protective = float(strict_value) > float(loose_value)
+        else:
+            rank = {loose: 0, strict: 1}
+            if loose_value not in rank or strict_value not in rank:
+                continue
+            less_protective = rank[strict_value] < rank[loose_value]
+        if less_protective:
             raise PolicyViolation(
                 "INVARIANT_PROTECTION_AXIS_NOT_MONOTONIC",
                 f"requesting {axis}={strict!r} (the strict end) resolved to "

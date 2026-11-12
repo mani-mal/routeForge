@@ -3,7 +3,7 @@
 Operator-facing reference for the per-app override knobs — `residency`, `policy_mode`,
 `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`,
 `escalate_residency_on_detection`, `pii_entity_denylist`, `pii_score_threshold`,
-`pii_exempt_patterns` and `stream_mode`. For the *why* (which knobs are safe to expose
+`pii_exempt_patterns`, `tool_args_min_score` and `stream_mode`. For the *why* (which knobs are safe to expose
 per-app and which aren't), read the per-app-config flexibility design note
 first — this page is the how-to. If the question is *"I have a new app, what should I
 set?"* rather than *"what does this field do?"*, start with
@@ -32,7 +32,7 @@ to prevent:
 | | Governs | Fields |
 |---|---|---|
 | **Placement** | *Where compute may run.* Nothing else. | `residency`, and the placement-adjacent `allowed_regions` / `require_no_retention` |
-| **Protection** | *How much is done to the data.* Nothing else. | `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`, `stream_mode` |
+| **Protection** | *How much is done to the data.* Nothing else. | `model_input`, `client_output`, `capture_io`, `pii_detection`, `content_integrity`, `stream_mode`, `tool_args_min_score` |
 
 `allowed_regions` and `require_no_retention` are placement-adjacent **constraints** rather
 than a second placement axis: they can only narrow which endpoints a request may reach,
@@ -74,6 +74,7 @@ true in the compiler *and* in `app/policy/context.py`, which calls the same
 | `pii_detection` | `off` \| `regex` \| `presidio` | Which **detector** the above use when one is needed. `null` inherits `serving.policy.pii_detection`. |
 | `content_integrity` | `transformations_allowed` (default) \| `exact` | `exact` disables all lossy compression (Headroom) for the app, so its content survives byte-for-byte. A **data** control, not a privacy control: it never changes placement. |
 | `stream_mode` | `off` \| `verified_then_stream` \| `stream_unverified` \| `incremental_verify` | How `stream: true` is served. No deployment-wide default — `null` means the app never opted in. See [`stream_mode`](#stream_mode) below. |
+| `tool_args_min_score` | float in `[0.0, 1.0]` (deployment default `0.5`) | The **tool-argument bar**: inside tool-call `function.arguments` only, a detected span of a type in the deployment's `tool_args_bar_types` list is rewritten only if its detector score is at least this; every other type is always rewritten. Rewriting only — detection, classification and message text are unchanged. See [`tool_args_min_score`](#tool_args_min_score--the-tool-argument-bar) below. |
 | `escalate_residency_on_detection` | `true` (default when `null`) \| `false` | Whether a declared `sensitivity_rules` entry may **raise** this app's residency. It can only ever prevent a tightening; it can never loosen placement, and `false` does not stop the rule from setting `require_verification` or the sensitivity label. |
 
 `policy_mode` is **not a seventh axis.** It is a preset over two of them — see below.
@@ -254,6 +255,9 @@ sp.cross_axis_rules_fired, sp.detected_entity_types     # types only, never valu
 sp.candidates, sp.app_policy_version, sp.routing_policy_version
 sp.endpoint_registry_version, endpoint_data_handling    # the endpoint declarations a decision rested on
 sp.checks: {chosen_in_eligible_set, fallback_in_eligible_set}
+sp.tool_args_min_score, sp.tool_args_bar_types,          # the tool-argument bar, its types
+sp.tool_arg_redactions, sp.tool_arg_skipped,             # and what it did (counts,
+sp.tool_arg_skipped_types                                #   types -- never values)
 ```
 
 `sp.detection_mode` reports the detector that **actually ran on this request**, not the
@@ -821,6 +825,49 @@ console's inline check is an early warning, not the authority.
 `PROTECTED_ENTITIES` entirely, so no regex — however SSN-shaped — can un-redact one.
 Same guarantee as the denylist and the threshold, enforced at the same seam.
 
+## `tool_args_min_score` — the tool-argument bar
+
+**API:** `PUT /admin/applications/{app_id}/policy` with `{"tool_args_min_score": 0.5}`.
+**Deployment default:** `config/serving.yaml` → `policy.tool_args_min_score` (`0.5`).
+
+Tool-call `function.arguments` are not prose: they are a **command channel the client
+executes** — a shell command, a file path, a SQL query. A weak, context-free pattern
+match rewritten there breaks the command. B69 is the case that made this a setting:
+Presidio's `US_DRIVER_LICENSE` recognizer scores any letter followed by digits at `0.3`,
+so `xargs -0 -n1` came back as `xargs -0 -REDACTED_US_DRIVER_LICENSE_1` and the client ran
+it. `n20` (`tail -n20`) and `c1500` (`head -c1500`) match the same way.
+
+So inside tool-call arguments — and only there — a span of a **listed type** is rewritten
+only if its detector score is **at least** the bar; below the bar it passes through byte
+for byte. **Only the listed types are subject to the bar. Every other type is always
+redacted in tool arguments, whatever its score**, with the inert `REDACTED_TYPE_N`
+placeholder — exactly as before B69. That restriction matters: Presidio scores real PII
+low too (`PHONE_NUMBER` `0.4` with no context word; `US_BANK_NUMBER` and `US_PASSPORT`
+reach only `0.4` even with one), so a bar over every type would pass those raw.
+
+The list is **deployment-level only** — `config/serving.yaml` → `policy.tool_args_bar_types`,
+default `[US_DRIVER_LICENSE, PERSON, LOCATION, NRP, DATE_TIME, URL]`, the types seen
+misfiring on shell text in B69. There is no per-app list. Each entry must be a non-empty
+string (`TOOL_ARGS_BAR_TYPES_INVALID`), and naming `US_SSN` is a named boot failure
+(`TOOL_ARGS_BAR_TYPE_PROTECTED`). A listed span whose score clears the bar (a `PERSON` at
+`0.85`) is redacted as usual.
+
+| | |
+|---|---|
+| **Values** | a number from `0.0` to `1.0`, or `null` (inherit the deployment default). Either direction is allowed: `0.0` rewrites every detected span (the pre-B69 behaviour); `0.9` lets nearly every span of a listed type through (unlisted types are still always redacted). Out of range is a 422 at write time, and a named boot failure (`TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE`) in `serving.yaml`. |
+| **Effective bar** | `max(pii_score_threshold or 0, tool_args_min_score)`. The app's `pii_score_threshold` already drops every scored match below it everywhere, so the bar the certificate reports is the one that actually applied (its source then reads `pii_score_threshold`). |
+| **Overlaps** | a below-bar span that overlaps a span being redacted is redacted with it — never left half-raw next to the placeholder. |
+| **Both directions** | ingress (an assistant turn's replayed `tool_calls` the client sends back) and egress (the model's own `tool_calls`, under `client_output: redact`) use the same helper and the same bar. |
+| **Never exempts** | `US_SSN`, whatever its score (the same absolute guarantee `pii_entity_denylist` / `pii_score_threshold` / `pii_exempt_patterns` can never lift — CLAUDE.md rules 3/8; the SSN backstop scores `1.0` anyway); every **unscored** match, which is every `pii_detection: regex` match, so the bar never drops a regex hit; and every **custom-recognizer** match, whose pattern and score the operator declared. |
+| **Does not change** | detection. Every detected type — skipped ones included — still sets sensitivity, still fires a `sensitivity_rules` entry (and so still escalates residency), and still appears in `detected_entity_types` on the response, the trace and the outcome row. Message text (`content`) is redacted exactly as before, whatever the score. |
+| **Never silent** | every response's `policy` block and trace carry `tool_args_min_score` (the effective value), `tool_args_bar_types` (the listed types), `tool_arg_redactions` (spans rewritten), `tool_arg_skipped` (spans that passed through below the bar) and `tool_arg_skipped_types` (their entity **types**, never values); the outcome row records the last three ([routing-outcomes](routing-outcomes.md)). Ingress and egress are summed. |
+| **Version** | a set value is folded into `app_policy_version`; `null` leaves the hash exactly as it was before this field existed. |
+
+To go back to the deployment default send `{"reset": ["tool_args_min_score"]}`.
+
+A deployed database needs the column before this field can be set — see
+[Manual DB migration](#manual-db-migration-for-already-deployed-databases).
+
 ## `model_input` and `client_output`
 
 **API only** (no console control yet): the same
@@ -1374,6 +1421,7 @@ ALTER TABLE app_policies ADD COLUMN escalate_residency_on_detection BOOLEAN; -- 
 ALTER TABLE app_policies ADD COLUMN allowed_regions JSON;          -- 2026-09-19 (P1b)
 ALTER TABLE app_policies ADD COLUMN require_no_retention BOOLEAN;  -- 2026-09-19 (P1b)
 ALTER TABLE app_policies ADD COLUMN monthly_budget_usd FLOAT;      -- 2026-11-05 (metrics slice 4)
+ALTER TABLE app_policies ADD COLUMN tool_args_min_score FLOAT;     -- 2026-11-11 (B69)
 ```
 
 P1b also adds three columns to a **second** table, `onboarded_models` — the endpoint side

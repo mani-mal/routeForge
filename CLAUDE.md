@@ -87,8 +87,11 @@ guarantees.
    is shown), `client_output` (`raw | redact` — what the client receives),
    `capture_io` (`off | redacted | full` — what telemetry stores), `pii_detection`
    (`off | regex | presidio` — which detector), `content_integrity`
-   (`transformations_allowed | exact` — whether lossy compression may run) and
-   `stream_mode`. `policy_mode` is a **preset**, not a seventh axis: `enforced`
+   (`transformations_allowed | exact` — whether lossy compression may run),
+   `stream_mode` and `tool_args_min_score` (0–1 — the minimum detector score for
+   rewriting a span of a deployment-listed noisy type inside tool-call arguments;
+   other types always rewritten; rewriting only, never detection).
+   `policy_mode` is a **preset**, not a seventh axis: `enforced`
    resolves to `model_input: redact` + `client_output: redact`, `passthrough` to
    `raw` + `raw` (and, only when the app names no detector, `pii_detection: off`).
 

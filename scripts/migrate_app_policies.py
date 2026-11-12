@@ -88,6 +88,9 @@ COLUMNS: list[tuple[str, str, str]] = [
     # 2026-11-05 model metrics slice 4 — display-only monthly budget. NULL = no
     # budget shown; never read by enforcement or by AppPolicy.version().
     ("monthly_budget_usd", "DOUBLE PRECISION", "FLOAT"),
+    # 2026-11-11 B69 — the tool-argument bar. NULL = inherit serving.yaml
+    # policy.tool_args_min_score.
+    ("tool_args_min_score", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 # The endpoint-side half of the same feature: what an operator DECLARED about
@@ -156,6 +159,10 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("reply_has_text", "BOOLEAN", "BOOLEAN"),
     ("reply_tool_calls", "INTEGER", "INTEGER"),
     ("reasoning_tokens", "INTEGER", "INTEGER"),
+    # 2026-11-11 B69 — the tool-argument bar's content-free counts.
+    ("tool_arg_redactions", "INTEGER", "INTEGER"),
+    ("tool_arg_skipped", "INTEGER", "INTEGER"),
+    ("tool_arg_skipped_types", "JSON", "JSON"),
 ]
 
 APPLICATIONS_TABLE = "applications"

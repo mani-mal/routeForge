@@ -1044,7 +1044,7 @@ rest are record and replay gaps that change numbers the paper reports).
    replay reads `circuit_open` from the recorded row (it is already there) and reports
    breaker-diverted rows as their own class instead of as disagreement.
 
-## B69 — Egress redaction rewrites tool-call arguments on a weak detector match, and the placeholder is executable shell  🟡 PARTLY FIXED
+## B69 — Egress redaction rewrites tool-call arguments on a weak detector match, and the placeholder is executable shell  ✅ RESOLVED (2026-11-11, fix/b69-tool-arg-redaction)
 
 **Severity:** high for coding-agent clients (a redacted argument is *executed* by the
 client; here it failed harmlessly, but a placeholder inside a command is not guaranteed to).
@@ -1100,6 +1100,37 @@ below other than the placeholder are not built.
   this happening without reading a client's terminal.
 - Regression test: `xargs -0 -n1`, `tail -n20`, `head -c1500` through an enforced app with
   `presidio`.
+
+**Resolved (2026-11-11, `fix/b69-tool-arg-redaction`).** Owner's decision: a minimum
+detector score for redaction inside tool-call arguments — the **tool-argument bar**. Inside
+`tool_calls[*].function.arguments` (both directions, through the shared
+`redact_tool_calls_with_entities` helper) a detected span is rewritten only if its score is
+at least the bar; below it the span passes through byte for byte. Deployment default
+`serving.yaml` `policy.tool_args_min_score: 0.5` (range-checked at boot,
+`TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE`); per-app override `tool_args_min_score` (0–1, either
+direction, resolved in `compile_policy`, folded into `app_policy_version`). Effective bar =
+`max(pii_score_threshold or 0, tool_args_min_score)`. **Fix round 1 (owner):** the bar
+applies only to the deployment-listed noisy types — `policy.tool_args_bar_types`, default
+`[US_DRIVER_LICENSE, PERSON, LOCATION, NRP, DATE_TIME, URL]`, never a protected type
+(`TOOL_ARGS_BAR_TYPE_PROTECTED`); every other type is always redacted in tool arguments,
+because Presidio scores real PII low too (`PHONE_NUMBER` 0.4 without context;
+`US_BANK_NUMBER`/`US_PASSPORT` 0.4 even with it). A below-bar span overlapping a redacted
+one is redacted with it. Never exempted: `US_SSN` at any score,
+every unscored (regex) match and every custom-recognizer match. Detection is unchanged —
+skipped types still classify, still fire `sensitivity_rules` and still appear in
+`detected_entity_types`; message text is untouched. Never silent: the response `policy`
+block and the trace carry `tool_args_min_score`, `tool_arg_redactions`, `tool_arg_skipped`
+and `tool_arg_skipped_types` (types only), and the outcome row the three counts/types (new
+nullable columns; ALTERs in `docs/reference/routing-outcomes.md`, and
+`app_policies.tool_args_min_score` in `docs/guides/admin-setup.md`;
+`scripts/migrate_app_policies.py` covers all four). The "fail the tool call visibly"
+option was not built. **Also found and fixed here (pre-existing):** `dedupe` types a merged
+overlap cluster after its best member, so a cluster such as `PHONE_NUMBER` 0.75 absorbing
+`US_SSN` 0.4 was typed `PHONE_NUMBER`, and `FilteredDetector` (denylist / threshold / exempt
+patterns) checked only the type — it could drop that SSN from detection and redaction. A
+merged span now carries `contains_protected`, and `FilteredDetector` never drops one. Tests: `tests/test_tool_arg_bar.py`,
+`tests/test_tool_arg_bar_pipeline.py` (incl. the Presidio regression, skipped without
+`presidio_analyzer`). See `docs/reference/per-app-config.md` § `tool_args_min_score`.
 
 ## B68 — Onboarding a keyed endpoint needs a redeploy: the key can only come from an env var in the API pod  ✅ RESOLVED (2026-11-11, feat/b68-onboarding-api-key)
 

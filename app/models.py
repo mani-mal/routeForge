@@ -118,6 +118,27 @@ class Entity(BaseModel):
     # can break same-span/same-length ties deterministically (highest wins).
     # Built-in RegexDetector entities leave this None (longest-span-wins only).
     score: float | None = None
+    # Where the match came from, when that matters to a consumer: "custom" for
+    # an operator-declared CustomRecognizer. The tool-argument bar (B69,
+    # app/policy/gate.py) never drops a custom match whatever its score -- the
+    # operator declared that pattern, exactly as `pii_score_threshold` never
+    # culls one (FilteredDetector wraps only the base detector). None = a
+    # built-in recognizer.
+    source: str | None = None
+    # Set by `dedupe` on a MERGED span when any member of its overlap cluster
+    # was itself exempt from the tool-argument bar (`merge.exempt_from_score_bar`:
+    # unscored, custom, a PROTECTED type). The merged span takes type/score/
+    # source from its best member only, so without this a weak Presidio match
+    # overlapping an SSN or a custom match could carry the whole span below the
+    # bar. Read by the bar only; detection, placeholders and types ignore it.
+    bar_exempt: bool = False
+    # Set by `dedupe` on a MERGED span when any member of its overlap cluster
+    # was a PROTECTED type (US_SSN) -- the merged span may be TYPED after a
+    # non-protected best member (PHONE_NUMBER 0.75 absorbing US_SSN 0.4).
+    # Narrower than `bar_exempt` (which also covers unscored/custom members):
+    # this one is what FilteredDetector's denylist / threshold / exempt
+    # patterns must never drop. Read via `merge.is_protected`.
+    contains_protected: bool = False
 
 
 class ExecutionPolicyContext(BaseModel):

@@ -420,7 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     # The deployment posture every app was compiled under -- the SNAPSHOT's
     # values, never this machine's local config.
     serving_policy = {k: snapshot["settings"]["serving_policy"][k]
-                      for k in SERVING_POLICY_FIELDS}
+                      for k in SERVING_POLICY_FIELDS
+                      if k in snapshot["settings"]["serving_policy"]}
     if args.scenarios:
         return _compare_scenarios(
             args, records=records, warnings=warnings, snapshot=snapshot,

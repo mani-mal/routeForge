@@ -42,6 +42,10 @@ class AppPolicyView:
     pii_entity_denylist: frozenset[str] | None = None  # entity types to NOT redact
     pii_score_threshold: float | None = None  # min Presidio confidence; None = no floor
     pii_exempt_patterns: frozenset[str] | None = None  # regexes; VALUE fullmatch => not redacted
+    # B69: min detector score for rewriting a span inside tool-call arguments.
+    # None = inherit serving.yaml policy.tool_args_min_score. Resolved by
+    # app/policy/compile.py (effective = max(pii_score_threshold, this)).
+    tool_args_min_score: float | None = None
     # --- P1a data-handling axes. null = inherit; resolved by
     # app/policy/compile.py::compile_policy, not here.
     model_input: str | None = None            # None = inherit (policy_mode preset)
@@ -129,6 +133,9 @@ class AppPolicyView:
                 self.escalate_residency_on_detection
         if self.trajectory_mode is not None:
             fields["trajectory_mode"] = self.trajectory_mode
+        # B69: same "fold in only when set" rule.
+        if self.tool_args_min_score is not None:
+            fields["tool_args_min_score"] = self.tool_args_min_score
         # P1b data-handling requirements: same "fold in only when set" rule.
         if self.allowed_regions is not None:
             fields["allowed_regions"] = sorted(self.allowed_regions)
@@ -192,6 +199,7 @@ def policy_view_from(app: Application) -> AppPolicyView:
         allowed_regions=_fs(p.allowed_regions),
         require_no_retention=p.require_no_retention,
         trajectory_mode=p.trajectory_mode,
+        tool_args_min_score=p.tool_args_min_score,
         model_aliases=alias_pairs(p.model_aliases),
         quality_floors=floor_pairs(p.quality_floors),
         quality_floor_mode=p.quality_floor_mode,

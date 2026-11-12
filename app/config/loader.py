@@ -11,6 +11,7 @@ from app.config.schema import (
     ObservabilityCfg, PolicyCfg, PricingCfg, RoutingCfg, SemanticCacheCfg,
     ServingCfg, Settings,
 )
+from app.policy.enums import TOOL_ARGS_BAR_TYPES_DEFAULT
 from app.prompts.store import prompt_version, resolve_active
 
 _ENV_PAT = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
@@ -184,6 +185,11 @@ def load_settings(config_dir: str = "config") -> Settings:
             "SP_DEFAULT_POLICY_MODE",
             serving_raw["policy"].get("default_policy_mode", "enforced")),
         allow_app_passthrough=allow_app_passthrough,
+        # B69: .get() with the default so an older serving.yaml without the
+        # key still boots; the range is the config lint's job.
+        tool_args_min_score=serving_raw["policy"].get("tool_args_min_score", 0.5),
+        tool_args_bar_types=serving_raw["policy"].get(
+            "tool_args_bar_types", list(TOOL_ARGS_BAR_TYPES_DEFAULT)),
         reject_stream_requests=serving_raw["server"]["reject_stream_requests"],
         stream_keepalive_s=float(serving_raw["server"].get("stream_keepalive_s", 5.0)),
         derive_session_id=bool(serving_raw["server"].get("derive_session_id", True)),

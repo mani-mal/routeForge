@@ -409,6 +409,24 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 root.set_attribute(
                     "sp.detected_entity_types",
                     ",".join(policy.get("detected_entity_types", [])))
+            if policy.get("tool_args_min_score") is not None:
+                # B69: the effective tool-argument bar and what it did on
+                # this request -- spans rewritten inside tool-call arguments,
+                # spans that passed through below the bar, and the latter's
+                # entity TYPES (a bounded vocabulary, never a value). A
+                # skipped match is counted and named here, never silent.
+                root.set_attribute("sp.tool_args_min_score",
+                                   float(policy["tool_args_min_score"]))
+                # The entity types the bar applies to (deployment-level);
+                # every other type is always rewritten in tool arguments.
+                root.set_attribute("sp.tool_args_bar_types",
+                                   ",".join(policy.get("tool_args_bar_types") or []))
+                root.set_attribute("sp.tool_arg_redactions",
+                                   int(policy.get("tool_arg_redactions") or 0))
+                root.set_attribute("sp.tool_arg_skipped",
+                                   int(policy.get("tool_arg_skipped") or 0))
+                root.set_attribute("sp.tool_arg_skipped_types",
+                                   ",".join(policy.get("tool_arg_skipped_types") or []))
             checks = policy.get("checks")
             if checks:
                 # sp.checks (design §6): the one per-request proof the

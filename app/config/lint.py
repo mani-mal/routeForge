@@ -9,6 +9,7 @@ from app.config.schema import (
 from app.policy.enums import (
     ONPREM_PROVIDER, POLICY_MODES, RISK_CLASS, SENSITIVITY, TIERS,
 )
+from app.policy.merge import PROTECTED_ENTITIES
 from app.policy.enums import PROMPT_RETENTION_VALUES, RAW_SENSITIVE_VALUES
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
@@ -286,6 +287,30 @@ def lint_settings(s: Settings) -> list[str]:
                 f"POOL_RAW_SENSITIVE_UNKNOWN model_pool:{c.name} "
                 f"accepts_raw_sensitive={c.accepts_raw_sensitive!r} not in "
                 f"{sorted(RAW_SENSITIVE_VALUES)}")
+
+    # B69: the deployment's tool-argument bar is a score; outside [0, 1] it
+    # either rewrites nothing or everything, silently. Named boot failure.
+    bar = s.serving.tool_args_min_score
+    if isinstance(bar, bool) or not isinstance(bar, (int, float)) or not 0.0 <= bar <= 1.0:
+        errs.append(
+            f"TOOL_ARGS_MIN_SCORE_OUT_OF_RANGE serving.yaml policy.tool_args_min_score "
+            f"must be a number from 0.0 to 1.0; got {bar!r}")
+    # B69: the types the bar applies to. Each a non-empty string; never a
+    # PROTECTED type -- the list can never put US_SSN under the bar (the bar
+    # never exempts it anyway; this makes the misconfiguration loud).
+    bar_types = s.serving.tool_args_bar_types
+    if not isinstance(bar_types, list) or not all(
+            isinstance(t, str) and t.strip() for t in bar_types):
+        errs.append(
+            "TOOL_ARGS_BAR_TYPES_INVALID serving.yaml policy.tool_args_bar_types must "
+            f"be a list of non-empty entity-type strings; got {bar_types!r}")
+    else:
+        protected = sorted(set(bar_types) & PROTECTED_ENTITIES)
+        if protected:
+            errs.append(
+                f"TOOL_ARGS_BAR_TYPE_PROTECTED serving.yaml policy.tool_args_bar_types "
+                f"names {protected}, which carry an absolute redaction guarantee "
+                "(CLAUDE.md rules 3/8) and can never be subject to the bar")
 
     return errs
 
