@@ -32,7 +32,9 @@ from app.api.streaming import (
     sse_response,
 )
 from app.apps import store
+from app.apps.auth_cache import AuthCache, AuthEntry
 from app.apps.langfuse_provision import load_app_langfuse
+from app.apps.tokens import hash_token
 from app.apps.secret_box import scrub_secrets, scrubbed_exception
 from app.apps.outcomes import (
     build_failure_outcome, build_ok_outcome, feedback_values, parse_workload,
@@ -151,18 +153,82 @@ async def _authenticate(request: Request
     or None), or None (fail closed). Unknown/missing/revoked/expired token, a
     token bound to a different `x-routeforge-session`, or a disabled
     application -> None -> 401. The application id equals the tenant slug, so
-    downstream policy (policy.yaml tenants) is unchanged."""
+    downstream policy (policy.yaml tenants) is unchanged.
+
+    B86: a successful lookup is cached per process for
+    `server.auth_cache_ttl_s` (`app/apps/auth_cache.py`); a hit re-checks
+    expiry and session binding and skips the database. A failed lookup is never
+    cached, and any cache error falls back to the database lookup.
+    `last_used_at` is stamped at most once a minute per token."""
     raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    async with request.app.state.db.session() as session:
-        app = await store.resolve_application(session, raw,
-                                              session_id=_read_session_id(request))
-        if app is None:
+    if not raw:
+        return None
+    session_id = _read_session_id(request)
+    cache: AuthCache | None = getattr(request.app.state, "auth_cache", None)
+    key = hash_token(raw)
+    entry = None
+    generation = 0
+    if cache is not None:
+        try:
+            generation = cache.generation
+            entry = cache.get(key)
+        except Exception:  # a broken cache is a miss, never an allow
+            logging.getLogger("serving.api").warning(
+                "auth cache read failed; using the database", exc_info=True)
+            entry = None
+    if entry is not None:
+        if store.expired_at(entry.expires_at):
             return None
+        if entry.session_binding is not None and session_id != entry.session_binding:
+            return None
+        if _stamp_due(cache, entry.token_id):
+            await _stamp_last_used(request, entry.token_id)
+        return entry.app_id, entry.policy, entry.app_langfuse
+    async with request.app.state.db.session() as session:
+        token = await store.resolve_token(session, raw, session_id=session_id)
+        if token is None:
+            return None
+        app = token.application
         app_id = app.id
         policy = policy_view_from(app)  # app.policy eager-loaded in the query
         app_langfuse = load_app_langfuse(app)  # None if no project provisioned
-        await session.commit()  # persist last_used_at
-        return app_id, policy, app_langfuse
+        token_id, expires_at, binding = token.id, token.expires_at, token.session_binding
+        if _stamp_due(cache, token_id):
+            token.last_used_at = store.utcnow()
+            await session.commit()  # persist last_used_at
+    if cache is not None:
+        try:
+            cache.put(key, AuthEntry(
+                app_id=app_id, policy=policy, app_langfuse=app_langfuse,
+                token_id=token_id, expires_at=expires_at,
+                session_binding=binding), generation)
+        except Exception:
+            logging.getLogger("serving.api").warning(
+                "auth cache write failed (swallowed)", exc_info=True)
+    return app_id, policy, app_langfuse
+
+
+def _stamp_due(cache: "AuthCache | None", token_id: str) -> bool:
+    """Whether to stamp `last_used_at` now (B86 throttle). No cache object at
+    all, or a broken one, stamps -- the pre-B86 behaviour."""
+    if cache is None:
+        return True
+    try:
+        return cache.stamp_due(token_id)
+    except Exception:
+        return True
+
+
+async def _stamp_last_used(request: Request, token_id: str) -> None:
+    """Stamp `last_used_at` for a cache-hit request (one UPDATE). Best effort:
+    it is a display field, and the request is already authenticated."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.stamp_token_used(session, token_id)
+            await session.commit()
+    except Exception:
+        logging.getLogger("serving.api").warning(
+            "last_used_at stamp failed (swallowed)", exc_info=True)
 
 
 @router.get("/health")
@@ -551,6 +617,68 @@ async def _record_outcome(request: Request, row: dict) -> None:
     except Exception:
         logging.getLogger("serving.obs").warning(
             "outcome record failed request=%s", row.get("request_id"), exc_info=True)
+
+
+async def _record_usage_and_outcome(request: Request, usage: dict | None,
+                                    outcome: dict | None) -> None:
+    """Write a served request's usage row and routing outcome in ONE session
+    and ONE commit (B86). Usage is the durable meter, so a failure never
+    trades it away: if writing the pair fails before the commit (nothing has
+    been committed), each row is written again on its own, exactly as before
+    B86 -- a bad outcome row cannot cost the usage row, nor the reverse. If
+    the commit itself fails (its outcome is unknown), that is logged as a
+    usage failure, as before, and only the outcome is retried (its primary key
+    is the request id, so a retry cannot duplicate it). Never raises."""
+    if usage is None and outcome is None:
+        return
+    log = logging.getLogger("serving.obs")
+    commit_attempted = False
+    split = False
+    try:
+        async with request.app.state.db.session() as session:
+            try:
+                if usage is not None:
+                    await store.record_usage(session, **usage)
+                if outcome is not None:
+                    await store.write_outcome(session, outcome)
+                await session.flush()
+            except Exception:
+                log.warning("combined usage/outcome write failed request=%s; "
+                            "writing each on its own", (usage or outcome).get("request_id"),
+                            exc_info=True)
+                split = True   # closing the session rolls the pair back
+            else:
+                commit_attempted = True
+                await session.commit()
+    except Exception:  # metering must never break serving
+        if commit_attempted:
+            # The commit's outcome is unknown: never rewrite the usage row (a
+            # duplicate meter), retry only the outcome (its key is the request id).
+            log.exception("usage record failed (swallowed)")
+            if outcome is not None:
+                await _record_outcome(request, outcome)
+            return
+        # Nothing was committed (the session failed to open, or the rollback
+        # after a failed flush raised): write each row on its own.
+        log.warning("usage/outcome session failed before commit; writing each on "
+                    "its own", exc_info=True)
+        split = True
+    if split:
+        if usage is not None:
+            await _record_usage(request, usage)
+        if outcome is not None:
+            await _record_outcome(request, outcome)
+
+
+async def _record_usage(request: Request, usage: dict) -> None:
+    """One usage row in its own session (the fallback of
+    `_record_usage_and_outcome`). Logged and swallowed on failure."""
+    try:
+        async with request.app.state.db.session() as session:
+            await store.record_usage(session, **usage)
+            await session.commit()
+    except Exception:  # usage metering must never break serving
+        logging.getLogger("serving.obs").exception("usage record failed (swallowed)")
 
 
 def _registry_version(request: Request) -> str | None:
@@ -1267,18 +1395,19 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     try:
         # Durable, shared UI cache (B3): every replica writes the redaction-safe
         # summary + full response to `request_snapshots` so any pod's console
-        # reads see it, not just the one that served the request. Guarded:
-        # the snapshot cache must never break serving.
+        # reads see it, not just the one that served the request. B86: handed
+        # to the buffered writer (no I/O here); it reaches the table within one
+        # flush interval and is flushed on graceful shutdown
+        # (app/apps/snapshot_writer.py). Guarded: the snapshot cache must never
+        # break serving.
         if summary is not None:
-            async with request.app.state.db.session() as session:
-                await store.record_snapshot(
-                    session, request_id=resp["id"], application_id=tenant,
-                    summary_json=summary.model_dump(), full_json=resp)
-                await store.prune_snapshots(session, capacity=store.SNAPSHOT_CAPACITY)
-                await session.commit()
+            request.app.state.snapshot_writer.enqueue(
+                request_id=resp["id"], application_id=tenant,
+                summary_json=summary.model_dump(), full_json=resp)
     except Exception:  # snapshot cache must never break serving
         logging.getLogger("serving.obs").exception(
             "snapshot write failed (swallowed)")
+    usage_row: dict | None = None
     try:
         # Durable per-application usage row (spec 2026-07-25). The
         # `request_snapshots` write above is the UI's hot cache (full
@@ -1295,32 +1424,29 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         latency_ms = sum(
             float(r.get("latency_ms", 0.0)) for r in trace
             if r.get("latency_ms") is not None)
-        async with request.app.state.db.session() as session:
-            await store.record_usage(
-                session,
-                application_id=tenant,
-                request_id=resp["id"],
-                model=model,
-                provider=provider,
-                tier=tier,
-                prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                completion_tokens=int(usage.get("completion_tokens", 0)),
-                total_tokens=int(usage.get("total_tokens", 0)),
-                cached_prompt_tokens=_opt_int(usage.get("cached_prompt_tokens", 0)),
-                cost_usd=float(cost.get("total_usd", 0.0)),
-                baseline_usd=float(cost.get("baseline_usd", 0.0)),
-                compression_saved_usd=float(cost.get("compression_saved_usd", 0.0)),
-                routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
-                prompt_cache_saved_usd=float(cost.get("prompt_cache_saved_usd", 0.0)),
-                semantic_cache_saved_usd=float(cost.get("cache_saved_usd", 0.0)),
-                latency_ms=latency_ms,
-                sensitivity=str(policy.get("sensitivity", "?")),
-                onprem_only=bool(policy.get("onprem_only", False)),
-                status="ok",
-                quality=(resp.get("quality") or {}).get("chosen") or 0.0,
-                quality_source=(resp.get("quality") or {}).get("source") or "?",
-            )
-            await session.commit()
+        usage_row = dict(
+            application_id=tenant,
+            request_id=resp["id"],
+            model=model,
+            provider=provider,
+            tier=tier,
+            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+            completion_tokens=int(usage.get("completion_tokens", 0)),
+            total_tokens=int(usage.get("total_tokens", 0)),
+            cached_prompt_tokens=_opt_int(usage.get("cached_prompt_tokens", 0)),
+            cost_usd=float(cost.get("total_usd", 0.0)),
+            baseline_usd=float(cost.get("baseline_usd", 0.0)),
+            compression_saved_usd=float(cost.get("compression_saved_usd", 0.0)),
+            routing_saved_usd=float(cost.get("routing_saved_usd", 0.0)),
+            prompt_cache_saved_usd=float(cost.get("prompt_cache_saved_usd", 0.0)),
+            semantic_cache_saved_usd=float(cost.get("cache_saved_usd", 0.0)),
+            latency_ms=latency_ms,
+            sensitivity=str(policy.get("sensitivity", "?")),
+            onprem_only=bool(policy.get("onprem_only", False)),
+            status="ok",
+            quality=(resp.get("quality") or {}).get("chosen") or 0.0,
+            quality_source=(resp.get("quality") or {}).get("source") or "?",
+        )
     except Exception:  # usage metering must never break serving
         logging.getLogger("serving.obs").exception(
             "usage record failed (swallowed)")
@@ -1328,19 +1454,20 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # trace and the gate's `outcome_ctx`. Every response shape reaches here --
     # a real-token stream only after `_finalize_stream` has stamped its
     # waived/incremental verify record, so `verify_mode` reads it.
-    try:
-        outcome = build_ok_outcome(
-            resp, request_id=request_id, application_id=tenant,
-            outcome_ctx=internals.get("outcome_ctx") or {},
-            routing_policy_version=s.routing_policy_version,
-            workload=workload, workload_source=workload_source,
-            outcome_session=outcome_session,
-            requested_alias=requested_alias)
-    except Exception:
-        logging.getLogger("serving.obs").warning(
-            "outcome record failed request=%s", request_id, exc_info=True)
-    else:
-        await _record_outcome(request, outcome)
+    outcome: dict | None = None
+    if request.app.state.settings.serving.outcomes.enabled:
+        try:
+            outcome = build_ok_outcome(
+                resp, request_id=request_id, application_id=tenant,
+                outcome_ctx=internals.get("outcome_ctx") or {},
+                routing_policy_version=s.routing_policy_version,
+                workload=workload, workload_source=workload_source,
+                outcome_session=outcome_session,
+                requested_alias=requested_alias)
+        except Exception:
+            logging.getLogger("serving.obs").warning(
+                "outcome record failed request=%s", request_id, exc_info=True)
+    await _record_usage_and_outcome(request, usage_row, outcome)
     try:
         # Live decision stream for the UI's flow visualizer (Phase 6a Task
         # 2). Same redaction-safe data history already stored — no raw PII,
@@ -1354,9 +1481,9 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                     "type": "step", "request_id": resp["id"],
                     "record": record, "index": index,
                 })
-            # Cross-replica fan-out (B3): NOTIFY other pods so their locally
-            # connected SSE subscribers see this request too. Inert on sqlite.
-            await request.app.state.bridge.publish_remote(resp["id"])
+            # Cross-replica fan-out (B3): other pods are NOTIFYed by the
+            # snapshot writer, in the same transaction that writes this
+            # request's snapshot (B86), so they never look it up early.
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")

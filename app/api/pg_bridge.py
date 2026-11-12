@@ -66,6 +66,20 @@ class PgDecisionBridge:
                             {"c": self._channel, "p": payload})
             await s.commit()
 
+    async def notify_in(self, session, request_ids: list[str]) -> None:
+        """Queue one NOTIFY per request id inside the CALLER's transaction
+        (B86: the snapshot flush). NOTIFY is delivered on that commit, so a
+        listening replica only ever looks up a snapshot that is already
+        committed. No-op off Postgres."""
+        if not self.active or not request_ids:
+            return
+        from sqlalchemy import text
+        payloads = [json.dumps({"rid": rid, "origin": self._replica_id})
+                    for rid in request_ids]
+        await session.execute(
+            text("SELECT pg_notify(:c, p) FROM unnest(CAST(:ps AS text[])) AS p"),
+            {"c": self._channel, "ps": payloads})
+
     async def ensure_listening(self) -> None:
         if not self.active or self._started:
             return

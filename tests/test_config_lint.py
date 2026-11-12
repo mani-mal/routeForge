@@ -487,3 +487,15 @@ def test_overlay_valid_addition_still_lints_clean(monkeypatch):
     s = load_settings()  # overlay merge path intact
     assert lint_settings(s) == []
     assert s.config_keys  # the ownership check actually ran on the merged keys
+
+
+def test_every_serving_field_is_a_yaml_section_or_flattened():
+    # A ServingCfg field the loader reads from serving.yaml's `policy:`/`server:`
+    # sections (or from env) must be listed in _SERVING_FLATTENED, or a copy of
+    # it written at the TOP level would pass the ownership check silently.
+    import yaml
+    from app.config.lint import _SERVING_FLATTENED
+    from app.config.schema import ServingCfg
+    top = set(yaml.safe_load(open("config/serving.yaml")))
+    stray = set(ServingCfg.model_fields) - top - _SERVING_FLATTENED
+    assert not stray, f"add to _SERVING_FLATTENED or serving.yaml: {sorted(stray)}"

@@ -375,6 +375,9 @@ A request whose trace holds more than one routing decision shows a note: *"Multi
 request — N agent hops, each re-entering compression and the router."* This is now only
 reachable for stored requests served before 2026-09-17, while routeForge still ran an
 internal agent; the durable `request_snapshots` table keeps them, so the renderer stays.
+(The snapshot is written in batches off the response path: the replica that served a
+request shows it at once, another replica within about a second — see the
+[API reference](../reference/api-reference.md#the-decision-stream-admin-only).)
 
 The ten step cards and the values each shows:
 

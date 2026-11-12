@@ -71,14 +71,24 @@ def _controls_state(request: Request) -> dict:
 _HEARTBEAT_SECONDS = 15
 
 
+async def _flush_snapshots(request: Request) -> None:
+    """Write this process's buffered snapshots before a console read (B86), so
+    the replica that served a request always shows it. Never raises."""
+    writer = getattr(request.app.state, "snapshot_writer", None)
+    if writer is not None:
+        await writer.flush()
+
+
 @router.get("/requests")
 async def list_requests(request: Request, limit: int = 100, app: str | None = None) -> list:
+    await _flush_snapshots(request)
     async with request.app.state.db.session() as s:
         return await store.list_snapshot_summaries(s, application_id=app, limit=limit)
 
 
 @router.get("/requests/{request_id}")
 async def get_request(request_id: str, request: Request) -> dict:
+    await _flush_snapshots(request)
     async with request.app.state.db.session() as s:
         resp = await store.get_snapshot_full(s, request_id)
     if resp is None:
@@ -154,6 +164,7 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
     # non-finite score must never reach Langfuse or outcome_feedback.
     if isinstance(body.value, float) and not math.isfinite(body.value):
         raise HTTPException(422, "value must be a finite number")
+    await _flush_snapshots(request)
     async with request.app.state.db.session() as session:
         snap = await session.get(RequestSnapshot, request_id)
     if snap is None:
@@ -206,6 +217,7 @@ async def admin_feedback(request_id: str, body: AdminFeedbackIn, request: Reques
 
 @router.get("/stats")
 async def get_stats(request: Request) -> dict:
+    await _flush_snapshots(request)
     async with request.app.state.db.session() as s:
         rows = await store.all_snapshot_summaries(s, limit=store.SNAPSHOT_CAPACITY)
     return stats_over([RequestSummary(**r) for r in rows])

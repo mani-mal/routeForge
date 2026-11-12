@@ -160,3 +160,9 @@ server:
   # replica keeps ids stable across restarts/replicas); otherwise a random
   # per-process key, so ids reset on restart and differ across replicas.
   derive_session_id: true
+  # Seconds a resolved app token (application, policy view, expiry, binding) is
+  # cached in each API process (B86), so a request skips the token lookup.
+  # Admin writes on the same process clear it at once; a revoked token can keep
+  # working on ANOTHER replica for up to this many seconds. 0 disables the
+  # cache: every request hits the database, as before B86.
+  auth_cache_ttl_s: 5.0

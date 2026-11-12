@@ -401,7 +401,7 @@ Every error the inference endpoint can return:
 | Status | `error.message` | `code` | Cause |
 |---|---|---|---|
 | `400` | `streaming is not supported for this application: set the application's stream_mode (verified_then_stream, stream_unverified or incremental_verify)` | `streaming_not_supported` | You sent `stream: true` and your app has no `stream_mode`; set one, or send `stream: false`. |
-| `401` | `invalid or missing API token` | `invalid_api_key` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** |
+| `401` | `invalid or missing API token` | `invalid_api_key` | Missing/unknown/revoked token, or the application is disabled. **Fail closed.** A revocation reaches every replica within `server.auth_cache_ttl_s` seconds (default 5), including one made by a script or direct SQL outside the serving process (see [admin-setup §3](../guides/admin-setup.md#3-issue-and-revoke-tokens)). |
 | `422` | *(FastAPI validation error, e.g. `messages: field required`)* | `invalid_request` | Malformed body — e.g. missing `messages`. Extra unknown fields do **not** cause this. |
 | `422` | `no model is available for this request's policy: no candidates after residency filter: <counts and fixes>` | `no_eligible_model` | Nothing survived placement or app scope; the detail lists each reason and the field to change. |
 | `400` | `request exceeds the model's context window: <model>: This model's maximum context length is … -- shorten the conversation …` | `context_length_exceeded` | Prompt + `max_tokens` is larger than every tried model's context window. Compact or summarise the history, or lower `max_tokens`. Returned only when **every** candidate refused for this reason; retrying the same request will fail the same way. |
@@ -662,6 +662,15 @@ For completeness, the wire format: `text/event-stream`, a `: connected` comment 
 open, `: ping` heartbeats every 15s, and `data: <json>\n\n` events of shape
 `{"type":"request","summary":{…}}` and `{"type":"step","request_id":…,"index":…,"record":{…}}`.
 There is no replay on connect; backfill via `GET /api/requests`.
+
+`GET /api/requests` and its drill-down read the shared `request_snapshots` table. The
+snapshot is written off the response path, in batches: the replica that served a
+request always shows it (it writes its buffer before answering a console read), and
+other replicas see it — and receive its live-stream events — within one flush interval
+(default 1 s; `SP_SNAPSHOT_FLUSH_S`, a positive number of seconds, checked at boot). Buffered snapshots are written on graceful
+shutdown. Each replica prunes the table to its newest `SP_SNAPSHOT_CAPACITY` (500)
+rows every 100 of its own writes, so it can briefly hold up to 99 more rows per
+replica.
 
 ---
 

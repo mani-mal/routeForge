@@ -16,15 +16,21 @@ Design notes that matter here:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import re
+import weakref
 from contextlib import asynccontextmanager
+from typing import Callable
 
+from sqlalchemy import event, inspect as sa_inspect
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.pool import StaticPool
 
 DEFAULT_SQLITE_URL = "sqlite+aiosqlite:///./routeforge.db"
@@ -75,6 +81,95 @@ class Base(DeclarativeBase):
     """Declarative base for all routeForge application-layer tables."""
 
 
+# --- auth-view invalidation (B86) --------------------------------------------
+# The request path caches resolved tokens (app/apps/auth_cache.py). Any
+# committed write to a table that cached view is built from clears it, in this
+# process, through the hooks below -- whatever code path made the write (admin
+# API, service credentials, scripts sharing the Database). Registered once,
+# globally, on the sync Session class; a session reaches its own Database's
+# callbacks through `session.info` (shared, read-only), and the per-session
+# "a relevant write was flushed" mark lives in a WeakSet, never in that shared
+# dict. Covers ORM unit-of-work changes, ORM bulk and Core insert/update/
+# delete, and `text()` DML, all executed through a Session. Writes made on a
+# bare engine connection, or by another process (scripts, direct SQL), are not
+# seen: they reach the cache within one TTL, like another replica's.
+AUTH_VIEW_TABLES = frozenset({"applications", "app_policies", "app_tokens"})
+# Execution option for a bulk UPDATE that must NOT invalidate (the request
+# path's own `last_used_at` stamp).
+AUTH_STAMP_OPTION = "routeforge_auth_stamp"
+_AUTH_LISTENERS_KEY = "routeforge_auth_listeners"
+_auth_dirty: "weakref.WeakSet[Session]" = weakref.WeakSet()
+
+
+def _changes_auth_view(obj, *, dirty: bool) -> bool:
+    if getattr(obj, "__tablename__", None) not in AUTH_VIEW_TABLES:
+        return False
+    if not dirty:
+        return True
+    # A token whose only change is the `last_used_at` stamp: not a view change.
+    changed = {a.key for a in sa_inspect(obj).attrs if a.history.has_changes()}
+    return bool(changed - {"last_used_at"})
+
+
+@event.listens_for(Session, "after_flush")
+def _note_auth_writes(session, _flush_context) -> None:
+    if _AUTH_LISTENERS_KEY not in session.info or session in _auth_dirty:
+        return
+    if (any(_changes_auth_view(o, dirty=False) for o in session.new)
+            or any(_changes_auth_view(o, dirty=False) for o in session.deleted)
+            or any(_changes_auth_view(o, dirty=True) for o in session.dirty)):
+        _auth_dirty.add(session)
+
+
+# Table names a raw SQL write (`text("UPDATE app_tokens ...")`) targets.
+_TEXT_DML_TABLE = re.compile(
+    r'\b(?:update|delete\s+from|insert\s+into)\s+(?:only\s+)?'
+    r'(?:"?\w+"?\.)?"?(\w+)"?', re.IGNORECASE)
+
+
+def _dml_tables(state) -> set[str]:
+    """The tables a statement executed through a Session writes to: ORM bulk
+    and Core `insert/update/delete(...)` (mapped entity or plain Table), and
+    `text()` DML matched by name. Empty for reads."""
+    stmt = state.statement
+    if isinstance(stmt, TextClause):
+        return {t.lower() for t in _TEXT_DML_TABLE.findall(stmt.text)}
+    if not getattr(stmt, "is_dml", False):
+        return set()
+    tables = {getattr(m.local_table, "name", None) for m in state.all_mappers}
+    table = getattr(stmt, "table", None)
+    tables.add(getattr(table, "name", None))
+    return {t for t in tables if t}
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _note_bulk_auth_writes(state) -> None:
+    session = state.session
+    if _AUTH_LISTENERS_KEY not in session.info:
+        return
+    if state.execution_options.get(AUTH_STAMP_OPTION):
+        return
+    if _dml_tables(state) & AUTH_VIEW_TABLES:
+        _auth_dirty.add(session)
+
+
+@event.listens_for(Session, "after_commit")
+def _fire_auth_listeners(session) -> None:
+    if session not in _auth_dirty:
+        return
+    _auth_dirty.discard(session)
+    for cb in session.info.get(_AUTH_LISTENERS_KEY, ()):
+        try:
+            cb()
+        except Exception:  # an invalidation hook must never fail a commit
+            logging.getLogger("serving.api").exception("auth invalidation hook failed")
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_auth_writes(session) -> None:
+    _auth_dirty.discard(session)
+
+
 def _resolve_url(url: str | None) -> str:
     return url or os.environ.get("DATABASE_URL") or DEFAULT_SQLITE_URL
 
@@ -109,7 +204,13 @@ class Database:
 
     def __init__(self, url: str | None = None, *, seed=None) -> None:
         self.engine = make_engine(url)
-        self.sessionmaker = async_sessionmaker(self.engine, expire_on_commit=False)
+        # B86: callbacks run after any commit that changed an app, its policy
+        # or a token (see `_fire_auth_listeners`). Shared by reference into
+        # every session's `info`.
+        self._auth_listeners: list[Callable[[], None]] = []
+        self.sessionmaker = async_sessionmaker(
+            self.engine, expire_on_commit=False,
+            info={_AUTH_LISTENERS_KEY: self._auth_listeners})
         self._ready = False
         self._lock = asyncio.Lock()
         # Injected to avoid an import cycle (bootstrap imports models -> db).
@@ -127,6 +228,12 @@ class Database:
         # connection there, so the lock is a no-op skip on that path.
         self._sqlite_write_lock = (
             asyncio.Lock() if self.engine.url.drivername.startswith("sqlite") else None)
+
+    def on_auth_change(self, callback: Callable[[], None]) -> None:
+        """Run `callback` after every commit (through this Database) that
+        changed an application, its policy, or a token -- other than the
+        `last_used_at` stamp. Used to clear the auth cache (B86)."""
+        self._auth_listeners.append(callback)
 
     async def ensure_ready(self) -> None:
         if self._ready:
