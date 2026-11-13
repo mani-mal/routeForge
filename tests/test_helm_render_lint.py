@@ -152,3 +152,35 @@ def test_renders_when_new_keys_are_missing_as_after_reuse_values(
     assert settings.serving.providers["onprem"].litellm_prefix == "openai"
     assert any(len(d["stringData"]["ADMIN_PASSWORD"]) >= 20
                for d in _kind(docs, "Secret") if "ADMIN_PASSWORD" in d.get("stringData", {}))
+
+
+def test_switchyard_off_by_default_and_shadow_overlay_renders():
+    """B107: default renders no routing overlay; mode=shadow renders one that
+    the api merges (SP_CONFIG_OVERLAY_DIR) and nothing else."""
+    def overlay_cms(docs):
+        return [d for d in _kind(docs, "ConfigMap") if "routing.yaml" in d.get("data", {})]
+
+    def api_env(docs):
+        dep = next(d for d in _kind(docs, "Deployment")
+                   if d["metadata"]["name"].endswith("-api"))
+        return {e["name"]: e.get("value")
+                for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    off = _template(SERVING_PLANE)
+    assert overlay_cms(off) == []
+    assert "SP_CONFIG_OVERLAY_DIR" not in api_env(off)
+
+    on = _template(SERVING_PLANE, "--set", "servingPlane.switchyard.mode=shadow")
+    cms = overlay_cms(on)
+    assert len(cms) == 1
+    assert yaml.safe_load(cms[0]["data"]["routing.yaml"]) == {"switchyard": {"mode": "shadow"}}
+    assert api_env(on)["SP_CONFIG_OVERLAY_DIR"] == "/etc/routeforge/config-overlay"
+
+
+def test_switchyard_enforce_is_not_offered_by_the_chart():
+    proc = subprocess.run(
+        ["helm", "template", "rel", str(SERVING_PLANE),
+         "--set", "servingPlane.switchyard.mode=enforce"],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "off or shadow" in proc.stderr

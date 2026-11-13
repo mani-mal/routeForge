@@ -70,6 +70,84 @@ is checked.
 Installation and version are read from package metadata; the lint never imports
 `switchyard`.
 
+## Packaging (B107)
+
+**Decision: the package is in the default image extras** (`EXTRAS="observability,postgres,switchyard"`
+in the `Dockerfile`, `deploy/compose/docker-compose.yml`, `deploy/spark/docker-compose.yml`
+and the Helm default). It is inert while `routing.switchyard.mode` is `off`, so a default
+deployment behaves exactly as before. Build with `--build-arg EXTRAS="observability,postgres"`
+to leave it out (turning the mode on then fails boot with `SWITCHYARD_NOT_INSTALLED`).
+
+Measured on Python 3.12, linux x86_64, wheel installed into an empty venv:
+
+| Measure | Value |
+|---|---|
+| Wheel size, x86_64 / aarch64 | 9.71 MB / 9.84 MB (one wheel per arch, `cp310-abi3`, no dependencies) |
+| `site-packages` growth | about 28 MB (`switchyard_rust` native library 28 MB, `switchyard` 24 KB) |
+| `import switchyard.libsy` | about 54 ms (3 runs: 54.4, 54.3, 53.6 ms) |
+
+The growth is under the 30 MB threshold set for B107, which is why it ships by default
+rather than as a variant. `uv.lock` already resolves both manylinux wheels, so the image
+build needs nothing extra on either arch.
+
+### Enabling it
+
+Default is off. `mode: shadow` is set through the existing `SP_CONFIG_OVERLAY_DIR`
+mechanism (a `routing.yaml` merged over the shipped one; the lint runs on the merged result):
+
+- **Compose:** `docker compose -f docker-compose.yml -f docker-compose.switchyard.yml up -d`
+  from `deploy/compose/`. The overlay lives in `deploy/compose/config-overlay-switchyard/`.
+- **Helm:** `--set servingPlane.switchyard.mode=shadow`. The chart renders
+  `<release>-routing-overlay`, mounts it at `/etc/routeforge/config-overlay` and sets
+  `SP_CONFIG_OVERLAY_DIR`. The chart offers `off | shadow` only; `enforce` arrives with B108.
+  If you already set `SP_CONFIG_OVERLAY_DIR` through `extraEnv`, put the `switchyard:` block
+  in your own `routing.yaml` overlay instead.
+
+### Air-gapped install
+
+On a connected machine, download the exact wheel for each architecture. The wheel has no
+dependencies, so `--no-deps` is sufficient:
+
+```bash
+for arch in x86_64 aarch64; do
+  pip download --no-deps --only-binary=:all: \
+    --platform manylinux2014_$arch --python-version 3.12 \
+    -d wheelhouse/$arch nemo-switchyard==0.4.0a1
+done
+# nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl   9.71 MB
+# nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl 9.84 MB
+```
+
+(`--only-binary=:all:` is required with `--platform`; the `manylinux2014` tag matches the
+`manylinux_2_17` wheel.) Verify them against the hashes in `uv.lock`, copy both directories
+into the internal mirror or onto the transfer media, then install offline on the target host
+or while building the image on an internal builder:
+
+```bash
+pip install --no-index --find-links /mnt/mirror/wheelhouse/$(uname -m) nemo-switchyard==0.4.0a1
+pip show nemo-switchyard            # Version: 0.4.0a1
+```
+
+Then confirm with the boot lint: set `switchyard.mode: "shadow"` and start the API (or run
+`load_settings()` plus `lint_settings()`); it must not report `SWITCHYARD_NOT_INSTALLED` or
+`SWITCHYARD_VERSION_UNSUPPORTED`. For an image build with no internet, point `uv` at the mirror
+(`UV_FIND_LINKS` or `UV_INDEX_URL`) or pre-build the image on a connected host and load it.
+
+### No network at import or run time
+
+Static read: the installed Python layer is 512 lines in `switchyard` and `switchyard_rust`
+and imports nothing from `socket`, `urllib`, `http`, `requests`, `aiohttp` or `subprocess`.
+All routing logic is in the native library; model calls are made by the caller (RouteForge),
+not by Switchyard, through the `Step.CallModel` / `Step.CallDecision` hand-off.
+
+Dynamic check (2026-11-12, x86_64, 0.4.0a1): inside `unshare -rn` (no network interfaces; a
+control `connect()` to 1.1.1.1:443 fails with `Network is unreachable`), `import switchyard.libsy`,
+`algorithms.stage_router(picker="efficient_first", confidence_threshold=0.5)`, and one
+`run_stream` with the request `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+and models `{"efficient":["efficient"],"capable":["capable"],"any":["efficient","capable"]}`
+iterated to `Step.Done` all succeed. A classifier is not configured (B111 is not shipped),
+which is the only configuration that could involve a model call.
+
 ## Supported versions
 
 | RouteForge | nemo-switchyard | Status |

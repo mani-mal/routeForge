@@ -35,8 +35,9 @@ docker compose -f deploy/compose/docker-compose.yml --profile gpu up
 RouteForge does not deploy or select the serving stack; onboard the resulting endpoint
 at runtime.
 
-> First build compiles the API image with the `observability` and `postgres` extras (Langfuse
-> export, asyncpg) — the "< 5 minutes" target assumes images are already built/pulled.
+> First build compiles the API image with the `observability`, `postgres` and `switchyard` extras (Langfuse
+> export, asyncpg, and the Switchyard advisor, which stays off until enabled with
+> `docker-compose.switchyard.yml`; see `docs/reference/switchyard-integration.md`) — the "< 5 minutes" target assumes images are already built/pulled.
 > For a lean image build with `--build-arg EXTRAS=""`.
 
 ## Single workstation — NVIDIA DGX Spark

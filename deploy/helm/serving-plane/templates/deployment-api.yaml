@@ -17,6 +17,7 @@ spec:
         # Forces a rollout when the rendered serving.yaml changes, so
         # `--set servingPlane.*` actually takes effect without a manual restart.
         checksum/serving-config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/routing-overlay: {{ include (print $.Template.BasePath "/configmap-routing-overlay.yaml") . | sha256sum }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -72,6 +73,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "serving-plane.adminSecretName" . }}
                   key: ADMIN_PASSWORD
+            {{- if ne (.Values.servingPlane.switchyard.mode | default "off") "off" }}
+            - name: SP_CONFIG_OVERLAY_DIR
+              value: /etc/routeforge/config-overlay
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -80,6 +85,11 @@ spec:
               mountPath: /app/config/serving.yaml
               subPath: serving.yaml
               readOnly: true
+            {{- if ne (.Values.servingPlane.switchyard.mode | default "off") "off" }}
+            - name: routing-overlay
+              mountPath: /etc/routeforge/config-overlay
+              readOnly: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -102,6 +112,11 @@ spec:
         - name: serving-config
           configMap:
             name: {{ include "serving-plane.fullname" . }}-serving-config
+        {{- if ne (.Values.servingPlane.switchyard.mode | default "off") "off" }}
+        - name: routing-overlay
+          configMap:
+            name: {{ include "serving-plane.fullname" . }}-routing-overlay
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -54,7 +54,7 @@ services:
         # below). Add `presidio` for the full PII detector — it downloads the
         # en_core_web_lg spaCy model at BUILD time, so the Spark needs
         # internet during that build. See README.md.
-        EXTRAS: ${API_EXTRAS:-observability,postgres}
+        EXTRAS: ${API_EXTRAS:-observability,postgres,switchyard}
     restart: unless-stopped
     ports: ["${BIND_ADDR:-0.0.0.0}:${API_PORT:-8080}:8080"]
     # Lets the api container reach a model server running on the Spark HOST

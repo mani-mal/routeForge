@@ -23,7 +23,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
       args:
-        EXTRAS: "observability,postgres"   # Langfuse export + asyncpg (needed for a Postgres DATABASE_URL)
+        EXTRAS: "observability,postgres,switchyard"   # Langfuse export + asyncpg (Postgres DATABASE_URL) + Switchyard (inert unless routing.switchyard.mode is set; see docker-compose.switchyard.yml)
     ports: ["8080:8080"]
     environment:
       SP_PII_DETECTION: regex           # offline-safe; presidio needs a model download

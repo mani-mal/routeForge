@@ -1,0 +1,13 @@
+# Opt-in: turn the Switchyard routing advisor on in SHADOW mode (B107).
+# The default image already contains the package (EXTRAS in docker-compose.yml);
+# this file only supplies the routing.yaml overlay that sets switchyard.mode.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.switchyard.yml up -d
+#
+# Without this file the advisor is off. See docs/reference/switchyard-integration.md.
+services:
+  api:
+    environment:
+      SP_CONFIG_OVERLAY_DIR: /etc/routeforge/config-overlay
+    volumes:
+      - ./config-overlay-switchyard:/etc/routeforge/config-overlay:ro

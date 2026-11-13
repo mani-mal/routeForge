@@ -51,10 +51,18 @@ admin:
 # table).
 # ---------------------------------------------------------------------------
 servingPlane:
+  # Optional NVIDIA Switchyard routing advisor (B107). Off by default. "shadow"
+  # renders a routing.yaml overlay (templates/configmap-routing-overlay.yaml)
+  # mounted at /etc/routeforge/config-overlay and points SP_CONFIG_OVERLAY_DIR
+  # at it; the shipped default image already contains the package. An image built
+  # without the `switchyard` extra fails the boot lint (SWITCHYARD_NOT_INSTALLED).
+  # See docs/reference/switchyard-integration.md.
+  switchyard:
+    mode: "off"        # off | shadow
   policy:
     # regex | presidio | off. Default is regex because the default image build
-    # (EXTRAS="observability,postgres") does not contain Presidio. `presidio`
-    # needs an image built with EXTRAS=observability,postgres,presidio (see the
+    # (EXTRAS="observability,postgres,switchyard") does not contain Presidio. `presidio`
+    # needs an image built with EXTRAS=observability,postgres,switchyard,presidio (see the
     # Dockerfile), otherwise the api fails to start.
     piiDetection: regex
 
