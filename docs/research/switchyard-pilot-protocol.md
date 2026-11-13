@@ -130,8 +130,28 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   `calibration_sessions` in the frozen task JSON.
 - **No deploys during the run window.** Neither RouteForge nor DevFoundry is deployed while
   it runs.
-- **ci-repair success** requires both the diagnosis and the repair to succeed. Cost per spec
-  includes both steps' calls.
+- **ci-repair success depends on the outcome** (amended 2026-11-13, before freezing). A spec
+  succeeds when its repair passes both validation and the hidden tests. A failure in the
+  diagnosis step is kept in `failure_evidence` and doesn't by itself fail a spec whose repair
+  succeeded. Cost per spec includes both steps' calls.
+- **Transient backend errors on a successful task don't count as infra.** A session with
+  `backend_failed` calls whose task still succeeds stays `none`. Only a failed task with
+  such rows is infra.
+
+### 5b. Calibration log and stopping rule
+
+- **Round 1** (15:26–15:45Z, the original repo). The issue-resolver specs hit a ceiling: both
+  arms passed both of them. The ci-repair rows are void because of two DevFoundry bugs
+  (BUG-137 branch detection, BUG-138 `diagnosed` unmapped), both fixed. → The repo was rebuilt
+  from scratch to avoid diff-to-answer leakage, and the issue-resolver specs re-tiered 7/7/6.
+- **Round 2** (16:09–~17:05Z, rebuilt repo `4d93770`). All 8 pairs passed both checks on A
+  and B. The cheap arm passed both hard issue-resolver specs. → One more hardening round:
+  root causes two or more calls away in another module, behaviour pinned only in docstrings,
+  and CI failures whose test points at the wrong module.
+- **Stopping rule.** Round 3 is the last. If the cheap arm still passes every hard
+  calibration spec, the set is frozen anyway, and "the cheap model saturates this task set"
+  is reported as a finding. B109 then mainly answers the cost question (D vs C at equal
+  success).
 
 ## 6. Procedure
 
