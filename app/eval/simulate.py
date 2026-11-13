@@ -46,7 +46,7 @@ from app.models import Entity
 from app.policy.context import build_context
 from app.policy.feasible import feasible_set
 from app.routing.pricing import price_call
-from app.routing.router import expected_output_tokens
+from app.routing.router import complexity_tier, expected_output_tokens
 
 SIMULATED_STATUSES = frozenset({"ok", "backend_failed", "verify_failed",
                                 "no_eligible", "context_overflow"})
@@ -342,10 +342,35 @@ def scaled_request(prompt_tokens: int, complexity: float,
     return scaled, min(1.0, estimate), scale < 1.0
 
 
-def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmResult:
+def advisor_complexity(thresholds: dict, tier: str) -> float:
+    """A complexity value whose `complexity_tier` is `tier` (B105 report).
+
+    The Switchyard advisor replaces exactly one element of the router's tier
+    target, `complexity_tier(complexity)` (docs/architecture/
+    switchyard-advisor-design.md §2); the risk floor, `min_tier` and the
+    best-allowed clamp are applied to it unchanged. Replay therefore hands
+    `Router.select` a synthetic complexity that lands on the advisor's tier
+    and lets the real router do the rest. Nothing in `Router.select` reads
+    `complexity` except that call, so no router change is needed. Raises
+    `ValueError` if the thresholds cannot express `tier`."""
+    cheap_max, mid_max = thresholds["cheap_max"], thresholds["mid_max"]
+    value = {"cheap": 0.0, "mid": (cheap_max + mid_max) / 2.0,
+             "frontier": (mid_max + 1.0) / 2.0 if mid_max < 1.0 else 1.0}.get(tier)
+    if value is None or complexity_tier(value, thresholds) != tier:
+        raise ValueError(f"complexity thresholds {thresholds!r} cannot express tier {tier!r}")
+    return value
+
+
+def simulate_row(scn: Scenario, row: dict, observed: dict[str, float], *,
+                 advisor_tier: str | None = None) -> ArmResult:
     """One row's routing decision under one scenario: the first decision,
     then -- only when the pick's declared context window is too small -- the
-    same exclude-and-reselect the live gateway does (P3c-2 spec §5)."""
+    same exclude-and-reselect the live gateway does (P3c-2 spec §5).
+
+    `advisor_tier` (B105 counterfactual, replay only) replaces the
+    length-derived tier target with the advisor's tier, via
+    `advisor_complexity`; the live router is untouched. None (the default,
+    and every existing caller) replays the row as recorded."""
     app = scn.apps[row["application_id"]]
     # Placeholder entities: only `.type` is read on the context path.
     entities = [Entity(type=t, start=0, end=0, value="")
@@ -376,6 +401,9 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float]) -> ArmRes
     routing_tokens, complexity, estimated = scaled_request(
         routing_base, float(row["complexity"]), scale)
     prompt_tokens = _scale_tokens(prompt_base, scale)
+    if advisor_tier is not None:
+        complexity = advisor_complexity(
+            scn.settings.routing.complexity_thresholds, advisor_tier)
     # B55: price at the client's recorded output cap, as the live gateway
     # does (`expected_output_tokens(settings, params)`); no cap recorded ->
     # the deployment's default estimate.

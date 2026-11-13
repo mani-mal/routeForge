@@ -25,6 +25,12 @@ and does not model.
 File-based only: no DB, no `app.api`, no serving import
 (`tests/eval/test_isolation.py`).
 
+With `--switchyard-report` (B105) it instead reads the Switchyard advisor's shadow
+columns and writes `switchyard.json` plus `switchyard.md`: agreement with the served
+tier per app and workload, the role split, fallback causes, and the counterfactual
+cost of following the advisor -- a fixed-feature replay (tier, model and cost; not
+task success). See `app/eval/advisor_report.py` and docs/reference/policy-simulator.md.
+
 With `--uncertainty` (P3c-3) every figure also gets a range: a percentile
 interval from a bootstrap over the simulated rows, written under one new
 `uncertainty` key (and `shadow_prices.uncertainty`). It is sampling
@@ -65,6 +71,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.apps.snapshot import SERVING_POLICY_FIELDS  # noqa: E402
 from app.config.lint import ConfigLintError  # noqa: E402
 from app.config.loader import load_settings  # noqa: E402
+from app.eval.advisor_report import advisor_report, render_advisor_report  # noqa: E402
 from app.eval.capacity import (  # noqa: E402
     DEFAULT_BUCKET_SECONDS, DEFAULT_MIN_BUCKETS, MAX_BUCKET_SECONDS, CapacityError, CapacityPlan,
     build_plan,
@@ -119,6 +126,14 @@ def _parser() -> argparse.ArgumentParser:
                    help="routeforge.policy-scenarios/v1 JSON file: compare its scenarios "
                         "side by side (P3c-2). Not combinable with --proposal or "
                         "--shadow-prices.")
+    p.add_argument("--switchyard-report", action="store_true",
+                   help="B105: report on the Switchyard advisor's shadow data instead of "
+                        "simulating a proposal: agreement with the served tier per app and "
+                        "workload, role split, fallback causes, and the counterfactual cost "
+                        "of following the advisor (a fixed-feature replay: tier, model and "
+                        "cost only, not task success). Writes switchyard.json and "
+                        "switchyard.md. Not combinable with --proposal, --scenarios, "
+                        "--shadow-prices or --fail-on-new-rejections")
     p.add_argument("--out", required=True, help="output directory")
     p.add_argument("--config-dir", default="config",
                    help="base config directory the snapshot is overlaid onto (default: config)")
@@ -254,6 +269,31 @@ def _below_min_agreement(baseline: dict, minimum: float) -> int:
     return 4
 
 
+def _switchyard_report(args: argparse.Namespace, *, records: list[dict], warnings: list[str],
+                       snapshot: dict, base, since, plan: UncertaintyPlan | None,
+                       inputs: dict) -> int:
+    """B105: the advisor shadow report -> `switchyard.json` + `switchyard.md`.
+    Honours `--min-agreement` against the report's own baseline replay."""
+    try:
+        doc = asyncio.run(advisor_report(records, snapshot, base=base, inputs=inputs,
+                                         since=since, plan=plan))
+    except (SnapshotError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.min_agreement is not None and not agreement_ok(doc["baseline"], args.min_agreement):
+        return _below_min_agreement(doc["baseline"], args.min_agreement)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    json_path, md_path = out / "switchyard.json", out / "switchyard.md"
+    json_path.write_text(json.dumps(doc, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    md_path.write_text(render_advisor_report(doc), encoding="utf-8")
+    print(f"policy_simulate: switchyard report, {doc['rows']['simulated']} rows simulated "
+          f"({len(warnings)} export warnings) -> {out}")
+    print(str(json_path))
+    print(str(md_path))
+    return 0
+
+
 def _compare_scenarios(args: argparse.Namespace, *, records: list[dict], warnings: list[str],
                        snapshot: dict, scenarios_doc: dict, inputs: dict, base,
                        since, plan: UncertaintyPlan | None,
@@ -315,11 +355,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
 
+    if args.switchyard_report and (args.proposal or args.scenarios or args.shadow_prices
+                                   or args.fail_on_new_rejections):
+        parser.error("--switchyard-report cannot be combined with --proposal, --scenarios, "
+                     "--shadow-prices or --fail-on-new-rejections")
     if args.scenarios and (args.proposal or args.shadow_prices):
         # Shadow prices of N scenarios is out of scope (P3c-2 spec §6).
         parser.error("--scenarios cannot be combined with --proposal or --shadow-prices")
-    if not (args.shadow_prices or args.proposal or args.scenarios):
-        parser.error("--proposal is required unless --shadow-prices or --scenarios is given")
+    if not (args.shadow_prices or args.proposal or args.scenarios or args.switchyard_report):
+        parser.error("--proposal is required unless --shadow-prices, --scenarios or "
+                     "--switchyard-report is given")
 
     if args.max_relaxations < 1:
         print("error: --max-relaxations must be >= 1", file=sys.stderr)
@@ -422,6 +467,20 @@ def main(argv: list[str] | None = None) -> int:
     serving_policy = {k: snapshot["settings"]["serving_policy"][k]
                       for k in SERVING_POLICY_FIELDS
                       if k in snapshot["settings"]["serving_policy"]}
+    if args.switchyard_report:
+        return _switchyard_report(
+            args, records=records, warnings=warnings, snapshot=snapshot, base=base,
+            since=since, plan=plan,
+            inputs={
+                "export_sha256": export_sha256,
+                "snapshot_sha256": snapshot_sha256,
+                "routing_policy_version": snapshot["routing_policy_version"],
+                "registry_version": snapshot["registry_version"],
+                "snapshot_generated_at": snapshot["generated_at"],
+                "serving_policy": serving_policy,
+                "since": since.isoformat() if since is not None else None,
+                **uncertainty_inputs,
+            })
     if args.scenarios:
         return _compare_scenarios(
             args, records=records, warnings=warnings, snapshot=snapshot,

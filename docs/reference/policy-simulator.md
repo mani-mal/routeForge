@@ -27,7 +27,8 @@ Code: `app/apps/snapshot.py` (snapshot builder), `app/api/admin_routes.py`
 (`GET /admin/config-snapshot`), `app/eval/scenario.py` (snapshot/proposal → scenario),
 `app/eval/proposal.py` (proposal load/validate/apply), `app/eval/simulate.py` (replay +
 report), `app/eval/shadow.py` (shadow prices, P3c-1), `app/eval/uncertainty.py` (ranges,
-P3c-3), `app/eval/capacity.py` (capacity, P3c-4), `scripts/policy_simulate.py` (CLI).
+P3c-3), `app/eval/capacity.py` (capacity, P3c-4), `app/eval/advisor_report.py` (Switchyard advisor
+report, B105), `scripts/policy_simulate.py` (CLI).
 
 ## 1. Three inputs
 
@@ -1598,3 +1599,79 @@ arrival pattern, run through `capacity_block` — and the method for each is in 
   depends on the prompt and completion lengths being served.
 - No capacity figure for a shadow-price relaxation (§8.7).
 - Nothing has been run on recorded traffic: research §21.5.4.
+
+## 12. Switchyard advisor report (B105)
+
+### 12.1 What it answers
+
+With `routing.switchyard.mode: shadow` the Switchyard advisor proposes a tier for every
+routed request and the proposal is only recorded (`switchyard_*` columns,
+`docs/reference/routing-outcomes.md` §3.2). Before anyone turns enforce on (B108), this
+report says two things from that data:
+
+1. **Agreement.** Per app and per workload: the share of advised requests whose proposed
+   tier equals the served tier (`switchyard_agreed`), the role split (efficient / capable),
+   the fallback-cause breakdown (`timeout`, `error`, ...), and the rows without advice —
+   split into advisor fallbacks and rows where the advisor never ran (mode `off`, or rows
+   from before the six columns existed, which are all null and are handled).
+2. **The counterfactual cost of following it.** Every advised row is replayed through the
+   real `feasible_set` -> `Router.select` twice on the snapshot as exported: as recorded
+   (the baseline), and with the advisor's tier as the tier target. The cost is compared on
+   the rows routed in both replays.
+
+**This is a fixed-feature replay.** It predicts which tier and model, and what cost, the
+router would have chosen on the same recorded features. It does not predict task success or
+answer quality — the advisor trades one against the other and this report only sees cost
+(that comparison is B109). A cheaper counterfactual is not a better one.
+
+### 12.2 How the advisor tier is applied (no router change)
+
+Design §2: the advisor replaces exactly one element of the tier target,
+`complexity_tier(complexity)`; the risk floor and `min_tier` are `max`'d with it and the
+result is clamped to the best allowed tier. `Router.select` reads `complexity` for nothing
+else, so replay hands it a synthetic complexity that lands on the advisor's tier
+(`app/eval/simulate.py::advisor_complexity`, an optional `advisor_tier` argument of
+`simulate_row`, default `None`). The live router has no advisor parameter and was not
+changed. Consequences, all by the router's own code: an `efficient` proposal on a
+high-risk row stays at the risk floor (rule 8); a `capable` proposal on an `onprem_only`
+row clamps to the best on-prem tier and never reaches a cloud model (rule 3). The report
+counts how often that happened: `held_above_proposal` (served tier above the proposal) and
+`clamped_below_proposal`.
+
+### 12.3 Running it
+
+```
+uv run python scripts/policy_simulate.py --export outcomes.ndjson --snapshot snapshot.json \
+    --switchyard-report --out results/switchyard [--since TS] [--min-agreement X] \
+    [--uncertainty [--bootstrap N --interval P --seed S --min-rows K]]
+```
+
+Writes `switchyard.json` (`routeforge.switchyard-report/v1`, `kind: fixed_feature_replay`)
+and `switchyard.md`. It cannot be combined with `--proposal`, `--scenarios`,
+`--shadow-prices` or `--fail-on-new-rejections`. `--min-agreement` gates on the baseline
+replay's fidelity as in §5. Only content-free columns are read.
+
+`switchyard.json` has `rows` (simulated and excluded, as §4.1), `modes`, `baseline` (the
+§5 fidelity block), and `totals`, `by_app`, `by_workload`, each holding `agreement`
+(`rows`, `advised`, `advised_served`, `agreed`, `disagreed`, `agreement`, `role`,
+`fallback_cause`, `without_advice`) and `counterfactual` (`replayed`, `both_routed`,
+`cost_usd.{baseline,advisor,delta,delta_share}`, `recorded_cost_usd`, `tier_vs_baseline`,
+`model_changed`, `held_above_proposal`, `clamped_below_proposal`, `newly_rejected`,
+`newly_served`). With `--uncertainty` an `uncertainty` block adds percentile ranges
+(same bootstrap primitives and strata as §10) for the cost delta and the agreement rate,
+totals and per app with at least `--min-rows` rows; other buckets get no range.
+
+### 12.4 Limits
+
+- Everything in §6 applies: first-decision replay, frozen signals, no breaker state.
+  Check the report's baseline agreement line first; a counterfactual built on a baseline
+  that does not reproduce the record is noisier.
+- Cost, tier and model only. No quality, success or latency claim.
+- Agreement is the recorded `switchyard_agreed` (proposed tier = served tier at serving
+  time); it is null on a fallback and on a row where nothing was served.
+- An app on the B80 quality-floor path is decided by that path, not by the tier target, so
+  a replayed advisor tier does not move it. Under enforce the live advisor is not consulted
+  there either (design §2).
+- A proposal for a tier the snapshot cannot express through `complexity_thresholds` raises
+  an error rather than guessing.
+- Ranges are sampling variability only (§10.2).
