@@ -117,6 +117,15 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   either step is. **Timeouts count as `agent`**, because a slow model is part of that arm's
   behaviour. The one exception is mechanical: a session whose RouteForge outcome rows show
   `backend_failed`, `no_eligible` or a 5xx is infra.
+- **Final failure-class mapping** (DevFoundry `dc8d70e`, taken on attempt 1, first match
+  wins):
+  - **infra:** an `agent.error` with HTTP 5xx or 429; then infra state reasons (`worker_lost`,
+    `lease_expired`, `stale`, `worker_error`, `tree_not_verified`); then the categories
+    `provider_unavailable`, `capacity`, `infrastructure`, `environment` and
+    `source_authorization`; then anything unmapped, a hand cancel, or `no_attempt`.
+  - **agent:** `agent_error`, `validation_failure`, `timeout`, `budget_exhausted` (the task's
+    own token, cost or wall budget), `no_change` and `output_truncated`.
+  - **none:** `completed` or `awaiting_review` on the arm's own patch.
 - **Not analysed:** the calibration specs and the two arm C smoke sessions, all listed under
   `calibration_sessions` in the frozen task JSON.
 - **No deploys during the run window.** Neither RouteForge nor DevFoundry is deployed while
