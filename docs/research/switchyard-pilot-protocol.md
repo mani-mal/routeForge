@@ -98,6 +98,27 @@ at N = 40. INCONCLUSIVE may extend N once, to 80, and the extension is recorded 
 seeing data, so it can't be tuned toward a result. A GO at this margin justifies only a
 wider, shadow-monitored rollout, not enforce-by-default.
 
+### 5a. Exclusions and infrastructure failures
+
+These rules were added 2026-11-13, before any arm ran. They are procedural and change no gate.
+
+- **Single attempt.** Each arm gets exactly one attempt per spec. DevFoundry enforces this
+  with `task_budget_max.attempts = 1`, so agent-level and queue retries can't give one arm an
+  extra try.
+- **Infrastructure failures are excluded symmetrically.** If a spec's attempt in any arm
+  fails for an infrastructure reason, that spec is excluded from all four arms. That covers
+  a worker crash or restart, a RouteForge 5xx / `provider_unavailable` / dropped stream, or a
+  model-server outage, as opposed to the agent's own work. Evidence comes from DevFoundry's
+  `failure_class` (`none | agent | infra`), cross-checked against RouteForge outcome rows for
+  those sessions. Exclusions are reported with their count. **If more than 10% of specs are
+  excluded, the run is INCONCLUSIVE.**
+- **Not analysed:** the calibration specs and the two arm C smoke sessions, all listed under
+  `calibration_sessions` in the frozen task JSON.
+- **No deploys during the run window.** Neither RouteForge nor DevFoundry is deployed while
+  it runs.
+- **ci-repair success** requires both the diagnosis and the repair to succeed. Cost per spec
+  includes both steps' calls.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
