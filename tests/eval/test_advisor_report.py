@@ -69,6 +69,54 @@ def test_agreement_role_fallback_and_unadvised_counts():
     assert "Fixed-feature replay" in md and "NOT predict task" in md and "app-b" in md
 
 
+def test_pinned_rows_are_counted_separately_and_excluded():
+    """B115: new-style `pinned` fallbacks and legacy pinned rows that carry a
+    proposal are counted as pinned, and stay out of the agreement rate, the
+    fallback causes and the counterfactual."""
+    rows = [
+        make_row("a1", "app-a", ts=_ts(1), **_adv("cheap", agreed=True)),
+        make_row("a2", "app-a", ts=_ts(2), **_adv("frontier", agreed=False)),
+        make_row("a3", "app-a", ts=_ts(3), **_fallback("timeout")),
+        # New-style: the pipeline recorded `pinned` without calling the advisor.
+        make_row("p1", "app-a", ts=_ts(4), requested_model="local-cheap",
+                 **_fallback("pinned")),
+        # Legacy (pre-B115): a proposal recorded on a pinned request -- would
+        # read as a disagreement and move the counterfactual.
+        make_row("p2", "app-a", ts=_ts(5), requested_model="local-cheap",
+                 **_adv("frontier", agreed=False)),
+        make_row("p3", "app-a", ts=_ts(6), requested_model="local-cheap",
+                 **_adv("cheap", agreed=True)),
+        # Legacy pinned fallback: also pinned, not a `timeout` cause.
+        make_row("p4", "app-a", ts=_ts(7), requested_model="local-cheap",
+                 **_fallback("timeout")),
+        # Pinned but the advisor never ran: stays "not run".
+        make_row("n1", "app-a", ts=_ts(8), requested_model="local-cheap"),
+    ]
+    doc = _report(rows)
+    ag = doc["totals"]["agreement"]
+    assert ag["rows"] == 8 and ag["pinned"] == 4
+    assert ag["advised"] == 2 and (ag["agreed"], ag["disagreed"]) == (1, 1)
+    assert ag["agreement"] == 0.5
+    assert ag["fallback_cause"] == {"timeout": 1}
+    assert ag["without_advice"] == {"total": 2, "fallback": 1, "not_run": 1}
+    assert ag["role"] == {"efficient": 1, "capable": 1, "other": 0}
+    assert doc["totals"]["counterfactual"]["replayed"] == 2
+    assert doc["by_app"]["app-a"]["agreement"]["pinned"] == 4
+    assert "pinned: 4 (excluded)" in render_advisor_report(doc)
+    # The uncertainty ranges see the same unpinned rows only.
+    plan = UncertaintyPlan(replicates=20, interval=0.9, seed=1, min_rows=1)
+    unc = _report(rows, plan=plan)["uncertainty"]
+    assert unc["agreement"]["totals"]["point"] == 0.5
+
+
+def test_pinned_only_rows_have_no_agreement_or_counterfactual():
+    rows = [make_row(f"p{i}", "app-a", ts=_ts(i), requested_model="local-cheap",
+                     **_adv("frontier", agreed=False)) for i in range(3)]
+    ag = _report(rows)["totals"]["agreement"]
+    assert ag["pinned"] == 3 and ag["advised"] == 0 and ag["agreement"] is None
+    assert _report(rows)["totals"]["counterfactual"]["replayed"] == 0
+
+
 def test_pre_migration_rows_without_switchyard_columns():
     rows = [make_row(f"r{i}", "app-a", ts=_ts(i)) for i in range(3)]   # no switchyard_* keys
     doc = _report(rows)

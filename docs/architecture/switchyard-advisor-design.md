@@ -115,6 +115,10 @@ it, so cost can only go down versus today. It's safer for cost but discards Swit
 - **When:** once per request, in `app/pipeline.py`, after compression and before
   `gateway.run` / `gateway.run_stream`, on both paths. The proposal is reused across that
   request's failover attempts and isn't recomputed per attempt.
+- **Not on a pinned request (B115).** When the request names a model (`ctx.requested_model`
+  set: a slug, or a per-app alias resolved to one) the router has no tier choice, so the
+  advisor is not called and the record is a `pinned` fallback (no role/tier, `applied`
+  false), in `shadow` and `enforce` alike.
 - **Time budget:** `asyncio.wait_for(..., timeout_ms/1000)`, default 20 ms.
 - **Fallback.** On any failure the target is exactly today's `complexity_tier` and the
   request continues: timeout, exception, a role outside `{efficient, capable}`, an

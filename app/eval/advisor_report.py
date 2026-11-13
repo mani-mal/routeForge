@@ -7,6 +7,10 @@ shadow` deployment wrote and says, before anyone turns enforce on (B108):
    tier equalled the served tier (`switchyard_agreed`), its role split
    (efficient / capable), why it sometimes made no proposal
    (`switchyard_fallback_cause`), and how many rows carry no advice at all.
+   **Pinned** rows (B115) are counted on their own and excluded from both
+   the agreement rate and the counterfactual: a request that named a model
+   gave the router no tier choice, so a proposal on it is not a
+   disagreement. See `_pinned`.
 2. **Counterfactual cost of following it.** Each advised row is replayed
    through the real `feasible_set` -> `Router.select` twice on the snapshot
    as exported: as recorded (the baseline) and with the advisor's tier
@@ -57,9 +61,30 @@ def _bool(v) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
+def _pinned(row: dict) -> bool:
+    """B115: the request named a model, so the advisor had no tier choice.
+
+    New rows say so directly (`switchyard_fallback_cause == "pinned"`). Rows
+    written before B115 recorded a proposal (or a fallback) on a pinned
+    request anyway; they are recognised by the advisor having run (a
+    `switchyard_mode` is recorded) on a row whose `requested_model` is set --
+    the slug the request pinned, an alias already resolved to it, the same
+    `ctx.requested_model` the router's pin stage reads. A pinned row where
+    the advisor never ran (mode `off`, or no columns) is not counted here: it
+    stays "advisor not run"."""
+    if row.get("switchyard_fallback_cause") == "pinned":
+        return True
+    requested = row.get("requested_model")
+    return (isinstance(requested, str) and bool(requested)
+            and isinstance(row.get("switchyard_mode"), str))
+
+
 def _proposal(row: dict) -> str | None:
     """The advisor's proposed tier, or None when the row has no usable one
-    (advisor off, fell back, or a row from before the columns existed)."""
+    (advisor off, fell back, a pinned request (B115), or a row from before
+    the columns existed)."""
+    if _pinned(row):
+        return None
     tier = row.get("switchyard_tier")
     return tier if isinstance(tier, str) and tier in _TIER_ORDER else None
 
@@ -70,16 +95,22 @@ def _recorded_cost(row: dict) -> float | None:
 
 
 def _agreement_block(rows: list[dict]) -> dict:
-    advised = [r for r in rows if _proposal(r)]
+    """`rows` counts every row; `pinned` (B115) rows are then set aside and
+    everything else -- advised, agreement, roles, fallback causes, rows
+    without advice -- is over the remaining, unpinned rows."""
+    pinned = sum(1 for r in rows if _pinned(r))
+    unpinned = [r for r in rows if not _pinned(r)]
+    advised = [r for r in unpinned if _proposal(r)]
     served = [r for r in advised if _bool(r.get("switchyard_agreed")) is not None]
     agreed = sum(1 for r in served if r["switchyard_agreed"])
     roles = Counter(r.get("switchyard_role") for r in advised)
-    causes = Counter(r["switchyard_fallback_cause"] for r in rows
+    causes = Counter(r["switchyard_fallback_cause"] for r in unpinned
                      if not _proposal(r) and isinstance(r.get("switchyard_fallback_cause"), str))
     fallback = sum(causes.values())
-    no_advice = len(rows) - len(advised)
+    no_advice = len(unpinned) - len(advised)
     return {
         "rows": len(rows),
+        "pinned": pinned,
         "advised": len(advised),
         "advised_served": len(served),
         "agreed": agreed,
@@ -265,7 +296,8 @@ def _bucket_lines(b: dict, ranges: dict | None, app: str | None) -> list[str]:
                          else ranges[name]["by_app"].get(app)))
     wa = ag["without_advice"]
     lines = [
-        f"rows: {ag['rows']} &middot; advised: {ag['advised']} "
+        f"rows: {ag['rows']} &middot; pinned: {ag['pinned']} (excluded) "
+        f"&middot; advised: {ag['advised']} "
         f"&middot; without advice: {wa['total']} (fallback {wa['fallback']}, "
         f"advisor not run {wa['not_run']})",
         "",

@@ -198,13 +198,23 @@ class Pipeline:
         mode = ctx.adaptive_routing
         if mode not in ("shadow", "enforce"):
             return None, None
-        try:
-            result = await self._advisor.advise(messages)
-        except Exception as exc:
-            _advisor_log.error("switchyard advisor raised request=%s (%s); "
-                               "recorded as fallback", request_id,
-                               type(exc).__name__)
-            result = AdvisorResult.fallback("error", 0.0)
+        if ctx.requested_model is not None:
+            # B115: the client pinned a model (a slug, or a per-app alias
+            # already resolved to one by routes.py), so the router has no
+            # tier choice to advise on -- the same `ctx.requested_model`
+            # signal the router's pin stage reads (feasible.py
+            # `not_requested`). Don't spend the advisor's latency; record a
+            # content-free `pinned` fallback (no role/tier, `applied` false,
+            # `agreed` null) so it never reads as a disagreement.
+            result = AdvisorResult.fallback("pinned", 0.0)
+        else:
+            try:
+                result = await self._advisor.advise(messages)
+            except Exception as exc:
+                _advisor_log.error("switchyard advisor raised request=%s (%s); "
+                                   "recorded as fallback", request_id,
+                                   type(exc).__name__)
+                result = AdvisorResult.fallback("error", 0.0)
         try:
             record = result.to_record()
             tier: str | None = None

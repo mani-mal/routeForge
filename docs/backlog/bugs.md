@@ -635,7 +635,16 @@ policy-compliant.
 - **Next:** DevFoundry builds a per-arm project binding with `model: "auto"` (their F-909)
   plus `run_purpose=eval` (F-214), then runs the frozen task set.
 
-## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  🔴 OPEN
+## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
+
+**Resolved.** `Pipeline._advise` no longer calls the advisor when `ctx.requested_model` is
+set (the router's own pin signal; aliases are already resolved to their slug). It records a
+content-free `fallback_cause: pinned` (no role/tier, `applied` false, `agreed` null, tag
+`switchyard:fallback`) on the non-stream and stream paths, in `shadow` and `enforce`.
+`pinned` is in `AdvisorResult`'s `FallbackCause`. `--switchyard-report` counts pinned rows
+separately and excludes them from agreement and the counterfactual, including pre-fix rows
+recognised by `requested_model` set with the advisor having run. Tests:
+`tests/routing/switchyard/test_pinned.py`, `tests/eval/test_advisor_report.py`.
 
 **Found 2026-11-13.** In the 14 days to 2026-11-13, every non-eval request on the DGX lab named
 a model: `dev-foundary` pins all roles through `model_aliases`. A pinned request has no tier
