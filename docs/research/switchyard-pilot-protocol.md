@@ -209,6 +209,27 @@ state.
 floored at mid by the same Presidio false positives on code. That is a cost lever, through the
 same denylist, outside this experiment.
 
+### 5d. Run 2 voided: advisor timeouts turned D into C (amended 2026-11-13)
+
+Run 2 started at 21:26:08Z and was **stopped after IR-01 (IR-02 partial)**. The C and D rows
+were low risk with the cheap tier reachable, which confirmed the §5c fix. On IR-01's arm D,
+Switchyard advised and applied `efficient` on the first 3 calls. From about 9.2k routing tokens
+onwards, **every call fell back with `fallback_cause: timeout`** (20 ms budget), and the length
+rule then picked mid. Measured in isolation inside the same api pod, the advisor takes 0.4–3.2
+ms even at 100 tool turns. The timeouts were therefore event-loop contention on a 2-CPU pod
+shared with concurrent lab traffic, not the advisor's own cost.
+
+**Amendments (owner decision).**
+- The lab sets `switchyard.timeout_ms: 250`. The advisor's real per-call latency
+  (`sp.switchyard.latency_ms`, which includes any loop wait) is still recorded and still
+  judged by gate 4 (p99 ≤ 20 ms).
+- **New validity rule for arm D.** If more than **5%** of D's calls in the analysed run have
+  an advisor fallback of `timeout` or `error`, D's result is **INCONCLUSIVE**. That is reported
+  with the rate, not scored as D=C. A load regression can't silently turn the treatment into
+  the baseline again. (Suggested by DevFoundry.)
+- The run-2 sessions (6, in `data/switchyard-pilot-void-run2.json`) are void and never
+  analysed. Run 3 restarts from spec 1 with fresh state and the same frozen plan.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
@@ -227,6 +248,10 @@ same denylist, outside this experiment.
 - **Small N:** the intervals will be wide. The gate is accordingly modest.
 - **Coding-only workload:** stage routing is tuned for coding agents, so this is its best
   case, not a general verdict.
+- **Concurrent lab traffic.** At the owner's choice, OpenCode's lab-sample work runs on the
+  same worker slots and the same `glm-5.3-flash` backend during the run. That adds
+  time-varying load, mitigated by running all four arms of a spec back to back in a random
+  order. It also inflates the recorded advisor latency through event-loop contention.
 - **Two-tier lab:** with no frontier model, the efficient-vs-capable spread is
   cheap-vs-mid. That understates both the savings and the quality risk of a real
   cheap-vs-frontier pool.

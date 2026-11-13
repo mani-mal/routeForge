@@ -199,6 +199,9 @@ items:
       # adaptive_routing setting (dev-foundary included) are capped at shadow.
       switchyard:
         mode: "enforce"
+        # B109: 20 ms timed out on long agent histories (~9k+ tokens) on this
+        # 2-CPU api pod, silently turning the Switchyard arm into the router arm.
+        timeout_ms: 250
     pricing.yaml: |
       # DGX lab overlay. The pooled ids are FREE variants (billed $0). These are the same
       # models' paid list prices on OpenRouter, USD per 1M tokens, read 2026-10-09, so a $0
