@@ -4,8 +4,8 @@
 `stage_router` one question: is this turn *efficient* or *capable* work? It
 answers with a frozen, content-free `AdvisorResult`, either a
 `SwitchyardProposal` (role, tier, confidence, allowlisted evidence) or a
-fallback cause. Nothing is wired into the request path here: B105 (shadow) and
-B108 (enforce) consume this.
+fallback cause. Nothing here decides a route: B105 (shadow, wired in
+`app/pipeline.py`) records the result and B108 (enforce) will act on it.
 
 Guarantees, each pinned by a test in tests/routing/switchyard/:
 
@@ -99,19 +99,28 @@ class SwitchyardProposal:
 
 @dataclass(frozen=True)
 class AdvisorResult:
-    """Exactly one of `proposal` or `fallback_cause` is set."""
+    """Exactly one of `proposal` or `fallback_cause` is set.
+
+    `version` / `algorithm` (B104) name the advisor that produced a fallback,
+    so a fallback trace still says which Switchyard build and algorithm ran.
+    On a proposal they are read off the proposal itself."""
 
     latency_ms: float
     proposal: SwitchyardProposal | None = None
     fallback_cause: FallbackCause | None = None
+    version: str | None = None
+    algorithm: str | None = None
 
     def __post_init__(self) -> None:
         if (self.proposal is None) == (self.fallback_cause is None):
             raise ValueError("AdvisorResult needs exactly one of proposal / fallback_cause")
 
     @classmethod
-    def fallback(cls, cause: FallbackCause, latency_ms: float) -> AdvisorResult:
-        return cls(latency_ms=latency_ms, fallback_cause=cause)
+    def fallback(cls, cause: FallbackCause, latency_ms: float, *,
+                 version: str | None = None,
+                 algorithm: str | None = None) -> AdvisorResult:
+        return cls(latency_ms=latency_ms, fallback_cause=cause,
+                   version=version, algorithm=algorithm)
 
     @property
     def is_fallback(self) -> bool:
@@ -125,8 +134,8 @@ class AdvisorResult:
             "tier": p.tier if p else None,
             "confidence": p.confidence if p else None,
             "evidence": dict(p.evidence) if p else {},
-            "version": p.version if p else None,
-            "algorithm": p.algorithm if p else None,
+            "version": p.version if p else self.version,
+            "algorithm": p.algorithm if p else self.algorithm,
             "fallback_cause": self.fallback_cause,
             "latency_ms": self.latency_ms,
         }
@@ -178,6 +187,11 @@ class SwitchyardAdvisor:
         }
         self._version = installed_version() or "unknown"
 
+    def _fallback(self, cause: FallbackCause, latency_ms: float) -> AdvisorResult:
+        """A fallback stamped with this advisor's version and algorithm (B104)."""
+        return AdvisorResult.fallback(cause, latency_ms, version=self._version,
+                                      algorithm=self._algorithm_name)
+
     async def advise(self, messages: Sequence[Message]) -> AdvisorResult:
         """Propose a role for this turn, or say why not. Never raises."""
         started = time.perf_counter()
@@ -188,21 +202,21 @@ class SwitchyardAdvisor:
         try:
             request = to_switchyard_request(messages)
         except _Unconvertible:
-            return AdvisorResult.fallback("unconvertible", elapsed_ms())
+            return self._fallback("unconvertible", elapsed_ms())
         except Exception:
-            return AdvisorResult.fallback("error", elapsed_ms())
+            return self._fallback("error", elapsed_ms())
 
         try:
             run = await asyncio.wait_for(self._run(request), self._timeout_s)
         except TimeoutError:
-            return AdvisorResult.fallback("timeout", elapsed_ms())
+            return self._fallback("timeout", elapsed_ms())
         except Exception:
-            return AdvisorResult.fallback("error", elapsed_ms())
+            return self._fallback("error", elapsed_ms())
 
         try:
             return self._result_from(run, elapsed_ms())
         except Exception:
-            return AdvisorResult.fallback("error", elapsed_ms())
+            return self._fallback("error", elapsed_ms())
 
     async def _run(self, request: dict[str, Any]) -> _RunResult:
         """Drive the step stream to its terminal `Done`, refusing every call."""
@@ -221,14 +235,14 @@ class SwitchyardAdvisor:
         # Design §5: a run that asked for a routing-time call is a fallback,
         # whatever Switchyard decided after the refusal.
         if run.refused_calls:
-            return AdvisorResult.fallback("routing_call_refused", latency_ms)
+            return self._fallback("routing_call_refused", latency_ms)
         if run.outcome is None:
-            return AdvisorResult.fallback("error", latency_ms)
+            return self._fallback("error", latency_ms)
 
         selected = list(run.outcome.selected_model_ids or [])
         role = selected[0] if selected else None
         if role not in ROLES:
-            return AdvisorResult.fallback("invalid_role", latency_ms)
+            return self._fallback("invalid_role", latency_ms)
 
         metadata = run.outcome.metadata
         evidence = filter_evidence(metadata.evidence if metadata is not None else None)

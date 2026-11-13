@@ -433,6 +433,19 @@ class RoutingOutcome(Base):
     tool_arg_redactions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tool_arg_skipped: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tool_arg_skipped_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # B104/B105: what the Switchyard advisor proposed for this request, when
+    # it ran (`routing.switchyard.mode != off`). Its mode, the role and tier
+    # it proposed, its confidence, whether the served tier agreed with it
+    # (null on a fallback or when nothing was served), and why it fell back.
+    # Ids, enums, a number and a bool -- content-free. Null when the advisor
+    # did not run and on rows written before the columns existed. Deployed DBs
+    # need the six ALTERs in docs/reference/routing-outcomes.md.
+    switchyard_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    switchyard_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    switchyard_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    switchyard_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    switchyard_agreed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    switchyard_fallback_cause: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class OutcomeFeedback(Base):

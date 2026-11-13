@@ -27,6 +27,7 @@ from app.policy.gate import (Gate, Representations, ToolArgStats,
 from app.config.schema import PriceCfg
 from app.routing.pricing import Savings, price_call, split_savings
 from app.routing.router import client_output_cap, complexity_tier
+from app.routing.switchyard import AdvisorResult
 from app.apps.privacy import AppPrivacyProfile, effective_rules
 from app.compression import CompressionResult, compress
 from app.compression.ccr import CCRStore
@@ -35,9 +36,11 @@ from app.memory.store import MemoryStore
 
 if TYPE_CHECKING:
     from app.apps.registry import ModelRegistry
+    from app.routing.switchyard import SwitchyardAdvisor
 
 log = logging.getLogger("serving.cache")
 _obs_log = logging.getLogger("serving.obs")
+_advisor_log = logging.getLogger("serving.routing.switchyard")
 
 
 class PipelineRejected(Exception):
@@ -107,7 +110,8 @@ class Pipeline:
                  co_cfg_provider: Callable[[], ContextOptimizationCfg],
                  ccr: CCRStore, registry: "ModelRegistry | None" = None,
                  memory: MemoryStore | None = None,
-                 cache: "DeterministicSemanticCache | None" = None) -> None:
+                 cache: "DeterministicSemanticCache | None" = None,
+                 advisor: "SwitchyardAdvisor | None" = None) -> None:
         self._s = settings
         self._gate = gate
         self._detector = detector
@@ -152,6 +156,86 @@ class Pipeline:
         # run()); never touched by run_stream -- see the comment at that call
         # site for why.
         self._cache = cache
+        # B105: the Switchyard advisor (step 6), built once by main.py and
+        # only when `routing.switchyard.mode != off`. None means the advisor
+        # code path never runs and the request path is exactly as before.
+        self._advisor = advisor
+
+    async def _advise(self, request_id: str, messages: list[Message],
+                      internals: dict | None) -> dict | None:
+        """B105: ask the Switchyard advisor about this request, once, and
+        return its content-free record -- or None when no advisor is built.
+
+        Called after compression and before the gateway, with `comp.messages`:
+        post-gate, `model_input`-shaped and post-compression, exactly what the
+        model will see (design §4; CLAUDE.md rules 1 and 7). Never on a path
+        that does not route (gate rejection, semantic-cache hit).
+
+        SHADOW ONLY. The record is recorded, never acted on: nothing here
+        changes the target, `complexity`, `min_tier` or anything passed to the
+        gateway or router. `enforce` (B108) is treated exactly like `shadow`
+        for now -- the mode is recorded truthfully as `enforce`, but no
+        `advisor_tier` reaches `Router.select` until B108 lands.
+
+        Fail-open for ADVICE, never for policy: `advise()` never raises by
+        contract, and any exception here or in recording is logged at ERROR
+        (exception type only -- never the messages) and the request continues
+        unchanged."""
+        if self._advisor is None:
+            return None
+        mode = self._s.routing.switchyard.mode
+        try:
+            result = await self._advisor.advise(messages)
+        except Exception as exc:
+            _advisor_log.error("switchyard advisor raised request=%s (%s); "
+                               "recorded as fallback", request_id,
+                               type(exc).__name__)
+            result = AdvisorResult.fallback("error", 0.0)
+        try:
+            advice = {"mode": mode, **result.to_record(), "agreed": None}
+            if internals is not None and "outcome_ctx" in internals:
+                internals["outcome_ctx"]["switchyard"] = {
+                    k: advice[k] for k in ("mode", "role", "tier", "confidence",
+                                           "agreed", "fallback_cause")}
+            return advice
+        except Exception as exc:
+            _advisor_log.error("switchyard advice recording failed request=%s (%s)",
+                               request_id, type(exc).__name__)
+            return None
+
+    @staticmethod
+    def _record_advice(request_id: str, advice: dict | None,
+                       records: list[DecisionRecord],
+                       internals: dict | None) -> None:
+        """B104/B105: once routing has decided, fold the advisor's record into
+        the three places it is read -- the SERVED router hop's DecisionRecord
+        (`advisor`), the trace (`internals["switchyard"]` -> `sp.switchyard.*`
+        and the Langfuse tags) and the outcome row (`outcome_ctx`).
+
+        `agreed` is the proposal's tier equal to the tier actually served
+        (the served hop's `chosen_tier`); null on a fallback. Every value
+        comes from the allowlisted `AdvisorResult` record. Recording only:
+        `records` gains an `advisor` field and nothing else changes. Any
+        failure is logged at ERROR and swallowed."""
+        if advice is None:
+            return
+        try:
+            served = [r for r in records if r.step == "router" and r.chosen is not None]
+            served_tier = served[-1].chosen_tier if served else None
+            agreed = (None if advice.get("fallback_cause") or advice.get("tier") is None
+                      or served_tier is None
+                      else advice["tier"] == served_tier)
+            advice = {**advice, "agreed": agreed}
+            if served:
+                served[-1].advisor = dict(advice)
+            if internals is not None:
+                internals["switchyard"] = {k: v for k, v in advice.items()
+                                           if k != "evidence"}
+                if isinstance(internals.get("outcome_ctx", {}).get("switchyard"), dict):
+                    internals["outcome_ctx"]["switchyard"]["agreed"] = agreed
+        except Exception as exc:
+            _advisor_log.error("switchyard advice recording failed request=%s (%s)",
+                               request_id, type(exc).__name__)
 
     def _detector_for(self, mode: str | None) -> Detector:
         """Resolve the base detector for an app's `pii_detection` override.
@@ -997,10 +1081,14 @@ class Pipeline:
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
+        # B105: once per request, after compression, before the gateway --
+        # reused across failover/escalation, recorded only (see `_advise`).
+        advice = await self._advise(request_id, comp.messages, internals)
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice, params=request.generation_params(),
             attempt_log=_attempt_log(internals))
+        self._record_advice(request_id, advice, records, internals)
         if internals is not None:
             internals["outcome_ctx"].update(reply_shape(result))
 
@@ -1419,10 +1507,15 @@ class Pipeline:
             internals["outcome_ctx"]["routing_tokens"] = comp.tokens_after
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
+        # B105: same seam as run() -- once, after compression, recorded only.
+        advice = await self._advise(request_id, comp.messages, internals)
         stream, records = await self._gateway.run_stream(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice,
             params=request.generation_params(), attempt_log=_attempt_log(internals))
+        # The router record is known eagerly here (records[0]); only its cost
+        # and latency are patched in later, so the advice is folded in now.
+        self._record_advice(request_id, advice, records, internals)
         if internals is not None:
             # B70 item 2: a streamed backend failure's outcome row keeps the
             # routing decision (eligible set, tier target) -- reason-free.

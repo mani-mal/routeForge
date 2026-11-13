@@ -19,6 +19,9 @@ neither touches the Improvement Plane, neither weakens a privacy invariant.
    out of rotation for a cooldown; visible as the `circuit_open` rejection code, the
    `circuit_bypass` flag, a fifth metric family and a `circuit` object on the admin models
    list (§5).
+6. **The quality-floor record** (B80) — §6.
+7. **The Switchyard advisor record** (B104/B105, 2026-11-12) — `sp.switchyard.*` and the
+   `switchyard*` Langfuse trace tags, recorded only (§7).
 
 > **Superseded 2026-09-17:** this page also documented `routing.stage_signals`, a
 > flag-gated raise-only tier bias derived from the internal agent loop's state.
@@ -712,6 +715,27 @@ example `quality floor 0.80 (workload claims): cheapest qualifying, lower bound 
 Rejected candidates carry the reasons listed in the architecture note.
 
 Prometheus is unchanged: the decision counter still carries only `tier` and `escalated`.
+
+## 7. The Switchyard advisor record (B104/B105)
+
+Present only when `routing.switchyard.mode` is `shadow` or `enforce` and the advisor ran
+for the request (never on a semantic-cache hit or a request rejected before routing). With
+the mode `off`, nothing below is emitted and every surface is byte-for-byte as before. In
+`shadow` (and, until B108, `enforce`) the proposal is **recorded only**: the served model,
+response, metering and cost are identical to `off`. Ids, enums, numbers and bools only, so
+like `sp.candidates` it is emitted regardless of `capture_io`.
+
+| Surface | Carries |
+|---|---|
+| **Trace, root span** — `sp.switchyard.{mode, role, tier, confidence, agreed, fallback_cause, latency_ms, version, algorithm}` | the advisor's record; a key whose value is null is omitted (a fallback has no `role`/`tier`/`confidence`/`agreed`) |
+| **Trace, root span** — `langfuse.trace.tags` | `switchyard`, `switchyard:{shadow\|enforce}`, `switchyard:{agreed\|overridden\|fallback}`: a fixed vocabulary (`SWITCHYARD_TAGS` in `app/obs/export.py`), never free text. The first tags RouteForge sets |
+| **DecisionRecord** — `advisor` on the served router hop (response `trace`, console snapshot) | the same record plus the allowlisted `evidence`; absent from every other hop |
+| **Outcome row** — `switchyard_*` columns | mode, role, tier, confidence, agreed, fallback cause (see [`routing-outcomes.md`](./routing-outcomes.md)) |
+
+`agreed` means the proposal's tier equals the served hop's `chosen_tier`; `overridden` is
+the opposite (for example a high-risk request floored above an `efficient` proposal), and
+`fallback` means the advisor made no proposal. See
+[`switchyard-integration.md`](./switchyard-integration.md).
 
 ## Quick verification checklist
 

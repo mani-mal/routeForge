@@ -1326,7 +1326,11 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             session_id=session_id,
             routing_policy_version=s.routing_policy_version,
             prompt_version=s.prompt_version,
-            started_ns=started_ns, usage=resp.get("usage"))
+            started_ns=started_ns, usage=resp.get("usage"),
+            # B104: the Switchyard advisor's content-free record, from the
+            # pipeline's out-parameter (never on `resp`); None when it did
+            # not run, and then nothing switchyard-shaped reaches the trace.
+            switchyard=internals.get("switchyard"))
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
         # the admin drilldown ONLY — this is the request_snapshots cache, same
         # residency boundary as serving, NOT a telemetry egress.

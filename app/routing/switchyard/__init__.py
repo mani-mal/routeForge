@@ -14,8 +14,9 @@ Separation rule (B100). Switchyard (PyPI ``nemo-switchyard``, import name
 B100 added the version contract below. B103 added the adapter
 (`advisor.py`, `convert.py`, `evidence.py`): `SwitchyardAdvisor` imports
 Switchyard lazily, only when constructed, so this package imports cleanly
-without the extra. Nothing calls it at request time yet; the shadow and
-enforce modes arrive with B105/B108 and the contract suite with B110.
+without the extra. B105 wired it into the request path in shadow mode
+(`app/pipeline.py::Pipeline._advise`): the proposal is recorded, never acted
+on. Enforce arrives with B108 and the contract suite with B110.
 
 See docs/reference/switchyard-integration.md,
 docs/backlog/bugs.md (B100, B110) and

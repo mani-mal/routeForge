@@ -307,7 +307,24 @@ algorithm. It never raises into the request path.
 - A property test confirms the selected id is always in the input role map.
 - A routing-time model call is refused and the run still ends with a proposal or `None`.
 
-## B104 — FEATURE (Switchyard S2b): telemetry containment (rule 2)  🔴 OPEN
+## B104 — FEATURE (Switchyard S2b): telemetry containment (rule 2)  ✅ RESOLVED (2026-11-12, feat/b105-switchyard-shadow)
+
+**Resolved.** The advisor's record reaches telemetry only from the allowlisted
+`AdvisorResult` (B103: evidence by name and type; upstream loggers held at WARN; no OTel
+provider, as the Rust core never initialises one on the libsy path). Root span:
+`sp.switchyard.{mode, role, tier, confidence, agreed, fallback_cause, latency_ms, version,
+algorithm}`, emitted regardless of `capture_io`; fallbacks now carry `version`/`algorithm`
+too. `.model` became `.tier` per the design (§3: the advisor names a tier, never a model).
+The exporter gained trace-tag support: `langfuse.trace.tags` (verified against the pinned
+langfuse 4.14.1, `LangfuseOtelSpanAttributes.TRACE_TAGS`) from the fixed vocabulary
+`SWITCHYARD_TAGS` in `app/obs/export.py`, which refuses anything else. `routing_outcomes`
+gained six nullable `switchyard_*` columns (ALTERs in `docs/reference/routing-outcomes.md`,
+and `scripts/migrate_app_policies.py`). The containment property test
+(`tests/routing/switchyard/test_shadow_containment.py`) feeds random PII-shaped content and a
+canary through messages and tool results with the real advisor and finds none of it in any
+span attribute or tag, outcome row, DecisionRecord `advisor` field or log line. Not verified
+here: a live Langfuse server rendering the tags (the attribute is the SDK's own).
+
 
 - Allowlist evidence fields by name **and** type (enums, numbers, bools, model ids). Drop
   everything else, and drop every free string except known enums (correction 4).
@@ -332,7 +349,28 @@ algorithm. It never raises into the request path.
 `sp.switchyard.*` metadata, and a property test feeds random PII-shaped content through the advisor and finds
 none of it in any trace attribute, outcome row or log line.
 
-## B105 — FEATURE (Switchyard P1): shadow mode  🔴 OPEN
+## B105 — FEATURE (Switchyard P1): shadow mode  🟡 PARTIAL
+
+**Shipped (2026-11-12, feat/b105-switchyard-shadow).** With `routing.switchyard.mode:
+shadow`, `create_app()` builds one `SwitchyardAdvisor` and the pipeline calls it once per
+routed request, after compression and before the gateway, on both paths, with
+`comp.messages` (post-gate, post-compression). Never on a semantic-cache hit or a gate
+rejection. The proposal is recorded on the trace, the outcome row and the served router
+hop's DecisionRecord (`advisor`), and never changes the target, `complexity`, `min_tier` or
+anything the gateway sees. `enforce` is recorded as `enforce` and behaves exactly like
+`shadow` until B108. Advice fails open: an advisor or recording error is logged at ERROR
+and the request continues. With `off` nothing is built or imported. The console decision
+inspector shows "advisor (shadow) proposed <tier> (<role>, <confidence>) · agreed |
+overridden" beside the served model. Identity test
+(`tests/routing/switchyard/test_shadow_identity.py`): `shadow` and `enforce` vs `off` on
+non-stream and stream traffic, including an `onprem_only` high-risk request, give identical
+backend calls, served models, response bodies, usage rows and outcome rows apart from the
+advisor fields.
+**Remaining:** (1) the policy-simulator / `routing_outcomes` report of the agreement rate
+and the counterfactual cost of following the advisor, per app and per workload (the
+`switchyard_*` columns are its input); (2) advisor overhead p50/p99 measured on the DGX
+`rf-pytest` pod and recorded.
+
 
 `switchyard.mode: shadow` computes the proposal and records it, but never changes the target.
 The console decision inspector shows "advisor proposed X (role, confidence)" next to the

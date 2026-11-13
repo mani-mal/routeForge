@@ -392,11 +392,29 @@ def create_app() -> FastAPI:
     app.state.trajectory_store = DbTrajectoryStore(
         app.state.db,
         ttl_seconds=float(os.environ.get("SP_TRAJECTORY_TTL_HOURS", "24")) * 3600)
+    # B105: the Switchyard advisor (step 6), ONE per process, built only when
+    # `routing.switchyard.mode != off` -- with `off` nothing is constructed,
+    # the upstream package is never imported, and the pipeline's advisor code
+    # path never runs. The boot lint (SWITCHYARD_*) has already refused a
+    # missing or unsupported install. `shadow` records the proposal only;
+    # `enforce` (B108) is recorded as such but, for now, acted on exactly
+    # like `shadow`. A construction failure is logged at ERROR and serving
+    # continues without the advisor: advice fails open, never policy.
+    advisor = None
+    if settings.routing.switchyard.mode != "off":
+        try:
+            from app.routing.switchyard import SwitchyardAdvisor
+            advisor = SwitchyardAdvisor(settings.routing.switchyard)
+        except Exception as exc:
+            logging.getLogger("serving.routing.switchyard").error(
+                "switchyard advisor construction failed (%s); serving without it",
+                type(exc).__name__)
+    app.state.switchyard_advisor = advisor
     app.state.pipeline = Pipeline(
         settings, gate, detector, gateway,
         co_cfg_provider=lambda: app.state.co_cfg, ccr=ccr, registry=registry,
         memory=memory,
-        cache=cache)
+        cache=cache, advisor=advisor)
     # Live decision stream (Phase 6a Task 2): in-process asyncio pub/sub
     # feeding GET /api/stream (SSE) for the flow visualizer. Bounded,
     # drop-oldest per-subscriber queues — see app/api/bus.py.

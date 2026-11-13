@@ -361,6 +361,7 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": prompt_bucket(prompt_tokens),
         **_policy_features(outcome_ctx),
+        **_switchyard_features(outcome_ctx),
         "cost_usd": cost.get("total_usd", 0.0),
         "latency_ms": sum(e.get("latency_ms", 0.0) for e in trace),
         "prompt_tokens": prompt_tokens,
@@ -370,6 +371,26 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
     }
     row.update(trace_features(trace, outcome_ctx.get("complexity_tier")))
     return row
+
+
+# B104/B105: outcome-row column -> key of the advisor record the pipeline
+# stashes at `outcome_ctx["switchyard"]` (ids, enums, a number, a bool).
+SWITCHYARD_COLUMNS: dict[str, str] = {
+    "switchyard_mode": "mode",
+    "switchyard_role": "role",
+    "switchyard_tier": "tier",
+    "switchyard_confidence": "confidence",
+    "switchyard_agreed": "agreed",
+    "switchyard_fallback_cause": "fallback_cause",
+}
+
+
+def _switchyard_features(outcome_ctx: dict) -> dict:
+    """The Switchyard advisor's columns, all null when it did not run. Read
+    from the pipeline's own allowlisted record, never re-derived; copied by
+    both builders so a served and a failed row agree."""
+    advice = outcome_ctx.get("switchyard") or {}
+    return {col: advice.get(key) for col, key in SWITCHYARD_COLUMNS.items()}
 
 
 def _policy_features(outcome_ctx: dict) -> dict:
@@ -556,6 +577,7 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "complexity": outcome_ctx.get("complexity"),
         "prompt_tokens_bucket": None,
         **_policy_features(outcome_ctx),
+        **_switchyard_features(outcome_ctx),
         "eligible": [],
         "rejected": _rejected_rows(rejected),
         "attempts": list(attempts),

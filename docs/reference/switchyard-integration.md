@@ -6,10 +6,12 @@ routing *advisor* (see
 [`../research/RouteForge-Switchyard-Feature-Comparison-and-Integration-Recommendation.md`](../research/RouteForge-Switchyard-Feature-Comparison-and-Integration-Recommendation.md)
 and backlog B100-B112).
 
-> **Status.** As of B100 the integration does **nothing at runtime**. B100 ships only the
-> optional extra, the version contract, the config block, the lint codes and the import
-> guard. The `shadow` and `enforce` modes are wired by B105 and B108; the contract suite
-> is B110.
+> **Status.** B100 shipped the optional extra, the version contract, the config block, the
+> lint codes and the import guard; B103 the adapter; **B104/B105 (2026-11-12) the shadow
+> mode**: with `mode: shadow` the advisor runs on every routed request and its proposal is
+> **recorded, never acted on** (see [Shadow mode](#shadow-mode-b104b105) below). `enforce`
+> is B108; until it lands, `mode: enforce` is recorded truthfully as `enforce` but behaves
+> exactly like `shadow`. The contract suite is B110.
 
 ## Ownership boundary
 
@@ -56,6 +58,66 @@ it; in any other file the lint fails with `CONCERN_IN_WRONG_FILE`). An absent bl
 | `timeout_ms` | int > 0, default `20` | Advisor call budget. |
 | `classifier` | mapping or null, default null | Not allowed until B111. |
 | `capable_tier` | `mid` \| `frontier`, default `frontier` | Tier a `capable` proposal maps to (`efficient` always maps to `cheap`). The router's risk floor and best-allowed clamp still apply afterwards (design §3). |
+
+## Shadow mode (B104/B105)
+
+Design: [`../architecture/switchyard-advisor-design.md`](../architecture/switchyard-advisor-design.md)
+§4-§9.
+
+**What runs.** With `routing.switchyard.mode != off`, `create_app()` builds **one**
+`SwitchyardAdvisor` at startup and hands it to the `Pipeline`. With `off` nothing is built,
+the upstream package is never imported, and the request path is byte-for-byte unchanged.
+If construction fails, the error is logged at ERROR and serving continues without the
+advisor (advice fails open; policy never does).
+
+On every request that reaches routing, on both the ordinary and the streaming path, the
+pipeline calls `advise(comp.messages)` **once**, after compression and before
+`gateway.run` / `gateway.run_stream`. Those messages are post-gate, `model_input`-shaped and
+post-compression: exactly what the model will see (rules 1 and 7). The proposal is reused
+across failover and escalation, never recomputed. It does **not** run on a semantic-cache
+hit, a gate rejection or a rejected model pin, since those never route.
+
+**What it changes: nothing.** The proposal never touches the tier target, `complexity`,
+`min_tier` or anything passed to the gateway or router. The served model, response bodies,
+metering and cost are identical to `off`. Only the trace, the outcome row and the served
+DecisionRecord's `advisor` field differ. `tests/routing/switchyard/test_shadow_identity.py`
+pins this for `shadow` and `enforce`, on non-stream and stream traffic including an
+`onprem_only` high-risk request. `enforce` does not pass `advisor_tier` to `Router.select`
+until B108.
+
+**Failure.** `advise()` never raises; a timeout (`timeout_ms`, default 20), an exception, an
+unconvertible message, an invalid role or a requested routing-time call becomes a fallback
+with a cause. If the advisor or the recording code raises anyway, the pipeline logs at ERROR
+(the exception type only, never the messages) and the request continues unchanged.
+
+### What is recorded, and where to see it
+
+All values come from the allowlisted `AdvisorResult` record (ids, enums, numbers, bools).
+`agreed` is true when the proposal's tier equals the tier actually **served** (the served
+router hop's `chosen_tier`), false when routing served another tier (for example a
+high-risk request floored above an `efficient` proposal), and null on a fallback.
+
+| Where | What |
+|---|---|
+| **Trace (root span)** | `sp.switchyard.mode`, `.role`, `.tier`, `.confidence`, `.agreed`, `.fallback_cause`, `.latency_ms`, `.version`, `.algorithm`. Null values are omitted. Emitted regardless of `capture_io`, like `sp.candidates`. A fallback still carries `version` and `algorithm`. |
+| **Langfuse trace tags** | `langfuse.trace.tags` (the attribute the pinned SDK, langfuse 4.14.1, defines as `LangfuseOtelSpanAttributes.TRACE_TAGS`): `switchyard`, `switchyard:shadow` or `switchyard:enforce`, and `switchyard:agreed`, `switchyard:overridden` or `switchyard:fallback`. A fixed vocabulary (`SWITCHYARD_TAGS` in `app/obs/export.py`); the exporter refuses any other tag. Filter advisor traffic in the Langfuse UI by these tags. Traces go to the same project as always: the app's own, or the shared one. |
+| **DecisionRecord** | `advisor` on the **served** router hop (in the response `trace` and the console's request snapshot): `AdvisorResult.to_record()` (role, tier, confidence, allowlisted evidence, version, algorithm, fallback cause, latency) plus `mode` and `agreed`. Absent on every other hop, and on every record when the advisor did not run. |
+| **`routing_outcomes`** | `switchyard_mode`, `switchyard_role`, `switchyard_tier`, `switchyard_confidence`, `switchyard_agreed`, `switchyard_fallback_cause` (nullable; deployed DBs need the ALTERs in [`routing-outcomes.md`](./routing-outcomes.md)). A failed request that reached routing keeps the proposal with `agreed` null. |
+
+Never recorded: the messages, any free-text evidence, client headers. The containment
+property test (`tests/routing/switchyard/test_shadow_containment.py`) feeds random
+PII-shaped content and a canary token through message content and tool results and finds
+none of it in any trace attribute or tag, outcome row, DecisionRecord `advisor` field or
+log line.
+
+### Not yet built (B105 follow-ups)
+
+- The console decision inspector does not yet render the `advisor` field ("advisor proposed
+  X (role, confidence)"); it is in the data the inspector already loads.
+- The policy-simulator / `routing_outcomes` report of agreement rate and the counterfactual
+  cost of following the advisor, per app and per workload. The columns above are what it
+  will read.
+- Advisor overhead p50/p99 measured on the DGX `rf-pytest` pod.
 
 ## Lint codes
 

@@ -24,6 +24,76 @@ TraceExport = namedtuple("TraceExport", ["url", "trace_id", "capture_io"],
                          defaults=("off",))
 
 
+# --- Switchyard advisor telemetry (B104) ------------------------------------
+#
+# The Langfuse trace-tags attribute. Verified against the pinned SDK
+# (langfuse 4.14.1, `langfuse/_client/attributes.py`:
+# `LangfuseOtelSpanAttributes.TRACE_TAGS = "langfuse.trace.tags"`), which its
+# own propagation code sets with `span.set_attribute(TRACE_TAGS, list[str])`.
+# Hard-coded rather than imported: `langfuse` is an optional extra and this
+# module must import without it.
+LANGFUSE_TRACE_TAGS = "langfuse.trace.tags"
+
+# The ONLY tags RouteForge ever sets on a trace: a fixed, bounded vocabulary,
+# never free text. `_switchyard_tags` refuses anything outside it.
+SWITCHYARD_TAGS: frozenset[str] = frozenset({
+    "switchyard",
+    "switchyard:shadow", "switchyard:enforce",
+    "switchyard:agreed", "switchyard:overridden", "switchyard:fallback",
+})
+
+# `sp.switchyard.<key>` root-span attributes, in emit order. The values come
+# only from `AdvisorResult.to_record()` (already allowlisted: ids, enums and
+# numbers) plus the deployment mode and `agreed`. Evidence is NOT here -- it
+# rides on the served hop's DecisionRecord `advisor` sub-record.
+SWITCHYARD_TRACE_KEYS: tuple[str, ...] = (
+    "mode", "role", "tier", "confidence", "agreed", "fallback_cause",
+    "latency_ms", "version", "algorithm",
+)
+
+
+def _switchyard_tags(advice: dict) -> list[str]:
+    """The trace tags for one advisor run: `switchyard`, its mode, and its
+    outcome (`agreed` | `overridden` | `fallback`; omitted when the outcome
+    is unknown, e.g. nothing was served). Raises ValueError on any tag
+    outside `SWITCHYARD_TAGS` -- an explicit check, not an `assert`, so it
+    holds under `python -O` too."""
+    tags = ["switchyard", f"switchyard:{advice.get('mode')}"]
+    if advice.get("fallback_cause"):
+        tags.append("switchyard:fallback")
+    elif advice.get("agreed") is True:
+        tags.append("switchyard:agreed")
+    elif advice.get("agreed") is False:
+        tags.append("switchyard:overridden")
+    unknown = [t for t in tags if t not in SWITCHYARD_TAGS]
+    if unknown:
+        raise ValueError(f"trace tag outside the fixed vocabulary: {unknown!r}")
+    return tags
+
+
+def _set_switchyard(root, advice: dict) -> None:
+    """Stamp the advisor's content-free record and tags on the root span.
+    Emitted regardless of `capture_io`, like `sp.candidates`: every value is
+    an id, an enum, a number or a bool. `None` values are skipped (an OTel
+    attribute cannot be null), so a fallback carries no `role`/`tier`/
+    `confidence`/`agreed`. Isolated: a bad record stops here and logs (the
+    exception type only); it never costs the rest of the trace."""
+    try:
+        for key in SWITCHYARD_TRACE_KEYS:
+            value = advice.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                root.set_attribute(f"sp.switchyard.{key}", value)
+            elif isinstance(value, (int, float)):
+                root.set_attribute(f"sp.switchyard.{key}", float(value))
+            else:
+                root.set_attribute(f"sp.switchyard.{key}", str(value))
+        root.set_attribute(LANGFUSE_TRACE_TAGS, _switchyard_tags(advice))
+    except Exception as exc:
+        log.error("switchyard trace attributes dropped (%s)", type(exc).__name__)
+
+
 def _candidates_json(rec: dict) -> str | None:
     """Serialize a routing DecisionRecord's chosen + rejected set into an
     always-on `sp.candidates` attribute. Returns None for records that carry no
@@ -243,7 +313,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  prompt_version: str = "",
                  raw_completion: str = "",
                  started_ns: int | None = None,
-                 usage: dict | None = None) -> TraceExport:
+                 usage: dict | None = None,
+                 switchyard: dict | None = None) -> TraceExport:
     """Export the request's decision trace as spans and return a `TraceExport`
     (url, trace_id, capture_io) for the resulting trace — `url` the Langfuse UI
     deep-link, `trace_id` the same trace's 32-hex id, `capture_io` the capture
@@ -280,7 +351,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
 
     `prompt_version` (Feature 3 / DSPy prompt-optimization Task 1) is
     `Settings.prompt_version` -- stamped as `sp.prompt_version` when
-    non-empty, mirroring `routing_policy_version` exactly."""
+    non-empty, mirroring `routing_policy_version` exactly.
+
+    `switchyard` (B104) is the Switchyard advisor's content-free record for
+    this request (`Pipeline` builds it; None when the advisor did not run).
+    When given, the root span carries `sp.switchyard.*` and the
+    `langfuse.trace.tags` from `SWITCHYARD_TAGS`, regardless of capture_io."""
     resolved = "off"
     try:
         # Resolved BEFORE any span is authored, and before any tracer is built:
@@ -451,6 +527,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 # Empty (nothing stamped) whenever no managed prompt is
                 # pinned active -- true for every deploy this task ships.
                 root.set_attribute("sp.prompt_version", prompt_version)
+            if switchyard:
+                _set_switchyard(root, switchyard)
             if session_id:
                 # Langfuse groups traces sharing this attribute into one Session
                 # (B17). Opaque, client-supplied; deliberately NOT in REDACT_KEYS
