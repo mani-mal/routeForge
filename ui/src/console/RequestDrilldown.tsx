@@ -11,7 +11,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { STEPS, stepMeta, TIER_COLOR, api } from "../api";
-import type { ChatResponse, QualityFloorRecord, RequestSummary, TraceRecord } from "../api";
+import type { AdvisorRecord, ChatResponse, QualityFloorRecord, RequestSummary, TraceRecord } from "../api";
 import { TIER_HEX, SIGNAL_HEX } from "../tokens";
 import type { Tier } from "../tokens";
 import { Panel, StatTile, TierDot, formatUsd, formatUsdPrecise, formatMs, formatPct } from "../components/common";
@@ -101,6 +101,17 @@ function floorLine(q: QualityFloorRecord | null | undefined): string | null {
   return [head, why[q.status] ?? q.status].join(" · ");
 }
 
+// B105: "advisor proposed X (role, confidence)" beside the served model. In
+// shadow mode the proposal was recorded only; it never changed the route.
+function advisorLine(a: AdvisorRecord | null | undefined): string | null {
+  if (!a) return null;
+  const head = `advisor (${a.mode})`;
+  if (a.fallback_cause) return `${head} · no proposal (${a.fallback_cause})`;
+  const conf = a.confidence != null ? `, ${a.confidence.toFixed(2)}` : "";
+  const verdict = a.agreed == null ? null : a.agreed ? "agreed" : "overridden";
+  return [`${head} proposed ${a.tier} (${a.role}${conf})`, verdict].filter(Boolean).join(" · ");
+}
+
 // `sp.checks` (design P1a §6): a request-level proof, so its only honest
 // values are yes / no / "nothing to check this request" — never a fabricated
 // boolean for `null`/`undefined`.
@@ -148,6 +159,9 @@ function Chosen({ r, cumulative }: { r: TraceRecord; cumulative?: number }) {
       {r.reason && <div className="mt-1 text-xs text-gray-400">{r.reason}</div>}
       {floorLine(r.scoring?.quality_floor) && (
         <div className="mt-1 text-xs text-gray-400">{floorLine(r.scoring?.quality_floor)}</div>
+      )}
+      {advisorLine(r.advisor) && (
+        <div className="mt-1 text-xs text-gray-400">{advisorLine(r.advisor)}</div>
       )}
       {r.rejected && r.rejected.length > 0 && (
         <div className="mt-2">

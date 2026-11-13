@@ -110,6 +110,27 @@ rolling the image.
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_alias VARCHAR(64);
 ```
 
+**Upgrade: Switchyard advisor columns (B104/B105, 2026-11-12).** Six nullable columns record
+what the Switchyard advisor proposed (§3.2): `switchyard_mode`, `switchyard_role`,
+`switchyard_tier`, `switchyard_confidence`, `switchyard_agreed` and
+`switchyard_fallback_cause`. Null on older rows and whenever the advisor did not run.
+**Release note: run these six ALTERs before rolling this image in EVERY mode, including
+`routing.switchyard.mode: off`.** Otherwise every outcome write fails: serving continues
+(fail-open, logged as `outcome record failed`) and the B62 boot check warns of the missing
+columns, but no rows are recorded until the ALTERs (or `scripts/migrate_app_policies.py`) run.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_mode VARCHAR(16);
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_role VARCHAR(16);
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_tier VARCHAR(16);
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_confidence DOUBLE PRECISION;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_agreed BOOLEAN;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_fallback_cause VARCHAR(32);
+```
+
+(SQLite: the same six statements without `IF NOT EXISTS`, with `FLOAT` for
+`switchyard_confidence`.)
+
 **Upgrade: tool-argument bar counts (B69, 2026-11-11).** Three nullable columns record what
 the tool-argument bar did — `tool_arg_redactions`, `tool_arg_skipped` and
 `tool_arg_skipped_types` (§3.2). Null on older rows. Same failure mode as above if the
@@ -290,6 +311,11 @@ filled on it exactly as on an `ok` row.
 | `verify_mode` | enum, nullable | See below. `failed` on `verify_failed` rows; null on other failure rows. |
 | `tool_arg_redactions`, `tool_arg_skipped` | int, nullable | What the **tool-argument bar** (B69, `tool_args_min_score` in `docs/reference/per-app-config.md`) did on this request, ingress (replayed tool calls) and egress (the model's tool calls) summed: spans rewritten inside `tool_calls[*].function.arguments`, and detected spans that passed through unredacted because they scored below the bar. `0` when nothing was rewritten or skipped (including every request without tool calls); written on every status from the gate on, so a failure row still records what was skipped on the way in. Null only on rows written before the columns existed. Counts, never text (§2). Added 2026-11-11. |
 | `tool_arg_skipped_types` | JSON list[str], nullable | The entity **types** of the skipped spans, sorted, de-duplicated (`["US_DRIVER_LICENSE"]`). Never values. These types are still in `detected_entity_types` — the bar changes rewriting, never detection. Added 2026-11-11 (B69). |
+| `switchyard_mode` | enum, nullable | The Switchyard advisor's deployment mode for this request (`shadow` \| `enforce`), when it ran (`routing.switchyard.mode != off`; see `docs/reference/switchyard-integration.md`). Null when it did not run: mode `off`, a semantic-cache hit, or a request rejected before routing. `enforce` is recorded truthfully but, until B108, acted on exactly like `shadow`. Added 2026-11-12 (B104/B105). |
+| `switchyard_role`, `switchyard_tier` | enum, nullable | What the advisor proposed: role `efficient` \| `capable` and the tier it maps to (`cheap`, or `switchyard.capable_tier`). Null on a fallback. In `shadow` the proposal is never acted on. Added 2026-11-12. |
+| `switchyard_confidence` | float, nullable | The advisor's confidence (0..1); null when Switchyard reported none (holds, overrides, the picker default) and on a fallback. Added 2026-11-12. |
+| `switchyard_agreed` | bool, nullable | `switchyard_tier` equals the **served** tier (the served router hop's `chosen_tier`). Null on a fallback and on a row where nothing was served. The agreement rate is `avg(switchyard_agreed::int)` over non-null rows. Added 2026-11-12. |
+| `switchyard_fallback_cause` | enum, nullable | Why the advisor made no proposal: `timeout` \| `error` \| `unconvertible` \| `invalid_role` \| `routing_call_refused`. Null on a proposal. Added 2026-11-12. |
 | `conflicting_core` | JSON, nullable | A `no_eligible` row's minimal conflicting core (P3b): `ConflictingCore.to_record()` — requirement ids/`security`/`source`/`detail`, endpoint state, `candidates_considered`; no `label`, no `hints`. Content-free. Null on every other status, and null when the router's own core computation failed (`core=None`). See `docs/reference/conflicting-core.md`. Added 2026-09-25 (P3b). |
 
 **`verify_mode`** is derived from the `verify` record, checking the reason first:

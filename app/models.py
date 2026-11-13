@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 RISK_CLASSES = ("low", "medium", "high")
 RESIDENCIES = ("any", "private_cloud_ok", "onprem_only")
@@ -309,6 +309,23 @@ class DecisionRecord(BaseModel):
     # one tier targeting picked (never below the hard floor). Tier names and
     # a fixed cause enum only; None otherwise.
     tier_downgrade: dict | None = None
+    # B105: the Switchyard advisor's proposal for this request, on the SERVED
+    # router hop only -- `AdvisorResult.to_record()` (role, tier, confidence,
+    # allowlisted evidence, version, algorithm, fallback_cause, latency_ms)
+    # plus `mode` and `agreed` (proposal tier == this hop's `chosen_tier`;
+    # null on a fallback). Ids, enums and numbers only. In `shadow` it is
+    # recorded, never acted on. None whenever the advisor did not run, and
+    # then dropped from the dump entirely (see `_drop_absent_advisor`), so
+    # with `routing.switchyard.mode: off` a record serializes exactly as it
+    # did before this field existed.
+    advisor: dict | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_advisor(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("advisor", ...) is None:
+            data.pop("advisor", None)
+        return data
 
 
 class VerificationRecord(BaseModel):

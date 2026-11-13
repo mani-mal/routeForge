@@ -138,9 +138,10 @@ class QualityFloorsCfg(BaseModel):
 class SwitchyardCfg(BaseModel):
     """Optional NVIDIA Switchyard advisor (B100). An absent block means `off`.
 
-    Only the dependency contract exists today: shadow/enforce are wired by
-    B105/B108. The config lint (SWITCHYARD_*) checks the install and the
-    algorithm only when `mode != off`.
+    `shadow` (B105) records the advisor's proposal and never acts on it.
+    `enforce` is B108: until then it is recorded as `enforce` but behaves
+    exactly like `shadow`. The config lint (SWITCHYARD_*) checks the install
+    and the algorithm only when `mode != off`.
     """
     # Quoted `off` in YAML: a bare `off` is a boolean (see QualityFloorsCfg).
     mode: Literal["off", "shadow", "enforce"] = "off"

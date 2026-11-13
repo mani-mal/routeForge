@@ -48,6 +48,21 @@ export interface RejectedCandidate {
   code?: string | null;
 }
 
+// B105: `advisor` on the served router hop (app/pipeline.py::_record_advice).
+// Ids, enums and numbers only. `agreed` is null on a fallback.
+export interface AdvisorRecord {
+  mode: "shadow" | "enforce";
+  role: "efficient" | "capable" | null;
+  tier: string | null;
+  confidence: number | null;
+  agreed: boolean | null;
+  fallback_cause: string | null;
+  latency_ms: number;
+  version: string | null;
+  algorithm: string | null;
+  evidence?: Record<string, unknown>;
+}
+
 // A trace record is one of several step shapes; fields are optional per step.
 export interface TraceRecord {
   step: string;
@@ -62,6 +77,9 @@ export interface TraceRecord {
   tokens_priced?: number;
   // router hops: the P2a scoring record; B80 adds `quality_floor` beside it.
   scoring?: { quality_floor?: QualityFloorRecord | null; [k: string]: unknown } | null;
+  // B105: the Switchyard advisor's proposal, on the served router hop only,
+  // and only when routing.switchyard.mode != off. Recorded, never acted on.
+  advisor?: AdvisorRecord | null;
   // verify
   required?: boolean;
   performed?: boolean;

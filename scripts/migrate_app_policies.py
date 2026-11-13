@@ -163,6 +163,13 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("tool_arg_redactions", "INTEGER", "INTEGER"),
     ("tool_arg_skipped", "INTEGER", "INTEGER"),
     ("tool_arg_skipped_types", "JSON", "JSON"),
+    # 2026-11-12 B104/B105 — the Switchyard advisor's content-free proposal.
+    ("switchyard_mode", "VARCHAR(16)", "VARCHAR(16)"),
+    ("switchyard_role", "VARCHAR(16)", "VARCHAR(16)"),
+    ("switchyard_tier", "VARCHAR(16)", "VARCHAR(16)"),
+    ("switchyard_confidence", "DOUBLE PRECISION", "FLOAT"),
+    ("switchyard_agreed", "BOOLEAN", "BOOLEAN"),
+    ("switchyard_fallback_cause", "VARCHAR(32)", "VARCHAR(32)"),
 ]
 
 APPLICATIONS_TABLE = "applications"

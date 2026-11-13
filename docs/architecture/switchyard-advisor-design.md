@@ -132,6 +132,8 @@ it, so cost can only go down versus today. It's safer for cost but discards Swit
 
 - **shadow (B105):** compute and record the proposal, and don't pass `advisor_tier`. The
   served model, response, metering and cost are identical to `off` (the identity test).
+  The advisor record is **operator-visible** (trace, Langfuse, `routing_outcomes`, the
+  console) and **never client-visible**: the client response body is identical to `off`.
 - **enforce (B108):** pass `advisor_tier`. The proposal is named on the response
   certificate and folded into `app_policy_version`.
 - **Not an axis (rule 2a).** It isn't placement and it isn't protection: it is a routing
