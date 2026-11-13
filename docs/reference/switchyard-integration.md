@@ -127,6 +127,13 @@ log line.
   will read.
 - Advisor overhead p50/p99 measured on the DGX `rf-pytest` pod.
 
+### Overhead
+
+Measured on the DGX H200 test pod (warm, 2000 calls per row). Typical agent histories
+(up to 25 tool turns) cost under 1.2 ms at p99. At 100 tool turns, p50 is 2.3 ms, p99 is
+7.3 ms and the max is 15.9 ms. That is close to the default `timeout_ms: 20`, so raise it
+if your agents run very long histories and you see `fallback_cause: timeout`.
+
 ## Lint codes
 
 All fire only when `mode != off`. With `mode: off` (or no block) nothing about Switchyard

@@ -370,8 +370,18 @@ apart from the advisor columns. The six `switchyard_*` ALTERs must run before ro
 image in every mode, including `off`.
 **Remaining:** (1) the policy-simulator / `routing_outcomes` report of the agreement rate
 and the counterfactual cost of following the advisor, per app and per workload (the
-`switchyard_*` columns are its input); (2) advisor overhead p50/p99 measured on the DGX
-`rf-pytest` pod and recorded.
+`switchyard_*` columns are its input). The overhead measurement is done: measured on the
+DGX H200 test pod (2026-11-12, real `nemo-switchyard 0.4.0a1`, warm, 2000 calls per row):
+
+| Tool turns | p50 | p99 | max |
+|---|---|---|---|
+| 0 | 0.45 ms | 0.63 ms | 0.81 ms |
+| 5 | 0.62 ms | 0.80 ms | 1.25 ms |
+| 25 | 0.96 ms | 1.19 ms | 3.00 ms |
+| 100 | 2.33 ms | 7.26 ms | 15.9 ms |
+
+At 100 turns the max approaches the 20 ms `timeout_ms`, so very long histories can
+occasionally fall back with `timeout` (safe, and recorded).
 
 
 `switchyard.mode: shadow` computes the proposal and records it, but never changes the target.
