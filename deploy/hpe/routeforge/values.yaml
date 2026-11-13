@@ -117,7 +117,8 @@ servingPlane:
   # renders a routing.yaml overlay (templates/routing-overlay.yaml) mounted at
   # /etc/routeforge/config-overlay and sets SP_CONFIG_OVERLAY_DIR; the default
   # api image (EXTRAS includes `switchyard`) already contains the package.
-  # "enforce" is refused at render time until B108.
+  # "enforce" is refused at render time: the code supports it since B108, but
+  # enforce for real deployments waits for Switchyard 0.4.0 final (owner decision).
   switchyard:
     mode: "off"        # off | shadow
   policy:

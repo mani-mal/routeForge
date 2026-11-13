@@ -382,7 +382,9 @@ def test_admin_app_carries_the_effective_block(client):
     assert set(eff) == {"model_input", "client_output", "telemetry_io",
                         "detection", "content_integrity",
                         "allowed_regions", "require_no_retention",
-                        "tool_args_min_score"}
+                        "tool_args_min_score",
+                        # B108: the effective (ceiling-capped) advisor mode.
+                        "adaptive_routing", "adaptive_routing_sample_rate"}
     # Default app (no policy row, enforced): both data-handling axes redact.
     assert eff["model_input"] == "redact"
     assert eff["client_output"] == "redact"

@@ -459,3 +459,56 @@ def test_usage_omits_nested_details_when_cached_count_is_unreported(client, monk
     assert "prompt_tokens_details" not in body["usage"]
     assert body["usage"]["cached_prompt_tokens"] == 0
     _validate_openai(body)
+
+
+# --- B108: an app whose Switchyard advisor is ENFORCED ----------------------
+#
+# The advisor may change which tier serves an app; it must change nothing a
+# consumer depends on. The same wire contract -- the envelope, a streamed
+# reply, and a tool round-trip whose structure reaches the backend -- holds for
+# an `adaptive_routing: enforce` app whose advisor moves the target.
+
+def test_enforced_advisor_app_keeps_the_openai_contract(monkeypatch):
+    from tests.routing.switchyard._shadow_harness import SpyAdvisor, proposal
+    from tests.routing.switchyard.test_enforce_behaviour import _app, _client, _post
+
+    with _client(monkeypatch, "enforce",
+                 SpyAdvisor(proposal(tier="frontier", role="capable"))) as c:
+        token = _app(c, "contract-enforce", adaptive_routing="enforce",
+                     stream_mode="stream_unverified")
+        # 1. Plain turn: the envelope parses with the real SDK.
+        r = _post(c, token, {"messages": [{"role": "user", "content": "capital of France?"}]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        _validate_openai(body)
+        assert body["object"] == "chat.completion"
+        assert body["model"] == "bedrock-frontier"     # the advisor moved it
+        # 2. A tool round-trip: structure reaches the backend unflattened.
+        CALLS.clear()
+        r = _post(c, token, {
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "call-1", "type": "function",
+                                 "function": {"name": "get_weather",
+                                              "arguments": '{"city": "Paris"}'}}]},
+                {"role": "tool", "tool_call_id": "call-1", "content": "sunny, 21C"},
+            ],
+            "tools": _TOOLS})
+        assert r.status_code == 200, r.text
+        _validate_openai(r.json())
+        wire = CALLS[-1]["messages"]
+        assert [m["role"] for m in wire] == ["user", "assistant", "tool"]
+        assert wire[-1]["tool_call_id"] == "call-1"
+        # 3. A real-token stream: SSE chunks in the OpenAI chunk shape.
+        r = _post(c, token, {"messages": [{"role": "user", "content": "hi"}],
+                             "stream": True})
+        assert r.status_code == 200, r.text
+        chunks = [json.loads(b.strip()[len("data: "):])
+                  for b in r.text.strip("\n").split("\n\n")
+                  if b.strip() != "data: [DONE]"]
+        assert chunks and all(ch["object"] == "chat.completion.chunk" for ch in chunks)
+        ChatCompletionChunk = pytest.importorskip(
+            "openai.types.chat").ChatCompletionChunk
+        for ch in chunks:
+            ChatCompletionChunk.model_validate(ch)

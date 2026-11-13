@@ -718,19 +718,22 @@ Prometheus is unchanged: the decision counter still carries only `tier` and `esc
 
 ## 7. The Switchyard advisor record (B104/B105)
 
-Present only when `routing.switchyard.mode` is `shadow` or `enforce` and the advisor ran
-for the request (never on a semantic-cache hit or a request rejected before routing). With
-the mode `off`, nothing below is emitted and every surface is byte-for-byte as before. In
-`shadow` (and, until B108, `enforce`) the proposal is **recorded only**: the served model,
-response, metering and cost are identical to `off`. Ids, enums, numbers and bools only, so
+Present only when the app's **effective** advisor mode (min of `routing.switchyard.mode`
+and the app's `adaptive_routing`, an app with no setting capped at `shadow`; B108) is
+`shadow` or `enforce` and the advisor ran for the request (never on a semantic-cache hit or
+a request rejected before routing). With the mode `off`, nothing below is emitted and every
+surface is byte-for-byte as before. In `shadow` the proposal is **recorded only**: the
+served model, response, metering and cost are identical to `off`. In `enforce` (B108) the
+proposal's tier replaces the length-derived tier target when `applied` is true (see
+[`switchyard-integration.md`](./switchyard-integration.md#enforce-mode-b108)). Ids, enums, numbers and bools only, so
 like `sp.candidates` it is emitted regardless of `capture_io`.
 
 | Surface | Carries |
 |---|---|
-| **Trace, root span** — `sp.switchyard.{mode, role, tier, confidence, agreed, fallback_cause, latency_ms, version, algorithm}` | the advisor's record; a key whose value is null is omitted (a fallback has no `role`/`tier`/`confidence`/`agreed`) |
+| **Trace, root span** — `sp.switchyard.{mode, role, tier, confidence, agreed, fallback_cause, latency_ms, version, algorithm, applied}` | the advisor's record; a key whose value is null is omitted (a fallback has no `role`/`tier`/`confidence`/`agreed`) |
 | **Trace, root span** — `langfuse.trace.tags` | `switchyard`, `switchyard:{shadow\|enforce}`, `switchyard:{agreed\|overridden\|fallback}`: a fixed vocabulary (`SWITCHYARD_TAGS` in `app/obs/export.py`), never free text. The first tags RouteForge sets |
 | **DecisionRecord** — `advisor` on the served router hop (console snapshot, decision stream; never the client response) | the same record plus the allowlisted `evidence`; absent from every other hop |
-| **Outcome row** — `switchyard_*` columns | mode, role, tier, confidence, agreed, fallback cause (see [`routing-outcomes.md`](./routing-outcomes.md)) |
+| **Outcome row** — `switchyard_*` columns | mode, role, tier, confidence, agreed, fallback cause, applied (see [`routing-outcomes.md`](./routing-outcomes.md)) |
 
 `agreed` means the proposal's tier equals the served hop's `chosen_tier`; `overridden` is
 the opposite (for example a high-risk request floored above an `efficient` proposal), and

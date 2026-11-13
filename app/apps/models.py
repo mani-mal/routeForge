@@ -239,6 +239,14 @@ class AppPolicy(Base):
     # docs/guides/admin-setup.md, run before rolling the image.
     quality_floors: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     quality_floor_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # B108 per-app Switchyard advisor mode (off | shadow | enforce) and the
+    # deterministic share of `enforce` requests it is applied to (0..1). Null =
+    # inherit: the deployment `routing.switchyard.mode` capped at `shadow`, rate
+    # 1.0 (app/routing/adaptive.py). Raise-only TOWARD the deployment ceiling,
+    # never past it. Not a placement or protection axis. Added after the table
+    # shipped: a deployed DB needs the ALTERs in docs/reference/per-app-config.md.
+    adaptive_routing: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    adaptive_routing_sample_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     application: Mapped[Application] = relationship(back_populates="policy")
 
@@ -446,6 +454,11 @@ class RoutingOutcome(Base):
     switchyard_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     switchyard_agreed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     switchyard_fallback_cause: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # B108: true when the proposal was passed to the router (effective mode
+    # `enforce`, request sampled, no fallback); false when the advisor ran but
+    # the proposal was only recorded. Null when the advisor did not run.
+    # Deployed DBs need the ALTER in docs/reference/routing-outcomes.md.
+    switchyard_applied: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class OutcomeFeedback(Base):

@@ -186,11 +186,18 @@ class Gateway:
                   tools: list[dict] | None = None,
                   tool_choice: str | dict | None = None,
                   params: dict | None = None,
-                  attempt_log: list[str] | None = None
+                  attempt_log: list[str] | None = None,
+                  advisor_tier: str | None = None
                   ) -> tuple[GenerationResult, list[DecisionRecord]]:
         """`attempt_log`, when given, receives each candidate's name as its call
         starts, so a caller whose task is cancelled mid-call (a client
-        disconnect, B78) can still say which endpoint was in flight."""
+        disconnect, B78) can still say which endpoint was in flight.
+
+        `advisor_tier` (B108) is handed unchanged to EVERY `select` of this
+        request -- the first one, each failover re-select and each
+        confidence-escalation re-select. It replaces only the length-derived
+        tier target; an escalation's `min_tier` still dominates it, and
+        `exclude` still only ever removes candidates. None = today."""
         records: list[DecisionRecord] = []
         threshold = self._s.routing.confidence_escalation_threshold
         max_esc = self._s.routing.max_escalations
@@ -217,7 +224,8 @@ class Gateway:
                     decision = self._router.select(
                         ctx, tokens_after, complexity, min_tier,
                         exclude=frozenset(failed_models), output_tokens=out_tokens,
-                        open_circuits=self._open_circuits())
+                        open_circuits=self._open_circuits(),
+                        advisor_tier=advisor_tier)
             except NoEligibleCandidate as exc:
                 # A confidence escalation found nothing eligible at the higher
                 # tier (e.g. it is over the per-request budget the served answer
@@ -332,7 +340,8 @@ class Gateway:
                          tools: list[dict] | None = None,
                          tool_choice: str | dict | None = None,
                          params: dict | None = None,
-                         attempt_log: list[str] | None = None
+                         attempt_log: list[str] | None = None,
+                         advisor_tier: str | None = None
                          ) -> tuple[AsyncIterator[StreamChunk], list[DecisionRecord]]:
         """Real streaming counterpart of `run()` for the direct (single-shot)
         path. Performs the SAME residency-clamped router selection and emits the
@@ -354,12 +363,15 @@ class Gateway:
         returned iterator is fully consumed. The router record's `actual_cost_usd`
         and `latency_ms` are unknown until the terminal `StreamChunk(final=...)`
         arrives, so the iterator patches the record in place when it sees `final`.
+
+        `advisor_tier` (B108): as in `run()`, passed straight to `select`.
         """
         with metrics.time_routing():
             decision = self._router.select(
                 ctx, tokens_after, complexity, None,
                 output_tokens=expected_output_tokens(self._s, params),
-                open_circuits=self._open_circuits())
+                open_circuits=self._open_circuits(),
+                advisor_tier=advisor_tier)
         cand = decision.chosen
         if attempt_log is not None:   # see run()
             attempt_log.append(cand.name)

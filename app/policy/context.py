@@ -20,6 +20,7 @@ from app.policy.feasible import (  # noqa: F401  (re-exported: app/pipeline.py i
     registry_permits,
 )
 from app.routing.quality_floor import resolve_floor
+from app.routing.adaptive import resolve_adaptive_routing
 
 if TYPE_CHECKING:  # avoid importing the apps layer at module load
     from app.apps.policy import AppPolicyView
@@ -260,6 +261,9 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
     )
 
     quality_floor, quality_floor_mode = resolve_floor(settings, app_policy, workload)
+    # B108: read AFTER placement and eligibility are final, and fed into
+    # neither -- a routing preference, never a policy axis (rule 2a).
+    adaptive_routing, adaptive_rate = resolve_adaptive_routing(settings, app_policy)
 
     return ExecutionPolicyContext(
         request_id=request_id,
@@ -293,6 +297,8 @@ def build_context(settings: Settings, request_id: str, tenant_id: str,
         workload=workload,
         quality_floor=quality_floor,
         quality_floor_mode=quality_floor_mode,
+        adaptive_routing=adaptive_routing,
+        adaptive_routing_sample_rate=adaptive_rate,
         compression_override=(app_policy.compression_enabled
                               if app_policy is not None else None),
         # The COMPILED axis, never the raw nullable column: one authority

@@ -9,9 +9,14 @@ and backlog B100-B112).
 > **Status.** B100 shipped the optional extra, the version contract, the config block, the
 > lint codes and the import guard; B103 the adapter; **B104/B105 (2026-11-12) the shadow
 > mode**: with `mode: shadow` the advisor runs on every routed request and its proposal is
-> **recorded, never acted on** (see [Shadow mode](#shadow-mode-b104b105) below). `enforce`
-> is B108; until it lands, `mode: enforce` is recorded truthfully as `enforce` but behaves
-> exactly like `shadow`. The contract suite is B110.
+> **recorded, never acted on** (see [Shadow mode](#shadow-mode-b104b105) below). **B108
+> (2026-11-13) per-app enforce**: `mode` is now the deployment *ceiling*, and an app set to
+> `adaptive_routing: enforce` has the proposal's tier used as its tier target (see
+> [Enforce mode](#enforce-mode-b108) below). The contract suite is B110.
+>
+> **Enforce for real customer apps still waits for Switchyard 0.4.0 final** (owner decision;
+> the pin is `0.4.0a1`). The Helm charts keep refusing `enforce` at render time. Its first
+> use is a DGX lab evaluation app for B109, on the lab's raw manifest.
 
 ## Ownership boundary
 
@@ -51,7 +56,7 @@ it; in any other file the lint fails with `CONCERN_IN_WRONG_FILE`). An absent bl
 
 | Field | Type / default | Meaning |
 |---|---|---|
-| `mode` | `off` \| `shadow` \| `enforce`, default `off` | Quote `"off"` in YAML (bare `off` is a boolean; it is coerced to `off` anyway). |
+| `mode` | `off` \| `shadow` \| `enforce`, default `off` | The deployment **ceiling** (B108): the most any app may get. An app's effective mode is min(this, its own `adaptive_routing`), and an app with no setting is capped at `shadow`. Quote `"off"` in YAML (bare `off` is a boolean; it is coerced to `off` anyway). |
 | `algorithm` | str, default `stage_router` | Only `stage_router` is accepted. |
 | `picker` | `efficient_first` \| `capable_first`, default `efficient_first` | Tie preference between efficient and capable. |
 | `confidence_threshold` | float 0..1, default `0.5` | Minimum advisor confidence to act on. |
@@ -78,8 +83,9 @@ the upstream package is never imported, and the request path is byte-for-byte un
 If construction fails, the error is logged at ERROR and serving continues without the
 advisor (advice fails open; policy never does).
 
-On every request that reaches routing, on both the ordinary and the streaming path, the
-pipeline calls `advise(comp.messages)` **once**, after compression and before
+On every request that reaches routing for an app whose **effective** mode is not `off`
+(B108; see [Enforce mode](#enforce-mode-b108)), on both the ordinary and the streaming path,
+the pipeline calls `advise(comp.messages)` **once**, after compression and before
 `gateway.run` / `gateway.run_stream`. Those messages are post-gate, `model_input`-shaped and
 post-compression: exactly what the model will see (rules 1 and 7). The proposal is reused
 across failover and escalation, never recomputed. It does **not** run on a semantic-cache
@@ -89,9 +95,9 @@ hit, a gate rejection or a rejected model pin, since those never route.
 `min_tier` or anything passed to the gateway or router. The served model, response bodies,
 metering and cost are identical to `off`. Only the trace, the outcome row and the served
 DecisionRecord's `advisor` field differ. `tests/routing/switchyard/test_shadow_identity.py`
-pins this for `shadow` and `enforce`, on non-stream and stream traffic including an
-`onprem_only` high-risk request. `enforce` does not pass `advisor_tier` to `Router.select`
-until B108.
+pins this under a `shadow` ceiling and under an `enforce` ceiling for apps with no
+`adaptive_routing` setting (they inherit `shadow`), on non-stream and stream traffic
+including an `onprem_only` high-risk request.
 
 **Failure.** `advise()` never raises; a timeout (`timeout_ms`, default 20), an exception, an
 unconvertible message, an invalid role or a requested routing-time call becomes a fallback
@@ -107,16 +113,93 @@ high-risk request floored above an `efficient` proposal), and null on a fallback
 
 | Where | What |
 |---|---|
-| **Trace (root span)** | `sp.switchyard.mode`, `.role`, `.tier`, `.confidence`, `.agreed`, `.fallback_cause`, `.latency_ms`, `.version`, `.algorithm`. Null values are omitted. Emitted regardless of `capture_io`, like `sp.candidates`. A fallback still carries `version` and `algorithm`. |
+| **Trace (root span)** | `sp.switchyard.mode` (the app's **effective** mode), `.role`, `.tier`, `.confidence`, `.agreed`, `.fallback_cause`, `.latency_ms`, `.version`, `.algorithm`, `.applied` (B108). Null values are omitted. Emitted regardless of `capture_io`, like `sp.candidates`. A fallback still carries `version` and `algorithm`. |
 | **Langfuse trace tags** | `langfuse.trace.tags` (the attribute the pinned SDK, langfuse 4.14.1, defines as `LangfuseOtelSpanAttributes.TRACE_TAGS`): `switchyard`, `switchyard:shadow` or `switchyard:enforce`, and `switchyard:agreed`, `switchyard:overridden` or `switchyard:fallback`. A fixed vocabulary (`SWITCHYARD_TAGS` in `app/obs/export.py`); the exporter refuses any other tag. Filter advisor traffic in the Langfuse UI by these tags. Traces go to the same project as always: the app's own, or the shared one. |
-| **DecisionRecord** | `advisor` on the **served** router hop, on the operator surfaces only (the console's request snapshot, the live decision stream); it is removed from the client-bound response `trace` at the end of `_finalize`, so the client body is identical to `off`. The record: `AdvisorResult.to_record()` (role, tier, confidence, allowlisted evidence, version, algorithm, fallback cause, latency) plus `mode` and `agreed`. Absent on every other hop, and on every record when the advisor did not run. |
-| **`routing_outcomes`** | `switchyard_mode`, `switchyard_role`, `switchyard_tier`, `switchyard_confidence`, `switchyard_agreed`, `switchyard_fallback_cause` (nullable; deployed DBs need the ALTERs in [`routing-outcomes.md`](./routing-outcomes.md)). A failed request that reached routing keeps the proposal with `agreed` null. |
+| **DecisionRecord** | `advisor` on the **served** router hop, on the operator surfaces only (the console's request snapshot, the live decision stream); it is removed from the client-bound response `trace` at the end of `_finalize`, so the client body is identical to `off`. The record: `AdvisorResult.to_record()` (role, tier, confidence, allowlisted evidence, version, algorithm, fallback cause, latency) plus `mode`, `agreed` and `applied` (B108). Absent on every other hop, and on every record when the advisor did not run. |
+| **`routing_outcomes`** | `switchyard_mode`, `switchyard_role`, `switchyard_tier`, `switchyard_confidence`, `switchyard_agreed`, `switchyard_fallback_cause`, `switchyard_applied` (B108) (nullable; deployed DBs need the ALTERs in [`routing-outcomes.md`](./routing-outcomes.md)). A failed request that reached routing keeps the proposal with `agreed` null. |
 
 Never recorded: the messages, any free-text evidence, client headers. The containment
 property test (`tests/routing/switchyard/test_shadow_containment.py`) feeds random
 PII-shaped content and a canary token through message content and tool results and finds
 none of it in any trace attribute or tag, outcome row, DecisionRecord `advisor` field or
 log line.
+
+## Enforce mode (B108)
+
+> **Release note (B108, 2026-11-13).** One more `routing_outcomes` column
+> (`switchyard_applied`) and two `app_policies` columns (`adaptive_routing`,
+> `adaptive_routing_sample_rate`). Run the ALTERs in
+> [`routing-outcomes.md`](./routing-outcomes.md) and
+> [`per-app-config.md`](./per-app-config.md#adaptive_routing-and-adaptive_routing_sample_rate----the-switchyard-advisor-per-app)
+> (or `scripts/migrate_app_policies.py`) **before rolling this image, in every mode**.
+
+Design: [`../architecture/switchyard-advisor-design.md`](../architecture/switchyard-advisor-design.md)
+§2 (the seam) and §6 (modes).
+
+**Who gets it.** Per app, `adaptive_routing: off | shadow | enforce` (default: inherit) and
+`adaptive_routing_sample_rate` (0..1, default 1.0) — see
+[`per-app-config.md`](./per-app-config.md#adaptive_routing-and-adaptive_routing_sample_rate----the-switchyard-advisor-per-app).
+The **effective** mode is min(deployment ceiling `routing.switchyard.mode`, app setting),
+ordered `off < shadow < enforce`. An app with **no** setting inherits the ceiling **capped
+at `shadow`**: a `shadow` deployment keeps shadowing every app exactly as before B108, and
+`enforce` only ever reaches an app explicitly set to it. An app at `off` is untouched: the
+advisor does not run for it at all.
+
+**What enforce changes: one input.** For an `enforce` app the pipeline passes the
+proposal's tier (`efficient → cheap`, `capable → switchyard.capable_tier`) to
+`Router.select` as `advisor_tier`, on every selection of the request: the first, each
+failover re-select and each confidence-escalation re-select, and on the streaming path. The
+router uses it **in place of** the length-derived `complexity_tier(complexity)` — the first
+element of the tier target's `max()` — and nothing else:
+
+- the risk floor and an escalation's `min_tier` still apply (`max()`), so an `efficient`
+  proposal on a high-risk request lands on the floor, and escalation still wins;
+- the best-allowed clamp still applies, so `capable` under `onprem_only` lands on the best
+  on-prem tier, never a cloud one (rule 3);
+- upward failover, the budget fallback, the breaker and `rank()` are unchanged;
+- the B70/B71 **step-down** treats an advisor-raised target exactly like a
+  complexity-raised one: both are the soft element of the target, so after a failure or an
+  open circuit either may step down to, never below, the hard floor
+  `max(risk floor, min_tier)` clamped by policy;
+- a value outside `cheap | mid | frontier` is ignored and logged, never raised;
+- under a live B80 quality floor in `enforce` mode the floor decides and the advisor is
+  ignored; the proposal is recorded with `fallback_cause: quality_floor`.
+
+The semantic cache is unaffected: the advisor never runs on a hit, and a cached entry is
+re-checked against **this** request's policy-eligible set, which the advisor does not
+change.
+
+**Sampling.** With `adaptive_routing_sample_rate < 1`, the proposal is applied to a
+deterministic sample: `sha256(request_id)`, first 8 bytes as a fraction of 2^64, `< rate`.
+The request id is server-generated, so a client cannot steer it. An unsampled request
+behaves exactly like `shadow`: recorded with `mode: enforce`, `applied: false`.
+
+**`applied`.** True when the proposal was passed to the router; false in `shadow`, for an
+unsampled `enforce` request, on any fallback (timeout, error, invalid role, unconvertible,
+refused routing call — today's routing) and when a B80 floor decided. `agreed` is
+unchanged: proposal tier == served tier.
+
+**What the client sees.** The response `policy` block names `"adaptive_routing":
+"enforce"` (a content-free enum) when the app's effective mode is `enforce`, and nothing
+otherwise, so an `off` or `shadow` app's body stays identical to a deployment without the
+advisor. The setting is folded into `app_policy_version`. The proposal itself (role, tier,
+evidence, `applied`) stays operator-visible only, as in shadow.
+
+**Not a policy axis (rule 2a).** `adaptive_routing` is neither placement nor protection.
+It is resolved by its own pure function (`app/routing/adaptive.py`, called once from
+`build_context`) after placement and eligibility are final, and nothing that decides
+placement or protection reads it.
+
+**Deployments.** The Helm charts (`deploy/helm/serving-plane`, `deploy/hpe/routeforge`)
+keep refusing `servingPlane.switchyard.mode=enforce` at render time: enforce for real
+deployments waits for Switchyard 0.4.0 final (owner decision). The DGX lab sets its ceiling
+through its raw manifest, not Helm.
+
+Tests: `tests/routing/test_advisor_seam.py` (property: never outside the policy-eligible
+set, never below the hard floor, never cloud under `onprem_only`, context untouched —
+through failover and open circuits; identity for `None`), `tests/routing/test_advisor_gateway.py`,
+`tests/routing/test_adaptive_resolve.py` and
+`tests/routing/switchyard/test_enforce_behaviour.py` (HTTP boundary).
 
 ### Not yet built (B105 follow-ups)
 
@@ -178,7 +261,9 @@ mechanism (a `routing.yaml` merged over the shipped one; the lint runs on the me
 - **DGX Spark:** keep `switchyard` in `API_EXTRAS` (`deploy/spark/.env`), then `docker compose -p routeforge-spark -f docker-compose.yml -f docker-compose.switchyard.yml up -d --build api` from `deploy/spark/`. With Langfuse, keep its two files in their documented order and put this one last: `-f docker-compose.yml -f ../compose/langfuse.yml -f docker-compose.langfuse.yml -f docker-compose.switchyard.yml`.
 - **Helm:** `--set servingPlane.switchyard.mode=shadow`. The chart renders
   `<release>-routing-overlay`, mounts it at `/etc/routeforge/config-overlay` and sets
-  `SP_CONFIG_OVERLAY_DIR`. The chart offers `off | shadow` only; `enforce` arrives with B108.
+  `SP_CONFIG_OVERLAY_DIR`. The chart offers `off | shadow` only and refuses `enforce` at
+  render time: supported in code since B108, but enforce for real deployments waits for
+  Switchyard 0.4.0 final (owner decision).
   If you already set `SP_CONFIG_OVERLAY_DIR` through `extraEnv`, put the `switchyard:` block
   in your own `routing.yaml` overlay instead.
 - **HPE PCAI chart (`deploy/hpe/routeforge`):** `--set servingPlane.switchyard.mode=shadow`.

@@ -396,10 +396,13 @@ def create_app() -> FastAPI:
     # `routing.switchyard.mode != off` -- with `off` nothing is constructed,
     # the upstream package is never imported, and the pipeline's advisor code
     # path never runs. The boot lint (SWITCHYARD_*) has already refused a
-    # missing or unsupported install. `shadow` records the proposal only;
-    # `enforce` (B108) is recorded as such but, for now, acted on exactly
-    # like `shadow`. A construction failure is logged at ERROR and serving
-    # continues without the advisor: advice fails open, never policy.
+    # missing or unsupported install. The mode is the deployment CEILING:
+    # each app's effective mode is min(ceiling, app `adaptive_routing`), an
+    # app with no setting capped at `shadow` (B108, app/routing/adaptive.py),
+    # so only an app explicitly set to `enforce` ever has the proposal applied.
+    # A construction failure is logged at ERROR and serving continues without
+    # the advisor (today's routing for every app): advice fails open, never
+    # policy.
     advisor = None
     if settings.routing.switchyard.mode != "off":
         try:

@@ -152,16 +152,21 @@ def test_trace_tags_and_attributes(monkeypatch, result, outcome_tag, agreed):
         assert adv["evidence"] == {"source": "dimensions"}
 
 
-def test_enforce_is_recorded_truthfully_but_acts_like_shadow(monkeypatch):
+def test_enforce_ceiling_shadows_an_app_with_no_setting(monkeypatch):
+    """B108: a deployment `enforce` is a ceiling. An app with no
+    `adaptive_routing` inherits it capped at `shadow`: recorded as `shadow`,
+    never applied, and served exactly as `off` serves it."""
     base = _one(monkeypatch, "off")
     # A "capable" proposal would raise the tier if it were acted on.
     out = _one(monkeypatch, "enforce", SpyAdvisor(proposal(tier="frontier", role="capable")))
     assert out["body"]["model"] == base["body"]["model"]
     assert normalize(out["body"]) == normalize(base["body"])
     attrs = switchyard_attrs(out["span"])
-    assert attrs["sp.switchyard.mode"] == "enforce"
+    assert attrs["sp.switchyard.mode"] == "shadow"
+    assert attrs["sp.switchyard.applied"] is False
+    assert out["outcome"]["switchyard_applied"] is False
     assert list(attrs["langfuse.trace.tags"]) == [
-        "switchyard", "switchyard:enforce", "switchyard:overridden"]
+        "switchyard", "switchyard:shadow", "switchyard:overridden"]
 
 
 # --------------------------------------------------------------------------- #

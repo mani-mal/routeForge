@@ -130,9 +130,11 @@ quality_floors:
   workloads: {}
 
 # Optional NVIDIA Switchyard routing advisor (B100). An absent block == mode off.
-# Requires the `switchyard` extra (`uv sync --extra switchyard`); nothing is
-# wired at runtime yet (shadow/enforce arrive with B105/B108). Left disabled:
-# uncomment and set mode to "shadow" only once the extra is installed.
+# Requires the `switchyard` extra (`uv sync --extra switchyard`). `mode` is the
+# deployment CEILING: an app's effective mode is min(this, its own
+# `adaptive_routing`); an app with no setting is capped at shadow, so `enforce`
+# applies only to apps explicitly set to it (B108). Left disabled: uncomment and
+# set mode to "shadow" only once the extra is installed.
 # See docs/reference/switchyard-integration.md.
 # switchyard:
 #   mode: "off"                  # off | shadow | enforce (quote it: bare off is a YAML boolean)

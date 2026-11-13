@@ -20,7 +20,7 @@ def _d(**kw):
 def test_vocabulary():
     assert ROUTE_REASONS == ("failover", "escalation", "quality_floor", "placement",
                              "risk_floor", "length_tier", "only_eligible", "other",
-                             "no_failover")
+                             "no_failover", "advisor")
 
 
 def test_cache_hit_is_null():
@@ -180,3 +180,17 @@ def test_circuit_open_downgrade_reads_failover():
     # tier is explained by the diversion, even with no failed attempt.
     assert _d(attempts=["m"], chosen_tier="mid", tier_target="frontier",
               complexity_tier="frontier", tier_downgraded=True) == "failover"
+
+
+def test_applied_advisor_reads_as_advisor_not_length_or_risk_floor():
+    """B108: when the advisor's tier was applied it is the soft target in
+    place of the length tier. Raised above the length tier it must not read
+    as `risk_floor`; served on it, `advisor`, not `length_tier`."""
+    from app.apps.outcomes import trace_features
+    hop = {"step": "router", "chosen": "m", "chosen_tier": "frontier",
+           "tier_target": "frontier", "rejected": [], "scoring": None}
+    assert trace_features([hop], "cheap")["route_reason"] == "risk_floor"
+    assert trace_features([hop], "cheap", "frontier")["route_reason"] == "advisor"
+    low = {**hop, "chosen_tier": "cheap", "tier_target": "cheap"}
+    assert trace_features([low], "frontier", "cheap")["route_reason"] == "advisor"
+    assert "advisor" in ROUTE_REASONS

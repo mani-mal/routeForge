@@ -16,7 +16,9 @@ B100 added the version contract below. B103 added the adapter
 Switchyard lazily, only when constructed, so this package imports cleanly
 without the extra. B105 wired it into the request path in shadow mode
 (`app/pipeline.py::Pipeline._advise`): the proposal is recorded, never acted
-on. Enforce arrives with B108 and the contract suite with B110.
+on. B108 added per-app enforce: for an app whose effective mode is `enforce`
+the proposal's tier reaches `Router.select` as `advisor_tier`. The contract
+suite is B110.
 
 See docs/reference/switchyard-integration.md,
 docs/backlog/bugs.md (B100, B110) and

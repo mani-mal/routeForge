@@ -473,8 +473,8 @@ routed request, after compression and before the gateway, on both paths, with
 rejection. The proposal is recorded on the trace, the outcome row and the served router
 hop's DecisionRecord (`advisor`, operator surfaces only: stripped from the client-bound
 response so the client body is identical to `off`), and never changes the target, `complexity`, `min_tier` or
-anything the gateway sees. `enforce` is recorded as `enforce` and behaves exactly like
-`shadow` until B108. Advice fails open: an advisor or recording error is logged at ERROR
+anything the gateway sees. `enforce` was recorded as `enforce` and behaved exactly like
+`shadow` until B108 (since B108 the deployment mode is a ceiling; see B108). Advice fails open: an advisor or recording error is logged at ERROR
 and the request continues. With `off` nothing is built or imported. The console decision
 inspector shows "advisor (shadow) proposed <tier> (<role>, <confidence>) · agreed |
 overridden" beside the served model. Identity test
@@ -570,7 +570,38 @@ done here; a local `docker build` was blocked by a pypi timeout).
 **Accept when:** both arches boot in compose and on the DGX lab with `mode: shadow`, and an
 offline install from the mirror succeeds.
 
-## B108 — FEATURE (Switchyard P2): per-app enforce, gradual rollout  🔴 OPEN
+## B108 — FEATURE (Switchyard P2): per-app enforce, gradual rollout  ✅ RESOLVED (2026-11-13, feat/b108-switchyard-enforce)
+
+**Shipped (2026-11-13, feat/b108-switchyard-enforce).**
+- **Seam.** `Router.select(..., advisor_tier=)` uses a canonical tier in place of the
+  length-derived `complexity_tier(complexity)`, the first element of the target `max()`,
+  and nothing else. The hard floor, the clamp, upward failover, the budget fallback, the
+  breaker and `rank()` are unchanged. The B70/B71 step-down treats an advisor-raised target
+  like a complexity-raised one (down to, never below, the hard floor). A non-canonical
+  value is ignored and logged. An enforced live B80 floor ignores the advisor.
+- **Gateway.** `run`/`run_stream` pass it to every `select`: failover and escalation
+  re-selects included.
+- **Per app.** `adaptive_routing: off | shadow | enforce` and `adaptive_routing_sample_rate`
+  on `app_policies`. Effective mode = min(ceiling `routing.switchyard.mode`, app). An app
+  with no setting inherits the ceiling **capped at `shadow`**, so `enforce` is only ever
+  per-app explicit. Resolved by `app/routing/adaptive.py` (not `compile_policy`: it is not
+  a policy axis, rule 2a), folded into `app_policy_version`, named on the response `policy`
+  block only when `enforce`, and shown capped in the admin API's `effective` block. The
+  console has the two fields.
+- **Sampling.** Deterministic on `sha256(request_id)`; unsampled requests behave as shadow.
+- **Recording.** New `applied` on the advisor record, trace (`sp.switchyard.applied`) and
+  `routing_outcomes.switchyard_applied` (ALTER in `docs/reference/routing-outcomes.md`).
+- **Tests.** Property tests for policy-set, hard-floor and `onprem_only` containment, plus
+  an untouched context, through failover and open circuits. Identity tests for `None`,
+  invalid values and a tier equal to the length tier. HTTP-boundary tests for enforce,
+  `onprem_only` (non-stream, stream, failover and semantic-cache hit), defaults, sampling
+  and fallbacks. A consumer contract test with an enforce app.
+
+**Still gated.** Enforce for real customer apps waits on Switchyard 0.4.0 final (owner
+decision; the pin is `0.4.0a1`). The Helm charts keep refusing `enforce` at render time.
+The first use is a DGX lab evaluation app for B109, set through the lab's raw manifest.
+
+**Original brief:**
 
 - Add a deployment ceiling `switchyard.mode: enforce` plus a per-app
   `adaptive_routing: off | shadow | enforce` and an optional `sample_rate`.

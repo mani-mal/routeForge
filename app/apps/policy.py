@@ -68,6 +68,13 @@ class AppPolicyView:
     # resolved against the deployment's floors elsewhere, never lowering them.
     quality_floors: tuple[tuple[str, float], ...] | None = None
     quality_floor_mode: str | None = None
+    # B108: the Switchyard advisor for this app -- off | shadow | enforce, and
+    # the share of `enforce` requests the proposal is applied to. None =
+    # inherit (the deployment ceiling capped at `shadow`; rate 1.0). Resolved
+    # by app/routing/adaptive.py. A routing preference, never placement or
+    # protection (CLAUDE.md rule 2a): no policy axis reads it.
+    adaptive_routing: str | None = None
+    adaptive_routing_sample_rate: float | None = None
 
     def alias_target(self, name: str) -> str | None:
         """The slug this app's alias `name` points at, or None if it has none."""
@@ -149,6 +156,11 @@ class AppPolicyView:
             fields["quality_floors"] = dict(self.quality_floors)
         if self.quality_floor_mode is not None:
             fields["quality_floor_mode"] = self.quality_floor_mode
+        # B108: the advisor may change which tier serves a request: same rule.
+        if self.adaptive_routing is not None:
+            fields["adaptive_routing"] = self.adaptive_routing
+        if self.adaptive_routing_sample_rate is not None:
+            fields["adaptive_routing_sample_rate"] = self.adaptive_routing_sample_rate
         blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -203,6 +215,8 @@ def policy_view_from(app: Application) -> AppPolicyView:
         model_aliases=alias_pairs(p.model_aliases),
         quality_floors=floor_pairs(p.quality_floors),
         quality_floor_mode=p.quality_floor_mode,
+        adaptive_routing=p.adaptive_routing,
+        adaptive_routing_sample_rate=p.adaptive_routing_sample_rate,
     )
 
 

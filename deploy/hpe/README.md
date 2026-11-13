@@ -97,7 +97,7 @@ Edit these in `routeforge/values.yaml` (or in the wizard's Values step):
 | `thirdPartyRegistry` | Harbor mirror prefix | **air-gapped** PCAI (no internet for langfuse/postgres/etc.); re-mirror MinIO under the `quay.io/minio/*` path (images resolve to `<reg>/quay.io/minio/minio` and `.../mc`) |
 | `credentials.adminPassword` | a real password, or leave empty | optional: empty (default) => the chart generates one and keeps it across upgrades; `changeme` is refused |
 | `servingPlane.policy.piiDetection` | `regex` (default) or `presidio` | `presidio` needs an API image built with `EXTRAS=observability,postgres,switchyard,presidio` |
-| `servingPlane.switchyard.mode` | `off` (default) or `shadow` | optional Switchyard shadow advisor; renders a `routing.yaml` overlay ConfigMap and sets `SP_CONFIG_OVERLAY_DIR`. The default image already includes the `switchyard` extra (this chart pulls prebuilt images, it builds none); `enforce` is refused until B108. See `docs/reference/switchyard-integration.md` |
+| `servingPlane.switchyard.mode` | `off` (default) or `shadow` | optional Switchyard shadow advisor; renders a `routing.yaml` overlay ConfigMap and sets `SP_CONFIG_OVERLAY_DIR`. The default image already includes the `switchyard` extra (this chart pulls prebuilt images, it builds none); `enforce` is refused at render time: supported in code since B108, but enforce for real deployments waits for Switchyard 0.4.0 final (owner decision). See `docs/reference/switchyard-integration.md` |
 
 Everything else is demo-safe as shipped: CPU-only (no GPU), regex PII detection
 (the default image has no Presidio), compression off. No inference is deployed; onboard

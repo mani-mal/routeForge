@@ -138,10 +138,14 @@ class QualityFloorsCfg(BaseModel):
 class SwitchyardCfg(BaseModel):
     """Optional NVIDIA Switchyard advisor (B100). An absent block means `off`.
 
-    `shadow` (B105) records the advisor's proposal and never acts on it.
-    `enforce` is B108: until then it is recorded as `enforce` but behaves
-    exactly like `shadow`. The config lint (SWITCHYARD_*) checks the install
-    and the algorithm only when `mode != off`.
+    `mode` is the deployment CEILING (B108): each app's effective mode is
+    min(ceiling, the app's `adaptive_routing`), ordered off < shadow <
+    enforce, and an app with no setting is capped at `shadow`
+    (app/routing/adaptive.py). `shadow` (B105) records the advisor's proposal
+    and never acts on it; `enforce` passes it to `Router.select` as
+    `advisor_tier` for apps explicitly set to `enforce`. The config lint
+    (SWITCHYARD_*) checks the install and the algorithm only when
+    `mode != off`.
     """
     # Quoted `off` in YAML: a bare `off` is a boolean (see QualityFloorsCfg).
     mode: Literal["off", "shadow", "enforce"] = "off"

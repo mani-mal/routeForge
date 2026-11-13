@@ -1606,8 +1606,8 @@ arrival pattern, run through `capacity_block` — and the method for each is in 
 
 With `routing.switchyard.mode: shadow` the Switchyard advisor proposes a tier for every
 routed request and the proposal is only recorded (`switchyard_*` columns,
-`docs/reference/routing-outcomes.md` §3.2). Before anyone turns enforce on (B108), this
-report says two things from that data:
+`docs/reference/routing-outcomes.md` §3.2). Before anyone turns enforce on for an app
+(B108, per-app `adaptive_routing: enforce`), this report says two things from that data:
 
 1. **Agreement.** Per app and per workload: the share of advised requests whose proposed
    tier equals the served tier (`switchyard_agreed`), the role split (efficient / capable),

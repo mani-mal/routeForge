@@ -27,6 +27,7 @@ from app.policy.gate import (Gate, Representations, ToolArgStats,
                              redact_tool_calls_with_entities)
 from app.config.schema import PriceCfg
 from app.routing.pricing import Savings, price_call, split_savings
+from app.routing.adaptive import sampled
 from app.routing.router import client_output_cap, complexity_tier
 from app.routing.switchyard import AdvisorResult
 from app.apps.privacy import AppPrivacyProfile, effective_rules
@@ -162,29 +163,41 @@ class Pipeline:
         # code path never runs and the request path is exactly as before.
         self._advisor = advisor
 
-    async def _advise(self, request_id: str, messages: list[Message],
-                      internals: dict | None) -> dict | None:
-        """B105: ask the Switchyard advisor about this request, once, and
-        return its content-free record -- or None when no advisor is built.
+    async def _advise(self, request_id: str, ctx: ExecutionPolicyContext,
+                      messages: list[Message],
+                      internals: dict | None) -> tuple[dict | None, str | None]:
+        """B105/B108: ask the Switchyard advisor about this request, once, and
+        return `(record, advisor_tier)` -- `(None, None)` when no advisor is
+        built or this app's EFFECTIVE mode (`ctx.adaptive_routing`, resolved
+        by `app/routing/adaptive.py`) is `off`.
 
         Called after compression and before the gateway, with `comp.messages`:
         post-gate, `model_input`-shaped and post-compression, exactly what the
         model will see (design §4; CLAUDE.md rules 1 and 7). Never on a path
         that does not route (gate rejection, semantic-cache hit).
 
-        SHADOW ONLY. The record is recorded, never acted on: nothing here
-        changes the target, `complexity`, `min_tier` or anything passed to the
-        gateway or router. `enforce` (B108) is treated exactly like `shadow`
-        for now -- the mode is recorded truthfully as `enforce`, but no
-        `advisor_tier` reaches `Router.select` until B108 lands.
+        `advisor_tier` is the tier the router should use IN PLACE OF the
+        length-derived target, or None for today's target. It is set only
+        when ALL of: the effective mode is `enforce`; the advisor returned a
+        proposal (any fallback -- timeout, error, invalid role, ... -- is
+        None); no B80 quality floor is live in `enforce` (the floor decides;
+        the proposal is recorded with `fallback_cause: quality_floor`, design
+        §2); and the request falls inside the app's deterministic sample
+        (`sampled(request_id, ctx.adaptive_routing_sample_rate)`). In
+        `shadow`, and for an unsampled `enforce` request, it is None: the
+        proposal is recorded, never acted on. The record's `applied` says
+        which happened. Nothing else -- `complexity`, `min_tier`, placement
+        or any protection value -- is touched here.
 
         Fail-open for ADVICE, never for policy: `advise()` never raises by
         contract, and any exception here or in recording is logged at ERROR
         (exception type only -- never the messages) and the request continues
-        unchanged."""
+        with today's routing (`advisor_tier` None)."""
         if self._advisor is None:
-            return None
-        mode = self._s.routing.switchyard.mode
+            return None, None
+        mode = ctx.adaptive_routing
+        if mode not in ("shadow", "enforce"):
+            return None, None
         try:
             result = await self._advisor.advise(messages)
         except Exception as exc:
@@ -193,16 +206,25 @@ class Pipeline:
                                type(exc).__name__)
             result = AdvisorResult.fallback("error", 0.0)
         try:
-            advice = {"mode": mode, **result.to_record(), "agreed": None}
+            record = result.to_record()
+            tier: str | None = None
+            if mode == "enforce" and result.proposal is not None:
+                if (ctx.quality_floor is not None
+                        and ctx.quality_floor_mode == "enforce"):
+                    record["fallback_cause"] = "quality_floor"
+                elif sampled(request_id, ctx.adaptive_routing_sample_rate):
+                    tier = result.proposal.tier
+            advice = {"mode": mode, **record, "agreed": None,
+                      "applied": tier is not None}
             if internals is not None and "outcome_ctx" in internals:
                 internals["outcome_ctx"]["switchyard"] = {
                     k: advice[k] for k in ("mode", "role", "tier", "confidence",
-                                           "agreed", "fallback_cause")}
-            return advice
+                                           "agreed", "fallback_cause", "applied")}
+            return advice, tier
         except Exception as exc:
             _advisor_log.error("switchyard advice recording failed request=%s (%s)",
                                request_id, type(exc).__name__)
-            return None
+            return None, None
 
     @staticmethod
     def _record_advice(request_id: str, advice: dict | None,
@@ -214,7 +236,9 @@ class Pipeline:
         and the Langfuse tags) and the outcome row (`outcome_ctx`).
 
         `agreed` is the proposal's tier equal to the tier actually served
-        (the served hop's `chosen_tier`); null on a fallback. Every value
+        (the served hop's `chosen_tier`); null on a fallback (including a
+        B108 `quality_floor` one). `applied` (B108) was set by `_advise`: the
+        proposal was passed to the router. Every value
         comes from the allowlisted `AdvisorResult` record. Recording only:
         `records` gains an `advisor` field and nothing else changes. Any
         failure is logged at ERROR and swallowed."""
@@ -605,6 +629,19 @@ class Pipeline:
         return _chosen_scoring(served.scoring, served.chosen)
 
     @staticmethod
+    def _adaptive_stamp(ctx: ExecutionPolicyContext) -> dict:
+        """B108: name the app's effective Switchyard mode on the response
+        `policy` block -- a content-free enum, and ONLY when it is `enforce`,
+        i.e. when the advisor may steer which tier serves this app. `off` and
+        `shadow` add nothing, so their client body is byte-identical to a
+        deployment without the advisor (the B105 identity). The proposal
+        itself (role, tier, evidence, `applied`) stays operator-visible only:
+        the trace, the console snapshot and `routing_outcomes`."""
+        if getattr(ctx, "adaptive_routing", "off") == "enforce":
+            return {"adaptive_routing": "enforce"}
+        return {}
+
+    @staticmethod
     def _served_quality_floor(records: list[DecisionRecord]) -> dict | None:
         """B80: the SERVED hop's (same rule as `_served_scoring`) quality-floor
         record -- the router's own content-free dict, never re-derived. `None`
@@ -837,6 +874,7 @@ class Pipeline:
                        # B80: no router ran on a cache hit, so no floor
                        # decided this answer.
                        "quality_floor": None,
+                       **self._adaptive_stamp(ctx),
                        "checks": checks},
             "sanitized_prompt": sanitized,
             # No raw/pre-verify text exists for a cache hit (no model call ran
@@ -1082,13 +1120,15 @@ class Pipeline:
 
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
-        # B105: once per request, after compression, before the gateway --
-        # reused across failover/escalation, recorded only (see `_advise`).
-        advice = await self._advise(request_id, comp.messages, internals)
+        # B105/B108: once per request, after compression, before the gateway
+        # -- reused across failover/escalation. `advisor_tier` is None unless
+        # this app's effective mode is `enforce` (see `_advise`).
+        advice, advisor_tier = await self._advise(request_id, ctx, comp.messages,
+                                                  internals)
         result, records = await self._gateway.run(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice, params=request.generation_params(),
-            attempt_log=_attempt_log(internals))
+            attempt_log=_attempt_log(internals), advisor_tier=advisor_tier)
         self._record_advice(request_id, advice, records, internals)
         if internals is not None:
             internals["outcome_ctx"].update(reply_shape(result))
@@ -1299,6 +1339,7 @@ class Pipeline:
                            self._served_scoring(records), tool_args),
                        # B80: the served router hop's quality-floor record.
                        "quality_floor": self._served_quality_floor(records),
+                       **self._adaptive_stamp(ctx),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,
@@ -1521,12 +1562,14 @@ class Pipeline:
             internals["outcome_ctx"]["routing_tokens"] = comp.tokens_after
         hint = {k: getattr(request, k) for k in ("mock_confidence", "mock_fail")
                 if hasattr(request, k)}
-        # B105: same seam as run() -- once, after compression, recorded only.
-        advice = await self._advise(request_id, comp.messages, internals)
+        # B105/B108: same seam as run() -- once, after compression.
+        advice, advisor_tier = await self._advise(request_id, ctx, comp.messages,
+                                                  internals)
         stream, records = await self._gateway.run_stream(
             ctx, comp.messages, comp.tokens_after, complexity, hint,
             tools=tools, tool_choice=tool_choice,
-            params=request.generation_params(), attempt_log=_attempt_log(internals))
+            params=request.generation_params(), attempt_log=_attempt_log(internals),
+            advisor_tier=advisor_tier)
         # The router record is known eagerly here (records[0]); only its cost
         # and latency are patched in later, so the advice is folded in now.
         self._record_advice(request_id, advice, records, internals)
@@ -1668,6 +1711,7 @@ class Pipeline:
                            self._served_scoring(records), tool_args),
                        # B80: the served router hop's quality-floor record.
                        "quality_floor": self._served_quality_floor(records),
+                       **self._adaptive_stamp(ctx),
                        "checks": self._eligibility_checks(ctx, records)},
             "sanitized_prompt": sanitized,
             "raw_completion": result.text,

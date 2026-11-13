@@ -57,6 +57,8 @@ export interface AdvisorRecord {
   confidence: number | null;
   agreed: boolean | null;
   fallback_cause: string | null;
+  // B108: the proposal was passed to the router (effective mode enforce).
+  applied?: boolean;
   latency_ms: number;
   version: string | null;
   algorithm: string | null;
@@ -78,7 +80,8 @@ export interface TraceRecord {
   // router hops: the P2a scoring record; B80 adds `quality_floor` beside it.
   scoring?: { quality_floor?: QualityFloorRecord | null; [k: string]: unknown } | null;
   // B105: the Switchyard advisor's proposal, on the served router hop only,
-  // and only when routing.switchyard.mode != off. Recorded, never acted on.
+  // and only when the app's effective mode != off. Acted on only when
+  // `applied` (B108 enforce).
   advisor?: AdvisorRecord | null;
   // verify
   required?: boolean;
@@ -338,7 +341,13 @@ export interface AdminPolicy {
   // value is accepted but has no effect); null = inherit.
   quality_floors?: Record<string, number> | null;   // workload -> floor in (0, 1]
   quality_floor_mode?: QualityFloorMode | null;   // null = inherit the deployment mode
+  // B108 Switchyard advisor. Capped at the deployment's routing.switchyard.mode;
+  // null = inherit (the deployment mode capped at shadow).
+  adaptive_routing?: AdaptiveRoutingMode | null;
+  adaptive_routing_sample_rate?: number | null;   // 0..1; null = 1.0
 }
+
+export type AdaptiveRoutingMode = "off" | "shadow" | "enforce";
 
 export type QualityFloorMode = "off" | "shadow" | "enforce";
 
@@ -384,6 +393,9 @@ export interface AdminEffectivePolicy {
   telemetry_io: string;
   detection: string;
   content_integrity: string;
+  // B108: min(deployment ceiling, app setting) -- what actually applies.
+  adaptive_routing?: AdaptiveRoutingMode;
+  adaptive_routing_sample_rate?: number;
 }
 
 export interface LangfuseSummary {
