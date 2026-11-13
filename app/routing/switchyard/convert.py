@@ -2,7 +2,8 @@
 
 Pure functions, no `switchyard` import. The target is Switchyard's neutral
 `LlmRequest` (crate `switchyard_protocol`, `crates/protocol/src/llm.rs` at tag
-v0.4.0a1; field table in `docs/reference/protocols/llm_requests.md`). The
+v0.4.0a1; field table in upstream
+https://github.com/NVIDIA-NeMo/Switchyard/blob/v0.4.0a1/docs/reference/protocols/llm_requests.md). The
 mapping mirrors upstream's own Chat Completions codec
 (`crates/switchyard-translation/src/codecs/openai_chat/buffered.rs`,
 `decode_request`), so the advisor reads a history exactly as Switchyard would
