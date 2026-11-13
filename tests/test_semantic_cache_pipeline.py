@@ -415,3 +415,58 @@ def test_two_prompts_differing_only_in_a_redacted_value_do_not_collide():
                              app_policy=ap))
     assert cache.size == 2
     assert cache.hits == 0
+
+
+# --- 11. B113: a truncated answer is never cached ----------------------------
+
+
+class _FinishReasonBackend(_DeterministicLiteLLM):
+    """`_DeterministicLiteLLM` whose result carries a pinned backend
+    `finish_reason` (what LiteLLMBackend sets from the provider's reply)."""
+
+    def __init__(self, settings, finish_reason: str) -> None:
+        super().__init__(settings)
+        self._finish = finish_reason
+
+    async def generate(self, model, messages, price, tier, hint, tools=None,
+                       tool_choice=None, params=None):
+        result = await super().generate(model, messages, price, tier, hint, tools)
+        return result.model_copy(update={"finish_reason": self._finish})
+
+
+@pytest.mark.parametrize("reason", ["length", "content_filter"])
+def test_truncated_answer_is_not_stored_and_next_request_reaches_backend(reason):
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    rec = RecordingBackend(_FinishReasonBackend(settings, reason))
+    pipe, cache = _pipeline(rec, settings, registry)
+    req = ChatRequest(messages=[Message(role="user", content="Write a long essay on rivers")])
+
+    out1 = asyncio.run(pipe.run("r1", "acme", req))
+    assert out1["choices"][0]["finish_reason"] == reason
+    assert cache.size == 0
+    recs = _cache_trace_records(out1)
+    assert recs and recs[0]["hit"] is False
+    assert recs[0]["bypass_reason"] == "truncated"
+
+    out2 = asyncio.run(pipe.run("r2", "acme", req))
+    assert len(rec.models_called) == 2   # the repeat went to the backend
+    assert _cache_trace_records(out2)[0]["hit"] is False
+    assert out2["choices"][0]["finish_reason"] == reason
+    assert cache.size == 0
+
+
+def test_normal_stop_answer_is_still_stored():
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    rec = RecordingBackend(_FinishReasonBackend(settings, "stop"))
+    pipe, cache = _pipeline(rec, settings, registry)
+    req = ChatRequest(messages=[Message(role="user", content="What is the capital of Peru?")])
+
+    out1 = asyncio.run(pipe.run("r1", "acme", req))
+    assert cache.size == 1
+    assert _cache_trace_records(out1)[0]["bypass_reason"] == ""
+    out2 = asyncio.run(pipe.run("r2", "acme", req))
+    assert len(rec.models_called) == 1   # served from the cache
+    assert _cache_trace_records(out2)[0]["hit"] is True
+    assert out2["choices"][0]["finish_reason"] == "stop"

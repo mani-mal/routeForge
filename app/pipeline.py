@@ -14,7 +14,8 @@ from app.gateway.gateway import Gateway
 from app.models import (
     CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
-    Message, Usage, VerificationRecord,
+    Message, TERMINAL_BACKEND_FINISH_REASONS, Usage, VerificationRecord,
+    client_finish_reason,
 )
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
@@ -1177,7 +1178,18 @@ class Pipeline:
         # itself refuses to persist a cloud-produced entry into an
         # onprem_only partition -- passing the REAL ctx values here is what
         # makes that refusal apply to real traffic.
-        if cache_active and cache_bypass_reason is None:
+        # B113: a truncated/filtered answer (backend `length` /
+        # `content_filter`) is never stored -- a cache hit replays as a
+        # complete "stop", so it would later be served as a finished answer.
+        # The skip is named on the trace's CacheRecord (`truncated`, an enum
+        # value, never content); a lookup refusal already recorded is kept.
+        store_skipped = (cache_active and cache_bypass_reason is None
+                         and result.finish_reason in TERMINAL_BACKEND_FINISH_REASONS)
+        if store_skipped and cache_record is not None:
+            prior = cache_record.bypass_reason
+            cache_record = cache_record.model_copy(update={
+                "bypass_reason": f"{prior},truncated" if prior else "truncated"})
+        if cache_active and cache_bypass_reason is None and not store_skipped:
             try:
                 provider = next(
                     (c.provider for c in self._pool() if c.name == result.model), "?")
@@ -1239,6 +1251,8 @@ class Pipeline:
         # message carries `tool_calls` with `content: null` and the choice's
         # finish_reason is "tool_calls" (OpenAI clients switch on this to run
         # their tools and call back). Ordinary answers keep content + "stop".
+        # B113: a backend `length`/`content_filter` wins over both -- one rule,
+        # `client_finish_reason`, shared with every streamed path.
         # `redacted_tool_calls` (not `result.tool_calls`): the client-facing
         # message must carry egress-redacted arguments (Task 2).
         tool_calls = redacted_tool_calls or None
@@ -1246,7 +1260,7 @@ class Pipeline:
             role="assistant",
             content=(text or None) if tool_calls else text,
             tool_calls=tool_calls)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+        finish_reason = client_finish_reason(result.finish_reason, bool(tool_calls))
         return {
             "id": request_id,
             "model": result.model,

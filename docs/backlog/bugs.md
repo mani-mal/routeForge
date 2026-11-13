@@ -190,6 +190,118 @@ the audit trail in that sweep's task report.
 > **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
 > B110 starts as soon as B100 lands. B111 is gated on B109's go decision. B112 is optional.
 
+## B113 — A truncated completion reaches the client as `finish_reason: "stop"`  ✅ RESOLVED (2026-11-13, fix/b113-finish-reason)
+
+**Severity:** high for agent clients (an agent reads a cut-off turn as finished and acts on
+it). It breaks the OpenAI contract on every response path.
+**Found:** 2026-11-12. Reported by a consuming app's session (DevFoundry; their guard is
+BUG-135) and checked against RouteForge's own outcome row.
+
+- **Symptom:** when the backend stopped at `max_tokens` (`finish_reason: "length"`), the
+  client received `"stop"`. A `content_filter` stop was rewritten the same way. On a
+  streamed tool turn an agent client (OpenCode) got `"stop"` and treated the truncated turn
+  as complete.
+- **Evidence:** request `req-8a7946c33eac4f39acc0d98a24665903`, app `dev-foundary`,
+  2026-11-12. Its `routing_outcomes` row says `finish_reason=length` and
+  `completion_tokens=32000` (the client's `max_tokens`). The client received `stop`.
+- **Cause:** the backend's real reason was captured (`GenerationResult.finish_reason`, set
+  by `app/gateway/backends/litellm_backend.py` for both `generate` and `generate_stream`),
+  but it only went to the content-free outcome row (`reply_shape`). Every client-facing
+  decision was `"tool_calls" if tool_calls else "stop"`: `Pipeline.run` (non-stream),
+  `chunk_text` (`verified_then_stream`, the keepalive path and the stream floor fallback),
+  `_incremental_verify_response` (hard-coded `"stop"`), and `_finalize_stream` (the
+  recorded response of a live turn). `_stream_unverified_response` passed `"length"` through
+  only when tool-call fragments had been streamed live, so a truncated text stream still
+  closed with `"stop"`.
+
+**Resolved:** one helper, `app/models.py::client_finish_reason(backend_reason,
+has_tool_calls)`, now decides the client-facing reason on every path. Precedence: a
+backend `length` or `content_filter` wins, even over tool calls (a truncated tool call is
+still truncated, and OpenAI reports `length` too). Otherwise the result is `tool_calls`
+when the turn ends in tool calls, else `stop`. An unreported reason (`None`) keeps the old
+behaviour. Step 9 does not override it. Redacting or rewriting a truncated answer leaves it
+truncated, and a verification failure raises, so it never produces a response with a
+competing reason. How each path gets the backend reason:
+`Pipeline.run` reads `result.finish_reason`. `chunk_text` takes the response's already
+decided `finish_reason`, and both of its callers pass it. The two live modes and
+`_finalize_stream` read `get_meta.finish_reason`, which `run_stream` sets once the backend
+stream drains.
+
+**Semantic cache (also fixed):** a cache hit replays `stop`, so `Pipeline.run` no longer
+stores an answer whose backend reason is `length` or `content_filter`. Otherwise a
+truncated answer would be cached and later served as complete. The skip is recorded on
+the trace's `CacheRecord` as `bypass_reason: "truncated"`, a content-free enum value next to
+`high_risk`, `restricted_sensitivity`, `requested_model` and `entry_not_in_eligible_set`.
+If a lookup refusal was already recorded, it is kept and the value becomes
+`entry_not_in_eligible_set,truncated`. The next identical request misses and goes to the
+backend.
+
+**Tests:** `tests/test_finish_reason_contract.py`. It drives `/v1/chat/completions` with
+a fake LiteLLM backend that ends with the given reason and asserts what the client
+receives. Paths covered: non-stream text (`length`, `content_filter`), non-stream tool call,
+`verified_then_stream` text and tool call, the keepalive path, `stream_unverified` text
+(`length`, `content_filter`) and tool call, the recorded response (console snapshot) of a
+live text turn and a live tool turn, and `incremental_verify`. It also has regression cases
+showing that a normal `stop` and `tool_calls` are unchanged on the non-stream, buffered and
+live paths, plus a table test of the rule. Each path test fails without the fix.
+`tests/_litellm_fake.py`'s `make_response` and both streaming fakes gained an optional
+`finish_reason`.
+`tests/test_semantic_cache_pipeline.py::test_truncated_answer_is_not_stored_and_next_request_reaches_backend`
+covers `length` and `content_filter`: nothing is stored, the trace says `truncated`, and the
+repeat request reaches the backend. `test_normal_stop_answer_is_still_stored` is the
+regression guard. The truncated tests fail without the store skip.
+
+## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🔴 OPEN
+
+**Severity:** medium. Every restart drops the in-flight streams on that pod, and an
+air-gapped install should never try to reach the internet.
+**Found:** 2026-11-12, DGX lab.
+
+- **Symptom:** the DGX lab `routeforge-api` showed **48 restarts in 13 h**, all with exit
+  143 (SIGTERM: the kubelet killed it, the process did not crash).
+- **Likely cause:** the liveness probe uses the default `timeoutSeconds: 1` (and default
+  `failureThreshold: 3`). `/health` takes about 2 ms inside the pod, but over the NodePort
+  7 of 40 probes took longer than 1 s, and the slowest took 4.3 s. The handler is fast and
+  the delay is on the path to it: event-loop stalls during a busy request (Presidio/spaCy
+  work on the loop), or node/kube-proxy latency. A run of slow probes trips the default
+  threshold.
+- **Fix:**
+  - `deploy/dgx_lab/routeforge-app.yaml`: the api `livenessProbe` (`periodSeconds: 30`) and
+    `readinessProbe` set no `timeoutSeconds` or `failureThreshold`. Give liveness something
+    like `timeoutSeconds: 5`, `failureThreshold: 5`, and readiness a `timeoutSeconds` above
+    the observed 4.3 s worst case.
+  - Helm charts: `deploy/helm/serving-plane/templates/deployment-api.yaml` already sets
+    liveness `timeoutSeconds: 3`, `failureThreshold: 5` (consider 5 s given the 4.3 s
+    observation). **`deploy/hpe/routeforge/templates/api.yaml` sets neither** on its
+    liveness or readiness probe, so a GreenLake install has the same 1 s default and the
+    same restart loop. That is part of this item, and so is making them values-driven.
+  - Worth checking too: whether `/health` waits behind CPU-bound work on the event loop. If
+    it does, the probe timeouts only hide the stall.
+- **Also: startup tldextract network fetch (air-gap).** At startup tldextract cannot write
+  `/app/.cache` and then tries to fetch the public suffix list over HTTP. In this
+  dependency tree tldextract arrives only through **`presidio-analyzer`** (`uv.lock`; the
+  `presidio` extra). Presidio's predefined recognizers use it to check the domain of
+  email/URL matches. Confirm the exact call sites against the installed Presidio version,
+  because the local dev venv does not include the extra. Its module-level `tldextract.extract` defaults to fetching the live
+  suffix list and caching it under `$TLDEXTRACT_CACHE` or `~/.cache/python-tldextract`
+  (`HOME=/app` for the image's `app` user). On an air-gapped site that means a timeout at
+  startup or on the first detection. Fix options:
+  1. Set `TLDEXTRACT_CACHE` to a writable path (an `emptyDir`, or a directory created in the
+     image) and pre-warm the cache at image build time, so the bundled list is used with
+     no fetch at runtime.
+  2. Before Presidio loads, in the detector factory, replace the default extractor with
+     `tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)` (or a writable
+     `cache_dir`). That gives the bundled snapshot only and never a network call. It has to
+     patch `tldextract.extract`/`TLD_EXTRACTOR`, because Presidio calls the module-level
+     function.
+  3. At minimum, document it in the air-gap guide and set the env var in both charts and
+     compose.
+  Option 2 is the product fix, because it does not depend on deployment config. Pair it
+  with a test that fails if a socket opens while `make_detector("presidio")` is warming up.
+  Also check why `/app/.cache` is not writable. The image `COPY --chown`s `/app` to `app`,
+  so the lab pod is probably running as a different UID or with a read-only root
+  filesystem.
+
 ## B100 — FEATURE (Switchyard S0): dependency contract — upstream stays separate  ✅ RESOLVED (2026-11-12, feat/b100-switchyard-dependency-contract)
 
 **Resolved.** Shipped the contract only; no routing behaviour. Optional extra `switchyard = ["nemo-switchyard==0.4.0a1"]` (exact pin; moves to the 0.4.x final when released) with `uv.lock` updated; adapter package `app/routing/switchyard/` (version helpers, `SUPPORTED`, the separation rule); AST import-guard test `tests/routing/switchyard/test_import_guard.py`; optional `switchyard:` block on `RoutingCfg` (default `mode: off`, routing-owned in the lint ownership map); lint codes `SWITCHYARD_NOT_INSTALLED`, `SWITCHYARD_VERSION_UNSUPPORTED`, `SWITCHYARD_ALGORITHM_UNKNOWN`, all inert when `mode: off`; `docs/reference/switchyard-integration.md` and a `NOTICE` entry. Nothing is wired at runtime until B105/B108.

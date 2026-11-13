@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 from fastapi.responses import StreamingResponse
 
 from app.api.openai_errors import error_payload
+from app.models import client_finish_reason
 
 SSE_DONE = "data: [DONE]\n\n"
 
@@ -122,10 +123,11 @@ async def chunk_text(request_id: str, model: str, text: str, *,
                       chunk_size: int = 48,
                       created: int | None = None,
                       tool_calls: list[dict] | None = None,
-                      usage: dict | None = None) -> AsyncIterator[str]:
+                      usage: dict | None = None,
+                      finish_reason: str | None = None) -> AsyncIterator[str]:
     """Yield a full OpenAI-style SSE stream for an already-finished,
     already-verified `text`: a role-opening frame, then content frames
-    splitting `text` on ~word boundaries, a `finish_reason="stop"` frame, and
+    splitting `text` on ~word boundaries, a `finish_reason` frame, and
     the terminal `[DONE]` frame. `created` is computed once (or taken from
     the caller, e.g. the response's own `created` if it has one) and held
     constant across every frame in this stream, not recomputed per frame.
@@ -133,6 +135,12 @@ async def chunk_text(request_id: str, model: str, text: str, *,
     When the finished answer carries `tool_calls`, they go out in one frame
     after any content, each stamped with its stream `index` (OpenAI clients
     key the delta merge on it), and the stream finishes with "tool_calls".
+
+    `finish_reason` is the finished response's own client-facing reason
+    (`resp["choices"][0]["finish_reason"]`, already decided by
+    `client_finish_reason`); pass it so a backend `length`/`content_filter`
+    survives the chunking (B113). When omitted, the same helper derives it
+    from `tool_calls` alone.
 
     `usage` (only when the client asked for it -- the caller decides) adds the
     OpenAI terminal usage frame after the finish frame; `None` leaves the
@@ -146,7 +154,8 @@ async def chunk_text(request_id: str, model: str, text: str, *,
         indexed = [{"index": i, **tc} for i, tc in enumerate(tool_calls)]
         yield sse_frame(openai_chunk(request_id, model, tool_calls=indexed,
                                      created=created))
-    finish_reason = "tool_calls" if tool_calls else "stop"
+    if finish_reason is None:
+        finish_reason = client_finish_reason(None, bool(tool_calls))
     yield sse_frame(openai_chunk(request_id, model, finish_reason=finish_reason,
                                  created=created))
     if usage is not None:
