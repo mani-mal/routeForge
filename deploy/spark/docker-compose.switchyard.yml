@@ -8,8 +8,9 @@
 #   docker compose -p routeforge-spark -f docker-compose.yml \
 #     -f docker-compose.switchyard.yml up -d --build api
 #
-# (add -f docker-compose.langfuse.yml before this file if you run Langfuse;
-# overlays go last). Without this file the advisor is off. Before the FIRST boot
+# (with Langfuse: -f docker-compose.yml -f ../compose/langfuse.yml
+# -f docker-compose.langfuse.yml -f docker-compose.switchyard.yml -- this file
+# last). Without this file the advisor is off. Before the FIRST boot
 # of an image with Switchyard support, run the six routing_outcomes ALTERs in
 # docs/reference/routing-outcomes.md -- required in every mode, including off.
 # See docs/reference/switchyard-integration.md.

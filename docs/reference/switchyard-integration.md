@@ -175,7 +175,7 @@ mechanism (a `routing.yaml` merged over the shipped one; the lint runs on the me
 
 - **Compose:** `docker compose -f docker-compose.yml -f docker-compose.switchyard.yml up -d`
   from `deploy/compose/`. The overlay lives in `deploy/compose/config-overlay-switchyard/`.
-- **DGX Spark:** keep `switchyard` in `API_EXTRAS` (`deploy/spark/.env`), then `docker compose -p routeforge-spark -f docker-compose.yml -f docker-compose.switchyard.yml up -d --build api` from `deploy/spark/` (add the Langfuse file before it if used).
+- **DGX Spark:** keep `switchyard` in `API_EXTRAS` (`deploy/spark/.env`), then `docker compose -p routeforge-spark -f docker-compose.yml -f docker-compose.switchyard.yml up -d --build api` from `deploy/spark/`. With Langfuse, keep its two files in their documented order and put this one last: `-f docker-compose.yml -f ../compose/langfuse.yml -f docker-compose.langfuse.yml -f docker-compose.switchyard.yml`.
 - **Helm:** `--set servingPlane.switchyard.mode=shadow`. The chart renders
   `<release>-routing-overlay`, mounts it at `/etc/routeforge/config-overlay` and sets
   `SP_CONFIG_OVERLAY_DIR`. The chart offers `off | shadow` only; `enforce` arrives with B108.
