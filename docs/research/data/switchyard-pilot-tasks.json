@@ -1,0 +1,800 @@
+{
+  "schema": "b109-frozen-tasks/1",
+  "frozen_at": "2026-11-13T17:27:21Z",
+  "repo": "https://github.com/mani-mal/b109-eval-tasks",
+  "main_sha": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+  "base_tag": "b109-base",
+  "harnesslab_specs_commit": "5ad2538217d05c60de6a12789908ce020f140546",
+  "devfoundry_version": "0.1.0-d83447e",
+  "seed": 375454972,
+  "seed_rule": "int(main_sha[:8], 16)",
+  "plan_sha256": "157e76ff5192b5120f2fed3fd2907b36fe13cbda18c9a83daa52dade8570b713",
+  "arms": {
+    "A": {
+      "routeforge_app": "b109-a-efficient",
+      "devfoundry_project": "b109-a-efficient"
+    },
+    "B": {
+      "routeforge_app": "b109-b-capable",
+      "devfoundry_project": "b109-b-capable"
+    },
+    "C": {
+      "routeforge_app": "b109-c-router",
+      "devfoundry_project": "b109-c-router"
+    },
+    "D": {
+      "routeforge_app": "b109-d-switchyard",
+      "devfoundry_project": "b109-d-switchyard"
+    }
+  },
+  "pins": {
+    "A": {
+      "project_id": "prj-6575ad3f9757489a9668c3b3258a37bc",
+      "packs": {
+        "ci-repair": "b0a671c165ca8b9d5b849c6cddd338fb5dd655fb3898fe1283b843d83e4136d3",
+        "issue-resolver": "1c4ea651b0e5f8254eb1b0cbb9dbac354cd7b98d9679ef26530589350b54545c"
+      },
+      "environment_id": "env-cc6d85e4d582495b830ffeffa11ea7b4",
+      "environment_build_id": "envb-2d5bb032f28d400aa499ec40cd981066",
+      "environment_image": "ghcr.io/mani-mal/devfoundry-opencode-workspace:polyglot-0.1.0-5abf83c@sha256:e40c8750ca0274252fd92ea8474dfd3d51cfcddf7e59e84d7c19522ef4cde9ce",
+      "policy_version": 2
+    },
+    "B": {
+      "project_id": "prj-abfb15aa75d84c09b833344e670fd050",
+      "packs": {
+        "ci-repair": "b0a671c165ca8b9d5b849c6cddd338fb5dd655fb3898fe1283b843d83e4136d3",
+        "issue-resolver": "1c4ea651b0e5f8254eb1b0cbb9dbac354cd7b98d9679ef26530589350b54545c"
+      },
+      "environment_id": "env-cc6d85e4d582495b830ffeffa11ea7b4",
+      "environment_build_id": "envb-2d5bb032f28d400aa499ec40cd981066",
+      "environment_image": "ghcr.io/mani-mal/devfoundry-opencode-workspace:polyglot-0.1.0-5abf83c@sha256:e40c8750ca0274252fd92ea8474dfd3d51cfcddf7e59e84d7c19522ef4cde9ce",
+      "policy_version": 2
+    },
+    "C": {
+      "project_id": "prj-45c38fec0bc94c39af9bd9b0712d0411",
+      "packs": {
+        "ci-repair": "b0a671c165ca8b9d5b849c6cddd338fb5dd655fb3898fe1283b843d83e4136d3",
+        "issue-resolver": "1c4ea651b0e5f8254eb1b0cbb9dbac354cd7b98d9679ef26530589350b54545c"
+      },
+      "environment_id": "env-cc6d85e4d582495b830ffeffa11ea7b4",
+      "environment_build_id": "envb-2d5bb032f28d400aa499ec40cd981066",
+      "environment_image": "ghcr.io/mani-mal/devfoundry-opencode-workspace:polyglot-0.1.0-5abf83c@sha256:e40c8750ca0274252fd92ea8474dfd3d51cfcddf7e59e84d7c19522ef4cde9ce",
+      "policy_version": 2
+    },
+    "D": {
+      "project_id": "prj-76d4b99ee7104c6a9857d2cc9c3efff5",
+      "packs": {
+        "ci-repair": "b0a671c165ca8b9d5b849c6cddd338fb5dd655fb3898fe1283b843d83e4136d3",
+        "issue-resolver": "1c4ea651b0e5f8254eb1b0cbb9dbac354cd7b98d9679ef26530589350b54545c"
+      },
+      "environment_id": "env-cc6d85e4d582495b830ffeffa11ea7b4",
+      "environment_build_id": "envb-2d5bb032f28d400aa499ec40cd981066",
+      "environment_image": "ghcr.io/mani-mal/devfoundry-opencode-workspace:polyglot-0.1.0-5abf83c@sha256:e40c8750ca0274252fd92ea8474dfd3d51cfcddf7e59e84d7c19522ef4cde9ce",
+      "policy_version": 2
+    }
+  },
+  "specs": [
+    {
+      "id": "IR-01",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "fd454c91a208ca1dc40a8af81477ab4655e85ac814e122db25e9f0ca7af65568",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "B",
+        "D",
+        "C",
+        "A"
+      ]
+    },
+    {
+      "id": "IR-02",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "83ad436b2f74917d9f2cad1b0cdc84eb827126a5bc1afbd7bb164829bfebd583",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "B",
+        "A",
+        "D",
+        "C"
+      ]
+    },
+    {
+      "id": "IR-03",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "071931a9b8834a67b0d3a4ee02de9cc96ca79d3d964aef56ef1054b6117ff544",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "B",
+        "C",
+        "D",
+        "A"
+      ]
+    },
+    {
+      "id": "IR-04",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "7e172491172bb553c1210c18e65dd97ae706b08b261c59b5651ecdfad11fe062",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "C",
+        "D",
+        "B",
+        "A"
+      ]
+    },
+    {
+      "id": "IR-05",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "fff6e8eec8bd05095dade20edf5af985b5a57de00ade3a5c277f2b4eeddbf275",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "A",
+        "B",
+        "D",
+        "C"
+      ]
+    },
+    {
+      "id": "IR-06",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "c0f507805a43325b9226442eeef9333267d419f13b1a4986f8406a115ca26fb9",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "D",
+        "C",
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "IR-07",
+      "kind": "issue-resolver",
+      "difficulty": "trivial",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "17080a245db6da3c800c62d9a8caf69ccf4a6fd38fb45dd753d829c7dd8a57d1",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "A",
+        "D",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "IR-08",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "4ce68bf894021a974b84d3f54c34b9590d5515da43b9c085fa669a1884def8ce",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "A",
+        "C",
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "IR-09",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "ac688c460bbf9ded7351741900a8d5f8e6746aa28093b93a2312c9c05b374df1",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "D",
+        "B",
+        "C",
+        "A"
+      ]
+    },
+    {
+      "id": "IR-10",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "6d0175d48a2a2d485054d55a75bc4fba5e5ce1503f99dba37b4aeeba19247173",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "A",
+        "D",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "id": "IR-11",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "7db45aa3180345c213cf40fe3d6f713f6eaf1b731189f2ce0d79b3156c2cfbda",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "D",
+        "A",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "id": "IR-12",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "db7cad957f8e6b1dbd450e3f3e20e4e33587d425d2cb005e35718e27c1784cbd",
+      "hidden_test_count": 8,
+      "arm_order": [
+        "C",
+        "D",
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "IR-13",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "b98943b9816f7be415b6f833978d12d02f40e2fd0d15c3f27b471a936e53f8fd",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "C",
+        "B",
+        "D",
+        "A"
+      ]
+    },
+    {
+      "id": "IR-14",
+      "kind": "issue-resolver",
+      "difficulty": "moderate",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "ea77b3a749cdd9797b0a98b6c16f0ccb3d9805b5840dafc162592b04f6f4fb56",
+      "hidden_test_count": 8,
+      "arm_order": [
+        "C",
+        "B",
+        "A",
+        "D"
+      ]
+    },
+    {
+      "id": "IR-15",
+      "kind": "issue-resolver",
+      "difficulty": "harder",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "d07f8ff1b3c6d5f3d653093e82f738bcdaef925058535974a58d5da633aad9a0",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "C",
+        "D",
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "IR-16",
+      "kind": "issue-resolver",
+      "difficulty": "harder",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "49947a5dbfb218ccf0748f9e6417e9203079a9e3c89c209b62f5d5fd204d0fa8",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "A",
+        "C",
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "IR-17",
+      "kind": "issue-resolver",
+      "difficulty": "harder",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "5e1b8f536c61b6d566d8619ae1cc63d88657836b43c8e7af643eae65fe19987e",
+      "hidden_test_count": 9,
+      "arm_order": [
+        "B",
+        "C",
+        "A",
+        "D"
+      ]
+    },
+    {
+      "id": "IR-18",
+      "kind": "issue-resolver",
+      "difficulty": "harder",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "da407e94c5d0388f46ec0f7adb92272c0a9bd4b03498ddc9279404230cee08a7",
+      "hidden_test_count": 7,
+      "arm_order": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    },
+    {
+      "id": "IR-19",
+      "kind": "issue-resolver",
+      "difficulty": "harder",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "28d9028da967ecc10e2a860c173a18ce16f8de06afb80bda6abb445bd5ee62c8",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "C",
+        "D",
+        "B",
+        "A"
+      ]
+    },
+    {
+      "id": "IR-20",
+      "kind": "issue-resolver",
+      "difficulty": "harder",
+      "base": "1660fcfcf813fabbfa9b81acfdb09eb9b0ff2952",
+      "request_sha256": "a87c5f9e267da00c1370a10cc32071e8ddece074b65735ade5fa95ce0c18f850",
+      "hidden_test_count": 6,
+      "arm_order": [
+        "C",
+        "D",
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "CI-01",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-01",
+      "commit": "f14258a56292b81bb5214231b20042e7195cc3dd",
+      "run_id": "43472630268",
+      "job_id": "132048185296",
+      "hidden_test_count": 3,
+      "arm_order": [
+        "D",
+        "C",
+        "B",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-02",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-02",
+      "commit": "5acc4a4960e09b527b92e6b8aaaee189df76b7a6",
+      "run_id": "43467464320",
+      "job_id": "132030294236",
+      "hidden_test_count": 3,
+      "arm_order": [
+        "A",
+        "D",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "id": "CI-03",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-03",
+      "commit": "2ac48ff0cb79ea4c7352497912f82336a88efd49",
+      "run_id": "43467466826",
+      "job_id": "132030302853",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "D",
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "CI-04",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-04",
+      "commit": "4dcdc7e27ff819de52d5e1565cff6f88fdcbe350",
+      "run_id": "43467464766",
+      "job_id": "132030296096",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "A",
+        "D",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "id": "CI-05",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-05",
+      "commit": "46cc950cccc9c58c938af6cd8218920e687f0df3",
+      "run_id": "43467464793",
+      "job_id": "132030296404",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "B",
+        "D",
+        "C",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-06",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-06",
+      "commit": "0b3ec1603f7c1c4c1c31dce2d97c187103e287dc",
+      "run_id": "43467467681",
+      "job_id": "132030306435",
+      "hidden_test_count": 3,
+      "arm_order": [
+        "A",
+        "C",
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "CI-07",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-07",
+      "commit": "684671ce25a0ea230c59cfe8afb212f583d9a8c5",
+      "run_id": "43467463301",
+      "job_id": "132030292836",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "B",
+        "A",
+        "D",
+        "C"
+      ]
+    },
+    {
+      "id": "CI-08",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-08",
+      "commit": "b5a3eec563119d207861b47a3a026ffdfcf7b186",
+      "run_id": "43467463750",
+      "job_id": "132030295566",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "D",
+        "C",
+        "B",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-09",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-09",
+      "commit": "2d30f8a3ee6fb90ea001642b408c81d9f28b5a87",
+      "run_id": "43467466497",
+      "job_id": "132030301555",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "D",
+        "C",
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "CI-10",
+      "kind": "ci-repair",
+      "difficulty": "harder",
+      "branch": "b109/ci-10",
+      "commit": "4446cbfb690590fe7dd836bea1d84b6705110f51",
+      "run_id": "43467465713",
+      "job_id": "132030299866",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "D",
+        "B",
+        "A",
+        "C"
+      ]
+    },
+    {
+      "id": "CI-11",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-11",
+      "commit": "cd232eb56e19a9269a085f9e9d95443b48d54a65",
+      "run_id": "43467461060",
+      "job_id": "132030283753",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "C",
+        "A",
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "CI-12",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-12",
+      "commit": "3dd47512d93864cdae9070449512abd78c4da2d8",
+      "run_id": "43467465423",
+      "job_id": "132030297964",
+      "hidden_test_count": 3,
+      "arm_order": [
+        "B",
+        "D",
+        "C",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-13",
+      "kind": "ci-repair",
+      "difficulty": "harder",
+      "branch": "b109/ci-13",
+      "commit": "051718c9b50bbf644a2800eefcc0e4d8374fbaaa",
+      "run_id": "43472630074",
+      "job_id": "132048183817",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "D",
+        "C",
+        "B",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-14",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-14",
+      "commit": "633332220f03d2d7bc9af9a4039bcf8b6191be72",
+      "run_id": "43467463963",
+      "job_id": "132030292708",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "A",
+        "C",
+        "D",
+        "B"
+      ]
+    },
+    {
+      "id": "CI-15",
+      "kind": "ci-repair",
+      "difficulty": "harder",
+      "branch": "b109/ci-15",
+      "commit": "9bf6d37277be159ce5f76b7868a495da76a33b67",
+      "run_id": "43472629401",
+      "job_id": "132048182381",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "C",
+        "B",
+        "D",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-16",
+      "kind": "ci-repair",
+      "difficulty": "moderate",
+      "branch": "b109/ci-16",
+      "commit": "175df77d51e52c83f725b1521c4838b7b9082375",
+      "run_id": "43467467365",
+      "job_id": "132030306101",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "D",
+        "A",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "id": "CI-17",
+      "kind": "ci-repair",
+      "difficulty": "harder",
+      "branch": "b109/ci-17",
+      "commit": "b9a6075a35086df154f383af7b034e49d4683951",
+      "run_id": "43467462034",
+      "job_id": "132030286413",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "B",
+        "D",
+        "C",
+        "A"
+      ]
+    },
+    {
+      "id": "CI-18",
+      "kind": "ci-repair",
+      "difficulty": "harder",
+      "branch": "b109/ci-18",
+      "commit": "93ad002c32278d540cb910c149226345bf90aa97",
+      "run_id": "43467463495",
+      "job_id": "132030292057",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "D",
+        "B",
+        "A",
+        "C"
+      ]
+    },
+    {
+      "id": "CI-19",
+      "kind": "ci-repair",
+      "difficulty": "trivial",
+      "branch": "b109/ci-19",
+      "commit": "09b56298673258fc572d62dba0dbaed08b31fa94",
+      "run_id": "43467467393",
+      "job_id": "132030304685",
+      "hidden_test_count": 4,
+      "arm_order": [
+        "B",
+        "C",
+        "A",
+        "D"
+      ]
+    },
+    {
+      "id": "CI-20",
+      "kind": "ci-repair",
+      "difficulty": "harder",
+      "branch": "b109/ci-20",
+      "commit": "13ef6959c3fe308e2a1219377fb0fb98f73c4437",
+      "run_id": "43467467249",
+      "job_id": "132030304409",
+      "hidden_test_count": 5,
+      "arm_order": [
+        "B",
+        "A",
+        "D",
+        "C"
+      ]
+    }
+  ],
+  "calibration_sessions": [
+    {
+      "session": "att-d49f9c512ad749ff87793db2a0228a90",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-cd4fdcc204d44a4db169cac6151a2db8",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-9e446704bb604c71b3a5db5d21d4bf01",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-1106dbe767a44e819fba4105ba40570b",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-6ee3ba69a26b4b16a62dacc822fb6417",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-408365c902c547a8886034e00fe096ea",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-bcb2340d5d5449ab81adacf6584c0d43",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-4acf2b27ed624a38b143c593897895a1",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-4db4ed01da07490b8de38c823334d6fb",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-7f51ca58137042359a105f6e44cf2eec",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-114c6c46d0d64a43b8ce7f9f5cb37a82",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-5451189044974f7bb369c5044a1b23fe",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-da048ef6bc0f48a584317e1c8190f442",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-e670b4a0d0ce446c9ca6ba33cf42ac9c",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-1fde0a57c6364043a3e8b9bac643988d",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-dcc725237ef1432eaa17a5bccec0eb48",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-c86cd2ac63d54c43841c8c375aee184a",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-d6bf473b13a746b6b81af36f38cb01d5",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-178fc20682624c4398238522af5d0912",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-6161ee7d07a84936b2772a91593a9f94",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-e97b4a2da2554749a2c32bdf8b51e636",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-28c5241277d54c3d88caaa2844ec70ac",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-4a2b6ffde6bb4df5981362d9fbc46aa7",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-8d454ab8647845f2a6796ac5a439e086",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-c38702975a9f4bd58297280c31fc9664",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-705998a3ec7b4a07a46c203e6d3ba178",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-59bbe5fbaf574c128bd806ecabdbbb16",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-2f68e7e34a214f55a4d57f194e59e26b",
+      "tag": "calibration"
+    },
+    {
+      "session": "att-64c4c6d0f9984afb96182245daaaa352",
+      "tag": "smoke"
+    },
+    {
+      "session": "att-e6a40e268a1b4674b5f55f752c5c47b5",
+      "tag": "smoke"
+    }
+  ]
+}
