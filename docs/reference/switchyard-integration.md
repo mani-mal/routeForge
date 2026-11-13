@@ -234,6 +234,13 @@ which is the only configuration that could involve a model call.
 
 ## Upgrade playbook
 
+0. **Early warning (B110).** `scripts/switchyard_upstream_check.sh` installs the newest
+   published `nemo-switchyard` (pre-releases included), or `SWITCHYARD_VERSION=x.y.z`, into a
+   throwaway venv over the locked dependencies, and runs only `tests/routing/switchyard/`. The
+   pin is never touched. Run it on the DGX test pod from the repo root, before every bump and
+   whenever upstream tags a release. It passes on 0.4.0a1. Against 0.3.0 it fails 12 tests,
+   which shows it catches an incompatible host API. A failure on a version outside `SUPPORTED`
+   is expected: the version-contract test fails by design.
 1. Read upstream's CHANGELOG for breaking entries.
 2. Bump the exact pin in `pyproject.toml` and `SUPPORTED` (with `_LOWER`/`_UPPER`) in
    `app/routing/switchyard/__init__.py`; run `uv lock`.
