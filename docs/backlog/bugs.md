@@ -251,7 +251,10 @@ covers `length` and `content_filter`: nothing is stored, the trace says `truncat
 repeat request reaches the backend. `test_normal_stop_answer_is_still_stored` is the
 regression guard. The truncated tests fail without the store skip.
 
-## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🔴 OPEN
+## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🟡 PARTIAL
+
+**Partial (2026-11-13, 0.41.0).** The DGX lab manifest now sets readiness `timeoutSeconds: 3` and liveness `timeoutSeconds: 5` with `failureThreshold: 3`, rolled out with 0.41.0. **Open:** the HPE chart probes (both still on the 1 s default) and the tldextract offline fix. Re-check the lab restart count after a day of traffic.
+
 
 **Severity:** medium. Every restart drops the in-flight streams on that pod, and an
 air-gapped install should never try to reach the internet.
@@ -538,7 +541,14 @@ which means no holds.
 **Accept when:** a hold set on replica A is honoured on replica B, it expires at the TTL, it
 survives a restart, and two apps with the same session id never share state.
 
-## B107 — PACKAGING (Switchyard P1c): images, arches, air-gap  🟡 PARTIAL
+## B107 — PACKAGING (Switchyard P1c): images, arches, air-gap  ✅ RESOLVED (2026-11-13, deploy/dgx-lab-0.41.0)
+
+**Resolved: both arches booted with `mode: shadow`.**
+- **x86_64, DGX lab:** `serving-plane-api:0.41.0` (EXTRAS `observability,postgres,presidio,switchyard`). A real `dev-foundary` request at 2026-11-13 04:02 UTC wrote an outcome row with `switchyard_mode=shadow`, role `efficient`, tier `cheap` and `agreed=false`, and was served unchanged.
+- **aarch64, DGX Spark:** built from source with `deploy/spark/docker-compose.switchyard.yml` (new). Boot lint is clean, and a real `advise()` ran in the container: `efficient` (fall_open) for a plain question and `capable` (override) for repeated test failures, at 0.4–3.8 ms.
+- **Before rollout:** both databases took the six `switchyard_*` ALTERs, and the Spark database was dumped first.
+- **Still not done:** a real offline install from a mirror on a customer host. The procedure is verified with `--no-index --find-links` in a fresh venv.
+
 
 **Shipped:** `switchyard` is in the default image extras (Dockerfile, compose, Spark compose,
 Helm default; measured +28 MB, 54 ms import, 9.7/9.8 MB wheels). Opt-in shadow: compose via

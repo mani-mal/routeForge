@@ -1,0 +1,22 @@
+# Opt-in: turn the NVIDIA Switchyard routing advisor on in SHADOW mode on a DGX
+# Spark (B107). Shadow records what the advisor would route and changes nothing
+# a client, the meter or the router sees.
+#
+# Needs an api image built with the `switchyard` extra: keep `switchyard` in
+# API_EXTRAS in deploy/spark/.env (the compose default includes it), then
+#
+#   docker compose -p routeforge-spark -f docker-compose.yml \
+#     -f docker-compose.switchyard.yml up -d --build api
+#
+# (with Langfuse: -f docker-compose.yml -f ../compose/langfuse.yml
+# -f docker-compose.langfuse.yml -f docker-compose.switchyard.yml -- this file
+# last). Without this file the advisor is off. Before the FIRST boot
+# of an image with Switchyard support, run the six routing_outcomes ALTERs in
+# docs/reference/routing-outcomes.md -- required in every mode, including off.
+# See docs/reference/switchyard-integration.md.
+services:
+  api:
+    environment:
+      SP_CONFIG_OVERLAY_DIR: /etc/routeforge/config-overlay
+    volumes:
+      - ../compose/config-overlay-switchyard:/etc/routeforge/config-overlay:ro
