@@ -395,7 +395,22 @@ the counterfactual cost of following the advisor, per app and per workload.
 - Advisor overhead p50 and p99 are measured on the DGX `rf-pytest` pod and recorded.
 - A failure or timeout in shadow mode leaves the request untouched.
 
-## B106 — FEATURE (Switchyard P1b): persist routing state across replicas  🔴 OPEN
+## B106 — FEATURE (Switchyard P1b): persist routing state across replicas  ⏸️ BLOCKED (upstream)
+
+**Blocked on upstream [NVIDIA-NeMo/Switchyard#1304](https://github.com/NVIDIA-NeMo/Switchyard/issues/1304)**
+("Support host-provided session storage for Stage routing", opened 2026-11-12). Verified on
+both `v0.4.0a1` and upstream `main`: the Python binding always passes `State::default()`
+and discards `RoutingOutcome.state`, so RouteForge can't persist state without patching
+upstream, which the separation rule forbids. RouteForge's requirements were drafted as a
+comment on #1304, for the owner to post:
+- explicit in/out state in Python;
+- tenant-scoped keys chosen by the host;
+- a content-free `State.extra` contract;
+- deterministic replay.
+
+Until then the advisor runs stateless (B105). Re-check with `scripts/switchyard_upstream_check.sh`
+when a release lands.
+
 
 Store Switchyard's serialized `State` per `(app_id, trajectory or session id)`, with a TTL,
 reusing the `TrajectoryStore` patterns (DB-backed, app-scoped, expiring, pruned). Persist
