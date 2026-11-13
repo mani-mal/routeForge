@@ -253,7 +253,8 @@ regression guard. The truncated tests fail without the store skip.
 
 ## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🟡 PARTIAL
 
-**Partial (2026-11-13, 0.41.0).** The DGX lab manifest now sets readiness `timeoutSeconds: 3` and liveness `timeoutSeconds: 5` with `failureThreshold: 3`, rolled out with 0.41.0. **Open:** the HPE chart probes (both still on the 1 s default) and the tldextract offline fix. Re-check the lab restart count after a day of traffic.
+**Note 2026-11-13 21:4xZ:** the 0.42.0 api pod showed 2 restarts in about 9 h, against 48 in 13 h
+before the probe fix. Better but not zero, so re-check the cause. **Partial (2026-11-13, 0.41.0).** The DGX lab manifest now sets readiness `timeoutSeconds: 3` and liveness `timeoutSeconds: 5` with `failureThreshold: 3`, rolled out with 0.41.0. **Open:** the HPE chart probes (both still on the 1 s default) and the tldextract offline fix. Re-check the lab restart count after a day of traffic.
 
 
 **Severity:** medium. Every restart drops the in-flight streams on that pod, and an
