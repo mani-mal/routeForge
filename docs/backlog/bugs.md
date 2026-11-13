@@ -461,7 +461,16 @@ policy-compliant.
 
 **Deliver** `docs/research/switchyard-pilot-results.md` with a go or no-go decision.
 
-## B110 — CI (Switchyard S3): track upstream without coupling  🔴 OPEN
+## B110 — CI (Switchyard S3): track upstream without coupling  ✅ RESOLVED (2026-11-12, chore/b110-switchyard-upstream-check)
+
+**Resolved, as a script, not CI.** RouteForge has no CI, and the owner chose a script run on
+the DGX pod over adding GitHub Actions. `scripts/switchyard_upstream_check.sh` tests the
+adapter contract suite against the newest upstream release in an isolated venv. It is
+verified to pass on the pin (0.4.0a1, 148 tests) and to fail on an incompatible version
+(0.3.0, 12 failures). It is step 0 of the upgrade playbook in
+`docs/reference/switchyard-integration.md`. There is no automatic issue on failure: whoever
+runs it reads the output.
+
 
 Add a non-blocking scheduled CI job. It installs the **latest** upstream release or rc in an
 isolated env and runs only the B103/B104 contract suite. A failure opens an issue that links
