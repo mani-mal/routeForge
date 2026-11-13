@@ -116,8 +116,9 @@ def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> st
     leaves the backend's truncation in place (a redacted truncated answer is
     still truncated), and a verification FAILURE never produces a response at
     all (it raises; the route sends an error), so there is no competing
-    verifier-set reason to rank. A semantic-cache hit stores no backend
-    reason and replays rule 2/3 (`"stop"`)."""
+    verifier-set reason to rank. A semantic-cache hit replays `"stop"`, which
+    is honest only because a `length`/`content_filter` answer is never stored
+    (`Pipeline.run` skips the store and records `bypass_reason: truncated`)."""
     if backend_reason in TERMINAL_BACKEND_FINISH_REASONS:
         return backend_reason
     return "tool_calls" if has_tool_calls else "stop"

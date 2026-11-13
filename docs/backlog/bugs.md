@@ -227,10 +227,14 @@ decided `finish_reason`, and both of its callers pass it. The two live modes and
 `_finalize_stream` read `get_meta.finish_reason`, which `run_stream` sets once the backend
 stream drains.
 
-**Not changed:** a semantic-cache hit stores no backend reason (`CacheEntry` has no field
-for it), so it still replays `stop`. A truncated answer can be cached and later replayed as
-complete. A follow-up could skip the cache store when the reason is `length` or
-`content_filter`, or store the reason.
+**Semantic cache (also fixed):** a cache hit replays `stop`, so `Pipeline.run` no longer
+stores an answer whose backend reason is `length` or `content_filter`. Otherwise a
+truncated answer would be cached and later served as complete. The skip is recorded on
+the trace's `CacheRecord` as `bypass_reason: "truncated"`, a content-free enum value next to
+`high_risk`, `restricted_sensitivity`, `requested_model` and `entry_not_in_eligible_set`.
+If a lookup refusal was already recorded, it is kept and the value becomes
+`entry_not_in_eligible_set,truncated`. The next identical request misses and goes to the
+backend.
 
 **Tests:** `tests/test_finish_reason_contract.py`. It drives `/v1/chat/completions` with
 a fake LiteLLM backend that ends with the given reason and asserts what the client
@@ -242,6 +246,10 @@ showing that a normal `stop` and `tool_calls` are unchanged on the non-stream, b
 live paths, plus a table test of the rule. Each path test fails without the fix.
 `tests/_litellm_fake.py`'s `make_response` and both streaming fakes gained an optional
 `finish_reason`.
+`tests/test_semantic_cache_pipeline.py::test_truncated_answer_is_not_stored_and_next_request_reaches_backend`
+covers `length` and `content_filter`: nothing is stored, the trace says `truncated`, and the
+repeat request reaches the backend. `test_normal_stop_answer_is_still_stored` is the
+regression guard. The truncated tests fail without the store skip.
 
 ## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🔴 OPEN
 
