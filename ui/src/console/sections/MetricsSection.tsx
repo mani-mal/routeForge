@@ -37,6 +37,7 @@ const REASON_LABEL: Record<string, string> = {
   risk_floor: "risk floor",
   quality_floor: "quality floor",
   length_tier: "request length",
+  advisor: "Switchyard advisor (enforce)",
   only_eligible: "only eligible model",
   no_failover: "failed: no failover candidate",
   other: "other",

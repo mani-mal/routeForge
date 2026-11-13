@@ -128,14 +128,37 @@ it, so cost can only go down versus today. It's safer for cost but discards Swit
 | Layer | Setting | Meaning |
 |---|---|---|
 | Deployment ceiling | `routing.yaml` `switchyard.mode: off \| shadow \| enforce` | The most any app may get. `off` means the code path never runs. |
-| Per app (B108) | `adaptive_routing: off \| shadow \| enforce`, `sample_rate` | Raise-only *toward* the ceiling: an app can't exceed it. The default is `off`. |
+| Per app (B108) | `adaptive_routing: off \| shadow \| enforce`, `adaptive_routing_sample_rate` (0..1, default 1.0) | Raise-only *toward* the ceiling: an app can't exceed it. |
+
+**Effective mode (B108, implemented 2026-11-13)** = min(ceiling, app setting), ordered
+`off < shadow < enforce`, resolved once per request by `app/routing/adaptive.py` and carried
+on the policy context.
+
+**Defaults rule (owner decision for B108).** An app with **no explicit** `adaptive_routing`
+inherits the ceiling **capped at `shadow`**. A `shadow` deployment therefore keeps
+shadowing every app (the B105 lab behaviour), and `enforce` is only ever reached by an app
+explicitly set to `enforce` under an `enforce` ceiling. (This replaces the earlier "the
+default is `off`", which would have silently switched off shadow data collection for every
+app on the lab deployment.) An explicit `off` turns the advisor off for that app under any
+ceiling. An unparseable stored value denies to `off`; an unparseable sample rate to `0.0`.
+
+**Sampling.** Under effective `enforce`, the proposal is applied to a deterministic
+per-request sample: `sha256(request_id)` (server-generated) against
+`adaptive_routing_sample_rate`. Unsampled requests behave as shadow.
 
 - **shadow (B105):** compute and record the proposal, and don't pass `advisor_tier`. The
   served model, response, metering and cost are identical to `off` (the identity test).
   The advisor record is **operator-visible** (trace, Langfuse, `routing_outcomes`, the
   console) and **never client-visible**: the client response body is identical to `off`.
-- **enforce (B108):** pass `advisor_tier`. The proposal is named on the response
-  certificate and folded into `app_policy_version`.
+- **enforce (B108):** pass `advisor_tier` (when sampled and no fallback; `applied: true`
+  on the record). The app's setting is folded into `app_policy_version`, and the effective
+  mode is named on the response `policy` block as `"adaptive_routing": "enforce"` (an
+  enum). The proposal itself (role, tier, evidence, `applied`) stays operator-visible like
+  shadow: `off`/`shadow` apps' client bodies stay identical to `off`.
+- **Step-down.** The B70/B71 step-down after a failure or an open circuit treats an
+  advisor-raised target exactly like a complexity-raised one: both are the soft element of
+  the target, and either may step down to, never below, the hard floor.
+- **Helm** keeps refusing `enforce` at render time until Switchyard 0.4.0 final (§10).
 - **Not an axis (rule 2a).** It isn't placement and it isn't protection: it is a routing
   preference inside the bounds placement and policy already set. It must never read or write
   a placement or protection value.
@@ -187,6 +210,7 @@ on `enforce` for any real app (B108) waits for a final release.**
 
 - Classifier, judge, advisor-gate and VGR calls (B111).
 - Persisting state (B106).
-- Per-app config and the rollout UI (B108).
+- Per-app config and the rollout UI (B108, shipped 2026-11-13: `adaptive_routing` in the
+  admin API and the console's app settings).
 - Evaluation (B109).
 - `switchyard-server` and the LiteLLM plugin (never).

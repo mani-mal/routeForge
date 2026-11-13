@@ -221,6 +221,19 @@ ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS quality_floor_mode VARCHAR(16)
 
 Existing apps keep both null: they inherit the deployment's floors and mode.
 
+**Per-app Switchyard advisor (B108).** Two more nullable columns on `app_policies`, and one
+on `routing_outcomes` (see [`../reference/routing-outcomes.md`](../reference/routing-outcomes.md)).
+**Run these before rolling the image.**
+
+```sql
+ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS adaptive_routing VARCHAR(16);
+ALTER TABLE app_policies ADD COLUMN IF NOT EXISTS adaptive_routing_sample_rate DOUBLE PRECISION;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_applied BOOLEAN;
+```
+
+(SQLite: without `IF NOT EXISTS`, `FLOAT` for the rate.) Existing apps keep both null: they
+inherit the deployment `routing.switchyard.mode` capped at `shadow`.
+
 ### Upgrading `onboarded_models` for stored endpoint keys (B68)
 
 An onboarded endpoint's API key can be given at onboarding time and is stored
@@ -324,6 +337,8 @@ curl -b cookies.txt -X PUT \
 | `stream_mode` | str \| null | `off \| verified_then_stream \| stream_unverified \| incremental_verify`. `null`/`off` = reject inbound `stream:true`. `stream_unverified` is refused for `onprem_only` apps at write time; `onprem_only`/`require_verification` requests always fall back to the verified path at runtime. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
 | `quality_floors` | object \| null | `{workload: floor}`, each floor in `(0, 1]`: the app's minimum calibrated quality lower bound per workload. **Raise-only** against the deployment floor. Read as `null` = none; to clear a stored map, name it in `reset`. Replaces the whole map. See [`../reference/per-app-config.md`](../reference/per-app-config.md). |
 | `quality_floor_mode` | str \| null | `off \| shadow \| enforce`. Read as `null` = inherit `routing.quality_floors.mode` (default `off`); to clear a stored value, name it in `reset`. |
+| `adaptive_routing` | str \| null | `off \| shadow \| enforce` (B108): the Switchyard advisor for this app. Effective mode = min(`routing.switchyard.mode`, this); `null` = inherit the deployment mode **capped at `shadow`**. `enforce` above a lower ceiling is accepted and shown capped in `effective.adaptive_routing`. Not a placement or protection axis. See [`../reference/per-app-config.md`](../reference/per-app-config.md#adaptive_routing-and-adaptive_routing_sample_rate----the-switchyard-advisor-per-app). |
+| `adaptive_routing_sample_rate` | float \| null | `[0.0, 1.0]`: the deterministic share of `enforce` requests the advisor's proposal is applied to; the rest are recorded as in shadow. `null` = `1.0`. |
 | `reset` | list[str] \| null | Policy field names to write back to `NULL` ("inherit the deployment default"), applied **after** the merge — the only way to clear a field, since `null` in the body means "leave it alone". An unknown name is a 422 (never silently ignored), and naming a field here *and* sending a value for it in the same request is a 422 contradiction. Every clamp above is judged on the **post-reset** effective state, so a reset that would produce a forbidden posture is refused whole. |
 
 > **The PUT merges — `null` does not clear; `reset` does.** The body is persisted with

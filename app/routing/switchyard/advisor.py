@@ -5,7 +5,8 @@
 answers with a frozen, content-free `AdvisorResult`, either a
 `SwitchyardProposal` (role, tier, confidence, allowlisted evidence) or a
 fallback cause. Nothing here decides a route: B105 (shadow, wired in
-`app/pipeline.py`) records the result and B108 (enforce) will act on it.
+`app/pipeline.py`) records the result and B108 (enforce) passes its tier to
+`Router.select` for apps set to `enforce`.
 
 Guarantees, each pinned by a test in tests/routing/switchyard/:
 

@@ -196,8 +196,9 @@ class RoutingDecision:
     # B70/B71: set when endpoint state -- a prior failure on this request or
     # an open circuit -- moved the served tier BELOW the tier targeting
     # picked: `{"from": tier, "to": tier, "cause": "prior_failure" |
-    # "circuit_open"}`. Only a complexity-raised tier is ever lowered this
-    # way, never below the hard floor (see `Router.select`). None otherwise.
+    # "circuit_open"}`. Only a complexity-raised (or, B108, advisor-raised)
+    # tier is ever lowered this way, never below the hard floor (see
+    # `Router.select`). None otherwise.
     # Content-free: tier names and a fixed cause enum.
     tier_downgrade: dict | None = None
 
@@ -269,7 +270,8 @@ class Router:
                complexity: float, min_tier: str | None = None,
                exclude: frozenset[str] = frozenset(),
                output_tokens: int | None = None,
-               open_circuits: frozenset[str] = frozenset()) -> RoutingDecision:
+               open_circuits: frozenset[str] = frozenset(),
+               advisor_tier: str | None = None) -> RoutingDecision:
         """Choose a candidate for this call. `exclude` are models already tried
         and failed on this request (lateral failover); `open_circuits` are
         models the step-7 breaker currently holds open.
@@ -306,9 +308,24 @@ class Router:
         the router bypasses the breaker WITHIN the tier (`circuit_bypass`):
         trying an endpoint that may have recovered is never worse than the
         no-breaker behaviour. Neither path can restore a candidate policy did
-        not admit."""
+        not admit.
+
+        **`advisor_tier` (B108, Switchyard enforce) replaces exactly one
+        input:** the length-derived `complexity_tier(complexity)`, the first
+        element of the tier target's `max()` (design
+        docs/architecture/switchyard-advisor-design.md §2). Nothing else reads
+        it: the hard floor, the best-allowed clamp, upward failover, the
+        budget fallback, the breaker and `rank()` are unchanged, so the
+        advisor can neither go below the floor nor reach a candidate policy
+        did not admit. The step-down above treats an advisor-raised target
+        exactly like a complexity-raised one -- both are the SOFT element of
+        the target, so either may step down to (never below) the hard floor.
+        A value outside the canonical tiers is ignored and logged, never
+        raised. Under a live B80 quality floor in `enforce` mode the floor
+        path decides and the advisor is ignored. `None` (the default) is
+        today's decision, byte for byte."""
         return self._select(ctx, tokens_after, complexity, min_tier, exclude,
-                            output_tokens, open_circuits)
+                            output_tokens, open_circuits, advisor_tier)
 
     # --- P3b: the minimal conflicting core (app/policy/core.py) --------------
     #
@@ -418,9 +435,17 @@ class Router:
                complexity: float, min_tier: str | None,
                exclude: frozenset[str],
                output_tokens: int | None,
-               open_circuits: frozenset[str]) -> RoutingDecision:
+               open_circuits: frozenset[str],
+               advisor_tier: str | None = None) -> RoutingDecision:
         out_tokens = (output_tokens if output_tokens is not None
                       else expected_output_tokens(self._s, None))
+        # B108: the advisor may name a canonical tier and nothing else. Any
+        # other value is dropped here -- never an exception, never a guess.
+        if advisor_tier is not None and (not isinstance(advisor_tier, str)
+                                         or advisor_tier not in _ORDER):
+            log.warning("ignoring advisor_tier outside the canonical tiers "
+                        "request=%s", ctx.request_id)
+            advisor_tier = None
         # 1. eligibility: residency/placement, prior failures, the app's own
         #    scope, the request's pinned model and the registry's per-model
         #    gates. ONE authority for all of it (app/policy/feasible.py) --
@@ -473,12 +498,18 @@ class Router:
         # mode shadow/enforce; otherwise today's tiered path, untouched.
         if (ctx.quality_floor is not None
                 and ctx.quality_floor_mode in ("shadow", "enforce")):
+            # B108 / design §2: an ENFORCED floor decides on its own; the
+            # advisor is not consulted for this call (its unmet fallback
+            # included). In floor `shadow` the tiered path decides, so the
+            # advisor seam applies there as normal.
+            if ctx.quality_floor_mode == "enforce":
+                advisor_tier = None
             return self._select_floor(ctx, policy_allowed, allowed, rejected,
                                       circuit_rejections, tokens_after, complexity,
-                                      min_tier, out_tokens)
+                                      min_tier, out_tokens, advisor_tier)
         return self._select_tiered(ctx, policy_allowed, allowed, rejected,
                                    circuit_rejections, tokens_after, complexity,
-                                   min_tier, out_tokens)
+                                   min_tier, out_tokens, advisor_tier)
 
     def _floor_kind(self, ctx: ExecutionPolicyContext, min_tier: str | None) -> str:
         """Which requirement set the hard floor: the escalation's `min_tier`
@@ -518,7 +549,8 @@ class Router:
                        rejected: list[RejectedCandidate],
                        circuit_rejections: dict[str, RejectedCandidate],
                        tokens_after: int, complexity: float,
-                       min_tier: str | None, out_tokens: int) -> RoutingDecision:
+                       min_tier: str | None, out_tokens: int,
+                       advisor_tier: str | None = None) -> RoutingDecision:
         """Today's path, steps 2-5: tier targeting, budget, circuits, score.
         `policy_allowed` is the non-empty policy-eligible set (tier targeting
         reads it); `allowed` is its non-empty subset that survives `exclude`
@@ -527,8 +559,10 @@ class Router:
         # 2. target tier from complexity + risk floor + escalation, and the
         #    hard floor from risk floor + escalation -- both clamped to the
         #    best POLICY-permitted tier (rule 8), never to what survives a
-        #    failure (B70).
-        targets = [self._complexity_tier(complexity),
+        #    failure (B70). B108: a validated `advisor_tier` stands in for the
+        #    complexity tier -- the first element only (see `select`).
+        targets = [advisor_tier if advisor_tier is not None
+                   else self._complexity_tier(complexity),
                    self._s.routing.risk_floors[ctx.risk_class]]
         if min_tier:
             targets.append(min_tier)
@@ -548,7 +582,9 @@ class Router:
         if tier_pick is None:
             # Nothing survives at or above the target. Step DOWN only to a tier
             # at or above the hard floor -- i.e. only what complexity alone
-            # raised the target over (B70 item 3 / B71 item 2).
+            # raised the target over (B70 item 3 / B71 item 2). B108: an
+            # advisor-raised target is the same soft element and steps down
+            # the same way; the hard floor never moves.
             lower = [t for t in avail if _ORDER[hard] <= _ORDER[t] < _ORDER[target_pick]]
             if not lower:
                 raise self._below_floor(ctx, hard, min_tier, allowed, rejected)
@@ -774,7 +810,8 @@ class Router:
                       rejected: list[RejectedCandidate],
                       circuit_rejections: dict[str, RejectedCandidate],
                       tokens_after: int, complexity: float,
-                      min_tier: str | None, out_tokens: int) -> RoutingDecision:
+                      min_tier: str | None, out_tokens: int,
+                      advisor_tier: str | None = None) -> RoutingDecision:
         """Mode shadow/enforce with a floor. Qualifiers are a subset of
         `allowed` -- what survives `exclude` (rule 3) -- at or above the hard
         floor `max(risk_floor, min_tier)` clamped to the best POLICY-eligible
@@ -832,9 +869,10 @@ class Router:
                 scoring=result, circuit_bypass=bypass, tier_target=chosen.tier,
                 quality_floor=record(chosen.name, "met"))
 
+        # `advisor_tier` is always None here in floor `enforce` (`_select`).
         decision = self._select_tiered(ctx, policy_allowed, allowed, list(rejected),
                                        circuit_rejections, tokens_after, complexity,
-                                       min_tier, out_tokens)
+                                       min_tier, out_tokens, advisor_tier)
         if mode == "enforce":
             decision.reason = (f"quality floor {floor:.2f} unmet "
                                f"({_UNMET_WORDS[pick.status]}): {decision.reason}")

@@ -53,7 +53,7 @@ def test_a_tag_outside_the_vocabulary_is_refused(mode):
 def test_trace_keys():
     assert SWITCHYARD_TRACE_KEYS == ("mode", "role", "tier", "confidence", "agreed",
                                      "fallback_cause", "latency_ms", "version",
-                                     "algorithm")
+                                     "algorithm", "applied")
 
 
 def test_export_trace_sets_attributes_regardless_of_capture_io(monkeypatch):
@@ -107,7 +107,7 @@ def test_migration_script_lists_the_columns():
 
 
 _ADVICE = {"mode": "shadow", "role": "efficient", "tier": "cheap", "confidence": 0.9,
-           "agreed": True, "fallback_cause": None}
+           "agreed": True, "fallback_cause": None, "applied": False}
 
 
 def test_builders_copy_the_record_and_default_to_null():
@@ -117,7 +117,8 @@ def test_builders_copy_the_record_and_default_to_null():
     assert {c: ok[c] for c in SWITCHYARD_COLUMNS} == {
         "switchyard_mode": "shadow", "switchyard_role": "efficient",
         "switchyard_tier": "cheap", "switchyard_confidence": 0.9,
-        "switchyard_agreed": True, "switchyard_fallback_cause": None}
+        "switchyard_agreed": True, "switchyard_fallback_cause": None,
+        "switchyard_applied": False}
     off = build_ok_outcome({"trace": []}, outcome_ctx={}, **kw)
     assert all(off[c] is None for c in SWITCHYARD_COLUMNS)
     failed = build_failure_outcome(

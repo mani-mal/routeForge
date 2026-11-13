@@ -103,13 +103,17 @@ function floorLine(q: QualityFloorRecord | null | undefined): string | null {
 
 // B105: "advisor proposed X (role, confidence)" beside the served model. In
 // shadow mode the proposal was recorded only; it never changed the route.
+// B108: under enforce, `applied` says whether it set the tier target.
 function advisorLine(a: AdvisorRecord | null | undefined): string | null {
   if (!a) return null;
   const head = `advisor (${a.mode})`;
-  if (a.fallback_cause) return `${head} · no proposal (${a.fallback_cause})`;
+  if (a.fallback_cause && !a.tier) return `${head} · no proposal (${a.fallback_cause})`;
   const conf = a.confidence != null ? `, ${a.confidence.toFixed(2)}` : "";
   const verdict = a.agreed == null ? null : a.agreed ? "agreed" : "overridden";
-  return [`${head} proposed ${a.tier} (${a.role}${conf})`, verdict].filter(Boolean).join(" · ");
+  const applied = a.mode === "enforce" ? (a.applied ? "applied" : "not applied") : null;
+  const cause = a.fallback_cause ? `(${a.fallback_cause})` : null;
+  return [`${head} proposed ${a.tier} (${a.role}${conf})`, verdict, applied, cause]
+    .filter(Boolean).join(" · ");
 }
 
 // `sp.checks` (design P1a §6): a request-level proof, so its only honest

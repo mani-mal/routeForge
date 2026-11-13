@@ -185,4 +185,5 @@ def normalize(obj: Any, *, drop: frozenset[str] = frozenset()) -> Any:
 SWITCHYARD_OUTCOME_COLUMNS = frozenset({
     "switchyard_mode", "switchyard_role", "switchyard_tier",
     "switchyard_confidence", "switchyard_agreed", "switchyard_fallback_cause",
+    "switchyard_applied",
 })

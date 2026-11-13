@@ -177,7 +177,8 @@ def outcome_trace(records, vrec) -> list[dict]:
 
 
 ROUTE_REASONS = ("failover", "escalation", "quality_floor", "placement", "risk_floor",
-                 "length_tier", "only_eligible", "other", "no_failover")
+                 "length_tier", "only_eligible", "other", "no_failover",
+                 "advisor")   # B108
 
 _TIER_RANK = {"cheap": 0, "mid": 1, "frontier": 2}
 
@@ -191,7 +192,8 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
                         complexity_tier: str | None, rejected: list[dict],
                         n_eligible: int | None, served_hops: int = 1,
                         floor_status: str | None = None,
-                        tier_downgraded: bool = False) -> str | None:
+                        tier_downgraded: bool = False,
+                        advisor: bool = False) -> str | None:
     """Why the served model is in the tier it is. Content-free enum; first
     match wins. Unknown tier strings compare as not-below / not-above.
 
@@ -209,6 +211,10 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
       pick the model then.
     - `placement`: a placement-rejected candidate sat at or above the length
       tier but below the served tier -- placement, not length, forced the tier up.
+    - `advisor` (B108): `advisor` is True when the Switchyard advisor's tier
+      was APPLIED, and the caller then passes that tier as `complexity_tier`
+      (it replaced the length tier as the soft target). Where `length_tier`
+      would be returned, `advisor` is; every other reason reads the same.
     """
     from app.policy.feasible import (PROMPT_RETENTION_NOT_ALLOWED,
                                      RAW_SENSITIVE_NOT_ACCEPTED, REGION_NOT_ALLOWED,
@@ -233,7 +239,7 @@ def derive_route_reason(*, cache_hit: bool, attempts: list[str],
     if tt is not None and ct is not None and tt > ct:
         return "risk_floor"
     if chosen_tier is not None and chosen_tier == complexity_tier:
-        return "length_tier"
+        return "advisor" if advisor else "length_tier"
     if n_eligible == 1:
         return "only_eligible"
     return "other"
@@ -369,7 +375,8 @@ def build_ok_outcome(resp: dict, *, request_id: str, application_id: str,
         # P3b: only a `no_eligible` row has a conflicting core.
         "conflicting_core": None,
     }
-    row.update(trace_features(trace, outcome_ctx.get("complexity_tier")))
+    row.update(trace_features(trace, outcome_ctx.get("complexity_tier"),
+                                  applied_advisor_tier(outcome_ctx)))
     return row
 
 
@@ -382,6 +389,8 @@ SWITCHYARD_COLUMNS: dict[str, str] = {
     "switchyard_confidence": "confidence",
     "switchyard_agreed": "agreed",
     "switchyard_fallback_cause": "fallback_cause",
+    # B108: the proposal was passed to the router (enforce).
+    "switchyard_applied": "applied",
 }
 
 
@@ -423,7 +432,15 @@ def _policy_features(outcome_ctx: dict) -> dict:
     }
 
 
-def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dict:
+def applied_advisor_tier(outcome_ctx: dict) -> str | None:
+    """B108: the Switchyard advisor's tier when it was APPLIED to this
+    request (it replaced the length-derived tier target), else None."""
+    sw = outcome_ctx.get("switchyard") or {}
+    return sw.get("tier") if sw.get("applied") is True else None
+
+
+def trace_features(trace: list[dict], complexity_tier: str | None = None,
+                   advisor_tier: str | None = None) -> dict:
     """The routing and verification columns of an outcome row, read from a
     content-free trace (a list of DecisionRecord / VerificationRecord /
     CacheRecord dumps). The ONE place a trace is read -- `build_ok_outcome`
@@ -486,12 +503,16 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None) -> dic
         "rejected": _rejected_rows(full_rejected),
         "route_reason": derive_route_reason(
             cache_hit=cache_hit, attempts=attempts, chosen_tier=chosen_tier,
-            tier_target=tier_target, complexity_tier=complexity_tier,
+            tier_target=tier_target,
+            # B108: an applied advisor tier is the soft target in place of
+            # the length tier, so the reason is read against it.
+            complexity_tier=advisor_tier or complexity_tier,
             rejected=full_rejected,
             n_eligible=len(eligible) if scoring else None,
             served_hops=len(chosen_hops),
             floor_status=first_floor.get("status"),
-            tier_downgraded=bool(downgrades)),
+            tier_downgraded=bool(downgrades),
+            advisor=advisor_tier is not None),
         "attempts": attempts,
         "chosen": chosen,
         "scoring": scoring,
@@ -596,7 +617,8 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "conflicting_core": conflicting_core,
     }
     if trace is None and routing_trace:
-        f = trace_features(routing_trace, outcome_ctx.get("complexity_tier"))
+        f = trace_features(routing_trace, outcome_ctx.get("complexity_tier"),
+                           applied_advisor_tier(outcome_ctx))
         row.update({k: f[k] for k in ("tier_target", "eligible", "rejected",
                                       "scoring", "circuit_bypass")})
         if not row["attempts"]:
@@ -604,7 +626,8 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
     if no_failover and trace is None:
         row["route_reason"] = "no_failover"
     if trace is not None:
-        row.update(trace_features(trace, outcome_ctx.get("complexity_tier")))
+        row.update(trace_features(trace, outcome_ctx.get("complexity_tier"),
+                                  applied_advisor_tier(outcome_ctx)))
         row.update({
             "cost_usd": cost_usd,
             "prompt_tokens": prompt_tokens,

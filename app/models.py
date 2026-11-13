@@ -230,6 +230,16 @@ class ExecutionPolicyContext(BaseModel):
     # the floor. Content-free: a number and an enum.
     quality_floor: float | None = None
     quality_floor_mode: str = "off"
+    # B108: the EFFECTIVE Switchyard advisor mode for this app --
+    # min(deployment ceiling, app setting), an app with no setting capped at
+    # `shadow` -- and the share of `enforce` requests the proposal is applied
+    # to. Resolved once by `app/routing/adaptive.py::resolve_adaptive_routing`
+    # in `build_context`; the pipeline reads these two fields and never
+    # re-derives them. A routing preference only: placement, eligibility and
+    # every protection value are decided without it (CLAUDE.md rule 2a).
+    # Defaults (off, 1.0) keep a hand-built context exactly as before.
+    adaptive_routing: str = "off"
+    adaptive_routing_sample_rate: float = 1.0
     max_cost_usd: float
     max_latency_ms: int
     risk_class: str

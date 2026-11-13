@@ -130,7 +130,7 @@ const STEP_FIELDS: Record<number, (keyof AdminPolicy)[]> = {
   3: ["policy_mode", "pii_detection", "pii_score_threshold", "pii_entity_denylist", "pii_exempt_patterns"],
   4: ["capture_io"],
   5: ["stream_mode", "compression_enabled", "max_rpm", "max_spend_usd_per_day", "monthly_budget_usd", "max_cost_usd_per_request",
-    "quality_floors", "quality_floor_mode"],
+    "quality_floors", "quality_floor_mode", "adaptive_routing", "adaptive_routing_sample_rate"],
 };
 
 // Order-insensitive comparison, so re-toggling a chip back to where it started
@@ -1146,6 +1146,7 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
       pii_detection: null, stream_mode: null, policy_mode: null,
       pii_entity_denylist: null, pii_score_threshold: null, pii_exempt_patterns: null,
       quality_floors: null, quality_floor_mode: null,
+      adaptive_routing: null, adaptive_routing_sample_rate: null,
     });
   const [modelsText, setModelsText] = useState((app.policy?.allowed_models ?? []).join(", "));
   const [busy, setBusy] = useState(false);
@@ -1943,6 +1944,29 @@ function PolicySteps({ app, deployment, uid, open, toggle, onSaved, tokens, priv
           appFloors={p.quality_floors ?? null}
           deploymentFloors={deployment?.quality_floors?.workloads ?? {}}
           onChange={(f) => setP({ ...p, quality_floors: f })} />
+
+        <Row label="adaptive routing" htmlFor={`${uid}-adaptive`}
+          hint={`Switchyard advisor. shadow records its proposal; enforce lets it set the tier target (never below the risk floor or outside placement). Capped at the deployment mode${app.effective?.adaptive_routing ? `; effective now: ${app.effective.adaptive_routing}` : ""}.`}>
+          <select id={`${uid}-adaptive`} value={p.adaptive_routing ?? ""}
+            onChange={(e) => setP({
+              ...p,
+              adaptive_routing: (e.target.value || null) as AdminPolicy["adaptive_routing"],
+            })}
+            className={selectCls}>
+            <option value="">inherit (deployment mode, at most shadow)</option>
+            <option value="off">off</option>
+            <option value="shadow">shadow</option>
+            <option value="enforce">enforce</option>
+          </select>
+        </Row>
+
+        <Row label="enforce sample rate" htmlFor={`${uid}-adaptive-rate`}
+          hint="share of enforce requests the proposal is applied to (deterministic per request); blank = 1.0">
+          <input id={`${uid}-adaptive-rate`} type="number" min={0} max={1} step="0.05"
+            value={p.adaptive_routing_sample_rate ?? ""}
+            onChange={(e) => setP({ ...p, adaptive_routing_sample_rate: e.target.value === "" ? null : Number(e.target.value) })}
+            className={`${inputCls} w-20`} />
+        </Row>
 
         {saveFor(5)}
       </Step>

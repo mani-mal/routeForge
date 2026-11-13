@@ -39,6 +39,9 @@ from app.api.routes import _sanitize_session_id
 from app.config.schema import QUALITY_FLOOR_MODES
 from app.policy.compile import (TELEMETRY_IOS, PolicyViolation, check_invariants, compile_policy,
                                 validate_effective)
+from app.routing.adaptive import (ADAPTIVE_ROUTING_MODES, parse_mode as parse_adaptive_mode,
+                                  parse_sample_rate as parse_adaptive_rate,
+                                  resolve_adaptive_routing)
 from app.policy.effective import PROTECTED_ENTITIES
 from app.policy.enums import (
     PII_MODES,
@@ -95,7 +98,9 @@ def _policy_dict(p) -> dict | None:
             "tool_args_min_score": p.tool_args_min_score,
             "model_aliases": p.model_aliases,
             "quality_floors": p.quality_floors,
-            "quality_floor_mode": p.quality_floor_mode}
+            "quality_floor_mode": p.quality_floor_mode,
+            "adaptive_routing": p.adaptive_routing,
+            "adaptive_routing_sample_rate": p.adaptive_routing_sample_rate}
 
 
 _INVALID_ENV_MASK = "(invalid: not an env var name \u2014 edit to fix)"
@@ -187,7 +192,13 @@ def _effective_dict(app, settings) -> dict:
     surface, and every `_app_dict` caller gets it, so GET and the PUT
     response can never disagree about what the app's policy actually
     resolves to."""
-    eff = compile_policy(policy_view_from(app), settings)
+    view = policy_view_from(app)
+    eff = compile_policy(view, settings)
+    # B108: not a compiled axis (rule 2a) -- resolved by its own pure
+    # function, the one `build_context` calls, so the console and the request
+    # path can never disagree. `adaptive_routing` is min(deployment ceiling,
+    # app setting): an `enforce` stored under a lower ceiling reads capped.
+    adaptive_mode, adaptive_rate = resolve_adaptive_routing(settings, view)
     return {
         "model_input": eff.protection.model_input,
         "client_output": eff.protection.client_output,
@@ -202,6 +213,8 @@ def _effective_dict(app, settings) -> dict:
         "allowed_regions":
             sorted(eff.allowed_regions) if eff.allowed_regions else None,
         "require_no_retention": eff.require_no_retention,
+        "adaptive_routing": adaptive_mode,
+        "adaptive_routing_sample_rate": adaptive_rate,
     }
 
 
@@ -302,6 +315,14 @@ class PolicyIn(BaseModel):
     # Typed loosely so a bad shape is our 422 naming the field, not pydantic's.
     quality_floors: Any = None
     quality_floor_mode: str | None = None
+    # B108 per-app Switchyard advisor: off | shadow | enforce, and the share
+    # (0..1) of `enforce` requests the proposal is applied to. None = inherit
+    # (the deployment ceiling capped at shadow; rate 1.0). Typed loosely so a
+    # bad value is our 422 naming the field. Validated in
+    # `_validate_adaptive_routing`; the effective (capped) mode is returned
+    # under `effective.adaptive_routing`.
+    adaptive_routing: Any = None
+    adaptive_routing_sample_rate: Any = None
     # --- the one escape from the merge -------------------------------------
     # This PUT is a MERGE: `null` means "leave the stored value alone", which
     # plenty of callers depend on. That left no way to put a field BACK to NULL
@@ -926,6 +947,8 @@ async def set_policy(app_id: str, body: PolicyIn, request: Request,
                 422, "max_cost_usd_per_request must be > 0. Omit it, or name it in "
                 "`reset`, to inherit the deployment's budgets.default_max_spend_usd.")
         _validate_quality_floors(body.quality_floors, body.quality_floor_mode)
+        _validate_adaptive_routing(body.adaptive_routing,
+                                   body.adaptive_routing_sample_rate)
         if body.pii_exempt_patterns is not None:
             if len(body.pii_exempt_patterns) > MAX_EXEMPT_PATTERNS:
                 raise HTTPException(
@@ -1271,6 +1294,22 @@ async def put_privacy(app_id: str, body: PrivacyProfileIn, request: Request,
 # request body.
 
 _ALIAS_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def _validate_adaptive_routing(mode, rate) -> None:
+    """B108: 422 on an unparseable `adaptive_routing` or sample rate -- the
+    same parsers the request path uses (`app/routing/adaptive.py`), so what
+    is accepted here is exactly what resolves. `enforce` under a lower
+    deployment ceiling is ACCEPTED: it is capped at read time and the
+    response's `effective.adaptive_routing` shows the capped mode."""
+    if mode is not None and not parse_adaptive_mode(mode)[1]:
+        raise HTTPException(
+            422, f"adaptive_routing {mode!r} is not one of "
+            f"{', '.join(ADAPTIVE_ROUTING_MODES)}. Name it in `reset` to inherit.")
+    if rate is not None and not parse_adaptive_rate(rate)[1]:
+        raise HTTPException(
+            422, f"adaptive_routing_sample_rate must be a number >= 0 and <= 1, "
+            f"got {rate!r}. Name it in `reset` to inherit (1.0).")
 
 
 def _validate_quality_floors(floors, mode) -> None:

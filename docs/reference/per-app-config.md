@@ -1096,6 +1096,73 @@ floor never turns a servable request into a rejection.
 paragraph) **before rolling the image**: the policy row is read on every request, so an
 unmigrated table fails every `/v1/*` request.
 
+## `adaptive_routing` and `adaptive_routing_sample_rate` -- the Switchyard advisor per app
+
+Whether the NVIDIA Switchyard advisor runs for this app, and whether its proposal may set
+the app's tier target (B108). How the advisor works, what it sees and what it records:
+[`switchyard-integration.md`](./switchyard-integration.md) (Shadow mode, Enforce mode) and
+[`../architecture/switchyard-advisor-design.md`](../architecture/switchyard-advisor-design.md).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `adaptive_routing` | `off \| shadow \| enforce \| null` | `off`: the advisor does not run for this app. `shadow`: its proposal is recorded, never acted on. `enforce`: its proposal's tier is used in place of the length-derived tier target. `null` = inherit (see below). |
+| `adaptive_routing_sample_rate` | `number \| null` | `0..1`: the share of this app's `enforce` requests the proposal is applied to, chosen deterministically per request id. Unsampled requests behave like `shadow` (recorded, `applied: false`). `null` = `1.0`. Has no effect unless the effective mode is `enforce`. |
+
+**Effective mode: raise-only toward the deployment ceiling, never past it.** The ceiling is
+`config/routing.yaml` `switchyard.mode`. The effective mode is
+**min(ceiling, app setting)**, ordered `off < shadow < enforce`:
+
+| Deployment ceiling | App `null` (inherit) | App `off` | App `shadow` | App `enforce` |
+|---|---|---|---|---|
+| `off` | off | off | off | off |
+| `shadow` | **shadow** | off | shadow | shadow (capped) |
+| `enforce` | **shadow** | off | shadow | **enforce** |
+
+**The inheritance rule.** An app with no explicit `adaptive_routing` inherits the ceiling
+**capped at `shadow`**. So a `shadow` deployment keeps shadowing every app, exactly as it
+did before B108, and `enforce` is **only** ever reached by an app explicitly set to
+`enforce` under an `enforce` ceiling. Before B108 a deployment `enforce` was recorded as
+`enforce` on every app but acted on like `shadow`; it now records `shadow` for every app
+without a setting.
+
+**Never placement, never protection (CLAUDE.md rule 2a).** `adaptive_routing` is a routing
+preference *inside* the bounds placement and policy already set. It is not a policy axis:
+it is not resolved by `compile_policy` (whose job is the placement and protection axes),
+but by its own pure function, `app/routing/adaptive.py::resolve_adaptive_routing`, called
+once from `build_context` after placement and eligibility are final, the same way the B80
+`quality_floor_mode` is resolved. Nothing that decides residency, `allowed_providers`,
+eligibility or any protection value reads it, and it reads none of them. Under `enforce` it
+replaces only the length-derived tier target: the risk floor, escalation, the best-allowed
+clamp (so `onprem_only` never reaches cloud), failover, the budget fallback and the breaker
+are unchanged.
+
+**Validation (422, named message).** `adaptive_routing` not one of the three values;
+`adaptive_routing_sample_rate` not a finite number in `[0, 1]` (a boolean or a string is
+refused). Setting `enforce` while the deployment ceiling is below `enforce` is **allowed**:
+it is capped, and the response's `effective.adaptive_routing` (GET and PUT) shows the
+mode that actually applies. `reset: ["adaptive_routing", "adaptive_routing_sample_rate"]`
+returns both to inherit. A stored value that cannot be parsed (only possible by editing the
+row by hand) denies: the mode to `off`, the rate to `0.0` (never applied).
+
+**Version and certificate.** Set values are folded into `app_policy_version`; an app that
+sets neither keeps its hash. When the effective mode is `enforce`, the response `policy`
+block carries `"adaptive_routing": "enforce"` (an enum, nothing else). `off` and `shadow`
+add nothing to the client body. The advisor's proposal and whether it was applied stay
+operator-visible only (trace `sp.switchyard.*`, the console, `routing_outcomes`).
+
+**Example.** Ceiling `enforce` (DGX lab); one evaluation app enforces on a quarter of its
+requests, every other app keeps shadowing:
+
+```json
+{"adaptive_routing": "enforce", "adaptive_routing_sample_rate": 0.25}
+```
+
+**Deploy.** Two nullable columns on `app_policies`; run the `ALTER`s in
+[Manual DB migration](#manual-db-migration-for-already-deployed-databases) (or
+`scripts/migrate_app_policies.py`) **before rolling the image**: the policy row is read on
+every request. The Helm charts still refuse a deployment `enforce` ceiling: enforce for
+real deployments waits for Switchyard 0.4.0 final (owner decision).
+
 ## Model eligibility is two-sided
 
 Worth restating here because it is asked as a policy question and answered in two places:
@@ -1422,7 +1489,12 @@ ALTER TABLE app_policies ADD COLUMN allowed_regions JSON;          -- 2026-09-19
 ALTER TABLE app_policies ADD COLUMN require_no_retention BOOLEAN;  -- 2026-09-19 (P1b)
 ALTER TABLE app_policies ADD COLUMN monthly_budget_usd FLOAT;      -- 2026-11-05 (metrics slice 4)
 ALTER TABLE app_policies ADD COLUMN tool_args_min_score FLOAT;     -- 2026-11-11 (B69)
+ALTER TABLE app_policies ADD COLUMN adaptive_routing VARCHAR(16);  -- 2026-11-13 (B108)
+ALTER TABLE app_policies ADD COLUMN adaptive_routing_sample_rate FLOAT; -- 2026-11-13 (B108)
 ```
+
+(Postgres: `DOUBLE PRECISION` for the `FLOAT` columns, and `IF NOT EXISTS` is safe to add.
+`scripts/migrate_app_policies.py` applies all of them idempotently.)
 
 P1b also adds three columns to a **second** table, `onboarded_models` — the endpoint side
 of the same feature (what an operator declares about an endpoint, see

@@ -44,11 +44,13 @@ SWITCHYARD_TAGS: frozenset[str] = frozenset({
 
 # `sp.switchyard.<key>` root-span attributes, in emit order. The values come
 # only from `AdvisorResult.to_record()` (already allowlisted: ids, enums and
-# numbers) plus the deployment mode and `agreed`. Evidence is NOT here -- it
+# numbers) plus the app's effective mode, `agreed` and (B108) `applied`. Evidence is NOT here -- it
 # rides on the served hop's DecisionRecord `advisor` sub-record.
 SWITCHYARD_TRACE_KEYS: tuple[str, ...] = (
     "mode", "role", "tier", "confidence", "agreed", "fallback_cause",
     "latency_ms", "version", "algorithm",
+    # B108: the proposal was passed to the router (effective mode `enforce`).
+    "applied",
 )
 
 

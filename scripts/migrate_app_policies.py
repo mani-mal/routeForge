@@ -91,6 +91,10 @@ COLUMNS: list[tuple[str, str, str]] = [
     # 2026-11-11 B69 — the tool-argument bar. NULL = inherit serving.yaml
     # policy.tool_args_min_score.
     ("tool_args_min_score", "DOUBLE PRECISION", "FLOAT"),
+    # 2026-11-13 B108 — the per-app Switchyard advisor mode and sample rate.
+    # NULL = inherit (the deployment ceiling capped at shadow; rate 1.0).
+    ("adaptive_routing", "VARCHAR(16)", "VARCHAR(16)"),
+    ("adaptive_routing_sample_rate", "DOUBLE PRECISION", "FLOAT"),
 ]
 
 # The endpoint-side half of the same feature: what an operator DECLARED about
@@ -170,6 +174,8 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("switchyard_confidence", "DOUBLE PRECISION", "FLOAT"),
     ("switchyard_agreed", "BOOLEAN", "BOOLEAN"),
     ("switchyard_fallback_cause", "VARCHAR(32)", "VARCHAR(32)"),
+    # 2026-11-13 B108 — was the proposal passed to the router (enforce).
+    ("switchyard_applied", "BOOLEAN", "BOOLEAN"),
 ]
 
 APPLICATIONS_TABLE = "applications"

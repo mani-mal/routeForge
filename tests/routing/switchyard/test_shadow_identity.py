@@ -1,6 +1,8 @@
-"""B105 identity: `shadow` (and, until B108, `enforce`) changes nothing a
-client, the meter or the router sees -- the CLIENT body is identical to `off`
-as-is. Only operator surfaces differ: the trace, the outcome row, and the
+"""B105 identity: `shadow` changes nothing a client, the meter or the router
+sees -- the CLIENT body is identical to `off` as-is. Since B108 a deployment
+`enforce` is a CEILING: an app with no `adaptive_routing` setting is capped at
+`shadow`, so the same identity holds under an `enforce` ceiling and the record
+says `shadow`. Only operator surfaces differ: the trace, the outcome row, and the
 served DecisionRecord's `advisor` field in the console snapshot.
 
 The same fixture traffic is driven through the real `/v1/chat/completions`
@@ -106,10 +108,13 @@ def _drive(monkeypatch, mode: str) -> dict:
         }
 
 
-@pytest.mark.parametrize("mode", ["shadow", "enforce"])
-def test_shadow_is_identical_to_off(monkeypatch, mode):
+@pytest.mark.parametrize("ceiling", ["shadow", "enforce"])
+def test_shadow_is_identical_to_off(monkeypatch, ceiling):
     off = _drive(monkeypatch, "off")
-    on = _drive(monkeypatch, mode)
+    on = _drive(monkeypatch, ceiling)
+    # B108: no app here sets `adaptive_routing`, so each inherits the ceiling
+    # capped at shadow.
+    mode = "shadow"
 
     # Sanity: every request reached the backend, was metered and recorded,
     # and the fixture really exercises onprem_only + high risk.
