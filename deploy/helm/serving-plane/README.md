@@ -86,6 +86,7 @@ gone. `servingPlane.providers.<name>` now takes `litellmPrefix` / `apiKeyEnv` / 
 |---|---|---|
 | `admin.email` / `admin.password` | `admin@routeforge.local` / `""` | Empty password => generated and kept across upgrades; `changeme` refused. |
 | `servingPlane.policy.piiDetection` | `regex` | `regex \| presidio \| off`. `presidio` needs an api image built with `EXTRAS=observability,postgres,presidio`. |
+| `servingPlane.switchyard.mode` | `off` | `off \| shadow`. `shadow` renders a `routing.yaml` overlay ConfigMap and sets `SP_CONFIG_OVERLAY_DIR`; the default image already contains the package. See `docs/reference/switchyard-integration.md`. |
 | `servingPlane.contextOptimization.enabled` | `false` | Headroom compression. Off by default so a demo can show before/after. |
 | `servingPlane.contextOptimization.mode` | `library` | `library \| proxy`. |
 | `servingPlane.contextOptimization.ccr.enabled` | `true` | Only takes effect when `contextOptimization.enabled` is also `true`. |

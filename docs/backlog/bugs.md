@@ -340,7 +340,16 @@ which means no holds.
 **Accept when:** a hold set on replica A is honoured on replica B, it expires at the TTL, it
 survives a restart, and two apps with the same session id never share state.
 
-## B107 — PACKAGING (Switchyard P1c): images, arches, air-gap  🔴 OPEN
+## B107 — PACKAGING (Switchyard P1c): images, arches, air-gap  🟡 PARTIAL
+
+**Shipped:** `switchyard` is in the default image extras (Dockerfile, compose, Spark compose,
+Helm default; measured +28 MB, 54 ms import, 9.7/9.8 MB wheels). Opt-in shadow: compose via
+`docker-compose.switchyard.yml`, Helm via `servingPlane.switchyard.mode=shadow` (routing.yaml
+overlay over `SP_CONFIG_OVERLAY_DIR`; render test added). Air-gap wheel-mirror procedure
+and the no-network check (`unshare -rn`, import plus one `run_stream`) are in
+`docs/reference/switchyard-integration.md`. **Remaining:** boot both arches in compose and on
+the DGX lab with `mode: shadow`, and an offline install from the mirror on the target (not
+done here; a local `docker build` was blocked by a pypi timeout).
 
 - Build the API image with the extra, as a variant or as default. Choose by measured image
   size and startup cost.

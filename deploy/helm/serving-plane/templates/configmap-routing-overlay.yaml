@@ -1,0 +1,21 @@
+{{- /*
+Opt-in routing.yaml overlay (B107). Rendered only when
+servingPlane.switchyard.mode is not "off". The api merges it over the image's
+config/routing.yaml via SP_CONFIG_OVERLAY_DIR (app/config/loader.py), so the
+cross-file lint still runs on the merged result. Only shadow is offered here;
+enforce arrives with B108.
+*/ -}}
+{{- $mode := .Values.servingPlane.switchyard.mode | default "off" }}
+{{- if ne $mode "off" }}
+{{- if ne $mode "shadow" }}{{ fail "servingPlane.switchyard.mode must be off or shadow" }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "serving-plane.fullname" . }}-routing-overlay
+  labels:
+    {{- include "serving-plane.labels" . | nindent 4 }}
+data:
+  routing.yaml: |
+    switchyard:
+      mode: {{ $mode | quote }}
+{{- end }}

@@ -1,0 +1,4 @@
+# Merged over the image's config/routing.yaml by SP_CONFIG_OVERLAY_DIR.
+# Shadow: the advisor is consulted and its proposal is recorded; routing is unchanged.
+switchyard:
+  mode: "shadow"

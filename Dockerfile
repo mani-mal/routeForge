@@ -4,7 +4,11 @@
 # endpoints are onboarded at runtime; every LLM call egresses via LiteLLM.
 #
 # EXTRAS build-arg controls which optional dependency groups are installed:
-#   "observability,postgres"            (default) — Langfuse export + Postgres store
+#   "observability,postgres,switchyard" (default) — Langfuse export + Postgres store
+#                                         + NVIDIA Switchyard (~28 MB; inert while
+#                                         routing.switchyard.mode is off, the default)
+#   "observability,postgres"            — without Switchyard (the lint then rejects
+#                                         switchyard.mode != off)
 #   ""                                  — lean API (smallest image)
 #   "observability,postgres,presidio"   — + Presidio (downloads the spaCy model);
 #                                         required for SP_PII_DETECTION=presidio
@@ -24,7 +28,7 @@ WORKDIR /app
 
 # `postgres` (asyncpg) is included by default so the multi-tenant store can use
 # the shared Langfuse Postgres via DATABASE_URL; dev/tests fall back to SQLite.
-ARG EXTRAS="observability,postgres"
+ARG EXTRAS="observability,postgres,switchyard"
 
 # Copy only what's needed to resolve/install deps first, so the (slow) dep
 # layer caches across source-only changes.
