@@ -628,8 +628,7 @@ class Pipeline:
         served = chosen_hops[-1]
         return _chosen_scoring(served.scoring, served.chosen)
 
-    @staticmethod
-    def _adaptive_stamp(ctx: ExecutionPolicyContext) -> dict:
+    def _adaptive_stamp(self, ctx: ExecutionPolicyContext) -> dict:
         """B108: name the app's effective Switchyard mode on the response
         `policy` block -- a content-free enum, and ONLY when it is `enforce`,
         i.e. when the advisor may steer which tier serves this app. `off` and
@@ -637,7 +636,10 @@ class Pipeline:
         deployment without the advisor (the B105 identity). The proposal
         itself (role, tier, evidence, `applied`) stays operator-visible only:
         the trace, the console snapshot and `routing_outcomes`."""
-        if getattr(ctx, "adaptive_routing", "off") == "enforce":
+        # Only claim `enforce` when an advisor actually exists: if it failed to
+        # construct at boot, nothing is being steered and the stamp would lie.
+        if (self._advisor is not None
+                and getattr(ctx, "adaptive_routing", "off") == "enforce"):
             return {"adaptive_routing": "enforce"}
         return {}
 

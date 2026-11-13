@@ -1,0 +1,108 @@
+# Switchyard pilot — evaluation protocol (B109)
+
+**Status:** pre-registered on 2026-11-13, before any arm was run. The margins and gates
+below are fixed now. Changing them after results exist must be recorded in this file, with
+the reason. **Backlog:** B109. **Design:** `docs/architecture/switchyard-advisor-design.md`.
+**Results:** go to `docs/research/switchyard-pilot-results.md`.
+
+## 1. Question
+
+Within RouteForge's feasible set, does NVIDIA NeMo Switchyard's stage router lower the cost
+per successful agent task without a material loss in task success, compared with
+RouteForge's current router?
+
+Hard constraints (zero violations): it never selects outside the feasible set, never falls
+back outside it, never serves below the hard floor, and never sends an `onprem_only`
+request to the cloud.
+
+## 2. Workload
+
+RouteForge can't see whether an agent's task succeeded: agent loops are client-driven. The
+benchmark therefore comes from a client that does see it. The client is **DevFoundry**, a
+coding-agent harness (OpenCode) that already sends real traffic through the DGX lab, about
+2,300 requests a week, mostly `issue-resolver.implement` and `ci-repair.*`.
+
+- **Task set:** a fixed set of N DevFoundry tasks, chosen **before** any arm runs and
+  frozen by id in `docs/research/data/switchyard-pilot-tasks.json`. The target is N = 40,
+  split between `issue-resolver` and `ci-repair`, and taken from tasks DevFoundry already
+  has validators for. They must be synthetic or sample repositories, with no customer code.
+- **Success:** DevFoundry's automatic validation verdict (tests/CI pass), plus a scripted
+  per-task check. A human review verdict isn't practical across four arms and isn't used.
+  RouteForge records neither, so DevFoundry reports them per task, per arm.
+- **Isolation (DevFoundry side):** one DevFoundry project per arm, each bound to that arm's
+  RouteForge eval-app credential. These projects have no research rights, and their tasks
+  are tagged `run_purpose=eval` (DevFoundry F-214) so they stay out of DevFoundry's
+  research dataset.
+- **Repeats:** each task runs once per arm. Run order is randomized per task, so model-load
+  drift isn't confounded with the arm.
+
+## 3. Arms
+
+Each arm is a dedicated RouteForge **eval app** on the DGX lab with its own token. All arms
+share the same deployment, models and policy except for the one setting under test.
+
+| Arm | App policy | Meaning |
+|---|---|---|
+| A. always-efficient | allowed models = the cheap model only (`glm-flash-econ`) | lower bound on cost |
+| B. always-capable | allowed models = the capable model only (`glm-5.3-flash`, mid) | upper bound on quality |
+| C. current router | default (`adaptive_routing: off`) | baseline |
+| D. Switchyard | `adaptive_routing: enforce`, `sample_rate: 1.0` | treatment |
+
+On the lab, `capable` maps to the best allowed tier, which is **mid**, because the lab has
+no frontier model. "Capable" therefore means the strongest model actually deployed there.
+The `dev-foundary` production app is never switched to enforce.
+
+## 4. Metrics
+
+Per arm, overall and per workload:
+- **task success rate**, with a Wilson 95% interval;
+- **total cost** and **cost per successful task**, priced from RouteForge's outcome rows;
+  cost includes every call of the task;
+- **calls per task** and **tokens per task**;
+- **routing overhead**: `sp.switchyard.latency_ms` p50/p99 for arm D;
+- **advisor behaviour** (arm D): role split, the share of calls where the floor or clamp
+  changed the proposal, and the fallback causes;
+- **constraint violations**: selections or fallbacks outside the feasible set, and
+  floor/placement breaches. These come from the trace candidates and the outcome rows.
+
+## 5. Go/no-go (fixed now)
+
+**GO** requires all of the following:
+1. **Zero** constraint violations in arm D.
+2. **Non-inferior success:** D's success rate minus C's is above −10 percentage points at
+   the lower end of a paired bootstrap 90% interval over tasks.
+3. **Cheaper:** D's cost per successful task is below C's, with the upper end of the
+   bootstrap 90% interval on the ratio D/C under 1.0.
+4. **Overhead within budget:** advisor p99 is at most 20 ms.
+
+Anything else is **NO-GO**, or **INCONCLUSIVE** when the intervals are too wide to decide
+at N = 40. INCONCLUSIVE may extend N once, to 80, and the extension is recorded here.
+
+**Why −10 pp.** With N = 40, a tighter margin can't be resolved. The gate is set before
+seeing data, so it can't be tuned toward a result. A GO at this margin justifies only a
+wider, shadow-monitored rollout, not enforce-by-default.
+
+## 6. Procedure
+
+1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
+   `routing.yaml` and the model set. Record the commit SHAs here.
+2. **Create the four eval apps** with the policies in §3.
+3. **Freeze the task list** (§2) and commit it.
+4. **Run DevFoundry** over the task list once per arm, in randomized order, against each
+   arm's token.
+5. **Collect results.** DevFoundry provides the per-task verdicts. RouteForge provides the
+   per-app outcome rows, through the admin export or the shadow report.
+6. **Analyse** with a script committed next to the results, then write
+   `switchyard-pilot-results.md` with the GO / NO-GO / INCONCLUSIVE verdict.
+
+## 7. Threats to validity
+
+- **Small N:** the intervals will be wide. The gate is accordingly modest.
+- **Coding-only workload:** stage routing is tuned for coding agents, so this is its best
+  case, not a general verdict.
+- **Two-tier lab:** with no frontier model, the efficient-vs-capable spread is
+  cheap-vs-mid. That understates both the savings and the quality risk of a real
+  cheap-vs-frontier pool.
+- **Stateless advisor:** B106 is blocked upstream, so no holds are carried across turns.
+  Upstream's own numbers assume them.
+- **Alpha dependency:** 0.4.0a1. The verdict applies to this version only.
