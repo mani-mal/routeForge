@@ -63,6 +63,10 @@ NOT_EVALUABLE = {
         "a candidate file cannot supply the calibrated lower bounds the floor "
         "reads; quality floors are evaluated by the bench's router_floor arm "
         "with split-fitted bounds",
+    "switchyard":
+        "the Switchyard advisor reads each request's message and tool history, "
+        "which a bench case does not carry; it is evaluated by B109's agentic "
+        "harness, not by a candidate file",
 }
 
 
