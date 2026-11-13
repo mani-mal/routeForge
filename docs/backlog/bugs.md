@@ -236,7 +236,16 @@ unambiguous. Check UI strings and the drawio diagram for the same codename.
 
 **Accept when:** `grep -ri switchyard` hits only references to NVIDIA's project.
 
-## B102 — SPEC (Switchyard S1): where the advisor decides, and what it may see  🔴 OPEN
+## B102 — SPEC (Switchyard S1): where the advisor decides, and what it may see  ✅ RESOLVED (2026-11-12, signed off)
+
+**Resolved.** The spec is [`docs/superpowers/specs/2026-11-12-switchyard-advisor-design.md`](../superpowers/specs/2026-11-12-switchyard-advisor-design.md).
+The owner decided: the plain role mapping (`efficient → cheap`, `capable → frontier`, cap
+through `switchyard.capable_tier`, clamped by the unchanged floor and best-allowed logic),
+and the exact pin `0.4.0a1` for B103–B105, with enforce for real apps waiting on a final
+release. The advisor hands Switchyard role placeholders, never model ids. It replaces only
+`complexity_tier` in `Router._select`'s target `max()`. It runs stateless with no forwarded
+headers until upstream exposes caller-owned `State` in Python (B106 blocked on upstream).
+
 
 **Deliver** `docs/superpowers/specs/<date>-switchyard-advisor-design.md`. It must answer:
 - **Seam.** An async advisor call in the pipeline after step 5 and before `Router.select`.
