@@ -112,6 +112,11 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   `failure_class` (`none | agent | infra`), cross-checked against RouteForge outcome rows for
   those sessions. Exclusions are reported with their count. **If more than 10% of specs are
   excluded, the run is INCONCLUSIVE.**
+- **Classification is fixed in advance, with no post-hoc reclassification.** Infra wins on
+  disagreement, and anything unmapped counts as infra. For ci-repair, a row is infra if
+  either step is. **Timeouts count as `agent`**, because a slow model is part of that arm's
+  behaviour. The one exception is mechanical: a session whose RouteForge outcome rows show
+  `backend_failed`, `no_eligible` or a 5xx is infra.
 - **Not analysed:** the calibration specs and the two arm C smoke sessions, all listed under
   `calibration_sessions` in the frozen task JSON.
 - **No deploys during the run window.** Neither RouteForge nor DevFoundry is deployed while
