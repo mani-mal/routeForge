@@ -24,6 +24,11 @@ def _advise(advisor, messages):
 
 
 def _advisor(**cfg) -> SwitchyardAdvisor:
+    # Contract tests pin WHAT the advisor decides, not how fast: under a loaded
+    # parallel test run the 20 ms production default can expire and turn a
+    # decision into a `timeout` fallback. Tests that exercise the timeout pass
+    # their own small `timeout_ms`.
+    cfg.setdefault("timeout_ms", 2000)
     return SwitchyardAdvisor(SwitchyardCfg(mode="shadow", **cfg))
 
 

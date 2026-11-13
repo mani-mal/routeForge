@@ -31,9 +31,10 @@ SSN = "123-45-6789"
 
 def settings_with(mode: str, *, semantic_cache: bool = False, timeout_ms: int | None = None):
     s = load_settings()
-    sy_update: dict[str, Any] = {"mode": mode}
-    if timeout_ms is not None:
-        sy_update["timeout_ms"] = timeout_ms
+    # A generous default so a loaded parallel run can't turn a decision into a
+    # `timeout` fallback; tests of the timeout path pass their own value.
+    sy_update: dict[str, Any] = {"mode": mode,
+                                 "timeout_ms": 2000 if timeout_ms is None else timeout_ms}
     sy = s.routing.switchyard.model_copy(update=sy_update)
     s = s.model_copy(update={"routing": s.routing.model_copy(update={"switchyard": sy})})
     if semantic_cache:
