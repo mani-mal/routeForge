@@ -81,6 +81,15 @@ def test_field_bounds():
         SwitchyardCfg(picker="nope")
 
 
+def test_capable_tier_defaults_to_frontier_and_accepts_mid_only():
+    """B103 / design §3: `capable` maps to frontier unless capped at mid."""
+    assert SwitchyardCfg().capable_tier == "frontier"
+    assert SwitchyardCfg(capable_tier="mid").capable_tier == "mid"
+    for bad in ("cheap", "strong", ""):
+        with pytest.raises(ValueError):
+            SwitchyardCfg(capable_tier=bad)
+
+
 def test_switchyard_key_is_routing_owned():
     from app.config.lint import OWNED_KEYS
     assert "switchyard" in OWNED_KEYS["routing"]

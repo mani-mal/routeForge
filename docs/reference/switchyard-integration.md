@@ -55,6 +55,7 @@ it; in any other file the lint fails with `CONCERN_IN_WRONG_FILE`). An absent bl
 | `confidence_threshold` | float 0..1, default `0.5` | Minimum advisor confidence to act on. |
 | `timeout_ms` | int > 0, default `20` | Advisor call budget. |
 | `classifier` | mapping or null, default null | Not allowed until B111. |
+| `capable_tier` | `mid` \| `frontier`, default `frontier` | Tier a `capable` proposal maps to (`efficient` always maps to `cheap`). The router's risk floor and best-allowed clamp still apply afterwards (design §3). |
 
 ## Lint codes
 

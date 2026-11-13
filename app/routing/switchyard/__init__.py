@@ -11,9 +11,11 @@ Separation rule (B100). Switchyard (PyPI ``nemo-switchyard``, import name
   fails the build if any other module does. An upstream release therefore
   changes this package and its contract tests, nothing else.
 
-As of B100 this package holds only the version contract below. It does not
-import Switchyard and does nothing at request time; the shadow and enforce
-modes arrive with B105/B108 and the contract suite with B110.
+B100 added the version contract below. B103 added the adapter
+(`advisor.py`, `convert.py`, `evidence.py`): `SwitchyardAdvisor` imports
+Switchyard lazily, only when constructed, so this package imports cleanly
+without the extra. Nothing calls it at request time yet; the shadow and
+enforce modes arrive with B105/B108 and the contract suite with B110.
 
 See docs/reference/switchyard-integration.md,
 docs/backlog/bugs.md (B100, B110) and
@@ -60,3 +62,25 @@ def is_supported(version: str) -> bool:
     """True if ``version`` is inside SUPPORTED; unparseable versions are not."""
     key = _key(version)
     return key is not None and _LOWER <= key < _UPPER
+
+
+# Re-exported last: advisor.py imports `installed_version` from this module.
+from .advisor import (  # noqa: E402
+    ROLE_MODELS,
+    AdvisorResult,
+    SwitchyardAdvisor,
+    SwitchyardProposal,
+    SwitchyardUnavailable,
+)
+
+__all__ = [
+    "DISTRIBUTION",
+    "ROLE_MODELS",
+    "SUPPORTED",
+    "AdvisorResult",
+    "SwitchyardAdvisor",
+    "SwitchyardProposal",
+    "SwitchyardUnavailable",
+    "installed_version",
+    "is_supported",
+]
