@@ -96,7 +96,8 @@ Edit these in `routeforge/values.yaml` (or in the wizard's Values step):
 | `global.storageClassName` | your PCAI StorageClass | if no cluster default |
 | `thirdPartyRegistry` | Harbor mirror prefix | **air-gapped** PCAI (no internet for langfuse/postgres/etc.); re-mirror MinIO under the `quay.io/minio/*` path (images resolve to `<reg>/quay.io/minio/minio` and `.../mc`) |
 | `credentials.adminPassword` | a real password, or leave empty | optional: empty (default) => the chart generates one and keeps it across upgrades; `changeme` is refused |
-| `servingPlane.policy.piiDetection` | `regex` (default) or `presidio` | `presidio` needs an API image built with `EXTRAS=observability,postgres,presidio` |
+| `servingPlane.policy.piiDetection` | `regex` (default) or `presidio` | `presidio` needs an API image built with `EXTRAS=observability,postgres,switchyard,presidio` |
+| `servingPlane.switchyard.mode` | `off` (default) or `shadow` | optional Switchyard shadow advisor; renders a `routing.yaml` overlay ConfigMap and sets `SP_CONFIG_OVERLAY_DIR`. The default image already includes the `switchyard` extra (this chart pulls prebuilt images, it builds none); `enforce` is refused until B108. See `docs/reference/switchyard-integration.md` |
 
 Everything else is demo-safe as shipped: CPU-only (no GPU), regex PII detection
 (the default image has no Presidio), compression off. No inference is deployed; onboard
@@ -355,7 +356,7 @@ the chart:
   is for event uploads only — never point CCR at it.
 - **Air-gapped installs.** Mirror the `langfuse.images.*` refs into Harbor and
   set `thirdPartyRegistry`. The default detector is `regex`; for `presidio`
-  build the API image with `EXTRAS=observability,postgres,presidio` (bakes the spaCy model).
+  build the API image with `EXTRAS=observability,postgres,switchyard,presidio` (bakes the spaCy model).
 - **Verify against current HPE docs at deploy time** — the ezua contract
   (gateway name, required labels) can change between AI Essentials versions.
   This bundle targets the AI Essentials 1.9.x+ Import Framework.

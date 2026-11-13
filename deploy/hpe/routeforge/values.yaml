@@ -113,9 +113,16 @@ ezua:
 # PII mode, compression, providers — all switchable here with no image rebuild.
 # ---------------------------------------------------------------------------
 servingPlane:
+  # Optional NVIDIA Switchyard routing advisor (B107). Off by default. "shadow"
+  # renders a routing.yaml overlay (templates/routing-overlay.yaml) mounted at
+  # /etc/routeforge/config-overlay and sets SP_CONFIG_OVERLAY_DIR; the default
+  # api image (EXTRAS includes `switchyard`) already contains the package.
+  # "enforce" is refused at render time until B108.
+  switchyard:
+    mode: "off"        # off | shadow
   policy:
     # regex | presidio | off. Default is regex: the default image build
-    # (EXTRAS="observability,postgres") does NOT include Presidio or its spaCy
+    # (EXTRAS="observability,postgres,switchyard") does NOT include Presidio or its spaCy
     # model. `presidio` needs an api image built with
     # EXTRAS=observability,postgres,presidio (see the Dockerfile), otherwise the
     # api fails to start.
