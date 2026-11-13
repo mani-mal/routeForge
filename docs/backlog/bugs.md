@@ -620,7 +620,35 @@ The first use is a DGX lab evaluation app for B109, set through the lab's raw ma
 A deterministic fixture also shows behaviour after an endpoint failure is
 policy-compliant.
 
-## B109 — EVAL (Switchyard P2a): go/no-go evidence  🔴 OPEN
+## B109 — EVAL (Switchyard P2a): go/no-go evidence  🟡 IN PROGRESS
+
+**Status 2026-11-13.**
+- **Protocol:** pre-registered in `docs/research/switchyard-pilot-protocol.md`. DevFoundry
+  coding tasks are the benchmark, run against four eval apps on the DGX lab, at 0.42.0 with
+  a lab ceiling of `enforce`.
+- **Eval apps:** `b109-a-efficient`, `b109-b-capable`, `b109-c-router` and
+  `b109-d-switchyard` are created. They mirror `dev-foundary`'s policy, minus the aliases,
+  and their tokens are in the k8s Secret `routeforge-b109-eval-tokens`.
+- **Cheap model:** `qwen38-cheap-b109`, onboarded through `alias-proxy-qwen` and restricted to
+  the four eval apps. `glm-flash-econ` turned out to be a price alias of the capable model.
+- **Live check:** arm D escalates a failing-tests turn to mid, where arm C stays cheap.
+- **Next:** DevFoundry builds a per-arm project binding with `model: "auto"` (their F-909)
+  plus `run_purpose=eval` (F-214), then runs the frozen task set.
+
+## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  🔴 OPEN
+
+**Found 2026-11-13.** In the 14 days to 2026-11-13, every non-eval request on the DGX lab named
+a model: `dev-foundary` pins all roles through `model_aliases`. A pinned request has no tier
+choice, but shadow still records a proposal and `agreed=false` (for example, `efficient`/`cheap`
+against a pinned `glm-5.3-flash`). That reads as disagreement when the advisor was never in
+play, and it skews the B105 agreement and counterfactual report.
+
+**Fix:**
+- Skip advising when the request pins a model, recording it as `fallback_cause: pinned` or
+  similar, and never as a proposal.
+- Exclude pinned rows from `--switchyard-report`.
+- Note it in `switchyard-integration.md`.
+
 
 - **Offline.** Add `always_capable`, `always_efficient`, `random_two` and `switchyard_stage`
   baselines to FeasibleRouteBench / `app/eval/strategies.py`, and compare them with the
