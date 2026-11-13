@@ -180,6 +180,10 @@ mechanism (a `routing.yaml` merged over the shipped one; the lint runs on the me
   `SP_CONFIG_OVERLAY_DIR`. The chart offers `off | shadow` only; `enforce` arrives with B108.
   If you already set `SP_CONFIG_OVERLAY_DIR` through `extraEnv`, put the `switchyard:` block
   in your own `routing.yaml` overlay instead.
+- **HPE PCAI chart (`deploy/hpe/routeforge`):** `--set servingPlane.switchyard.mode=shadow`.
+  Same shape: `routeforge-routing-overlay` ConfigMap mounted at `/etc/routeforge/config-overlay`,
+  `SP_CONFIG_OVERLAY_DIR` set, `off | shadow` only. The chart pulls prebuilt images, so the
+  default image's `switchyard` extra is what it runs.
 
 ### Air-gapped install
 

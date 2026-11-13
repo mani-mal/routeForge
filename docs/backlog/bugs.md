@@ -426,7 +426,8 @@ survives a restart, and two apps with the same session id never share state.
 **Shipped:** `switchyard` is in the default image extras (Dockerfile, compose, Spark compose,
 Helm default; measured +28 MB, 54 ms import, 9.7/9.8 MB wheels). Opt-in shadow: compose via
 `docker-compose.switchyard.yml`, Helm via `servingPlane.switchyard.mode=shadow` (routing.yaml
-overlay over `SP_CONFIG_OVERLAY_DIR`; render test added). Air-gap wheel-mirror procedure
+overlay over `SP_CONFIG_OVERLAY_DIR`; render test added). The HPE PCAI chart (`deploy/hpe/routeforge`) has the same
+switch, `servingPlane.switchyard.mode`, with render tests. Air-gap wheel-mirror procedure
 and the no-network check (`unshare -rn`, import plus one `run_stream`) are in
 `docs/reference/switchyard-integration.md`. **Remaining:** boot both arches in compose and on
 the DGX lab with `mode: shadow`, and an offline install from the mirror on the target (not

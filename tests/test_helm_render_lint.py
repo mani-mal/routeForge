@@ -184,3 +184,33 @@ def test_switchyard_enforce_is_not_offered_by_the_chart():
         capture_output=True, text=True)
     assert proc.returncode != 0
     assert "off or shadow" in proc.stderr
+
+
+def test_hpe_switchyard_off_by_default_shadow_overlay_and_enforce_refused():
+    """B107: the HPE chart has the same opt-in shadow switch as serving-plane."""
+    def overlay_cms(docs):
+        return [d for d in _kind(docs, "ConfigMap") if "routing.yaml" in d.get("data", {})]
+
+    def api(docs):
+        dep = next(d for d in _kind(docs, "Deployment")
+                   if d["metadata"]["name"].endswith("api"))
+        return dep["spec"]["template"]["spec"]
+
+    off = _template(HPE)
+    assert overlay_cms(off) == []
+    assert "SP_CONFIG_OVERLAY_DIR" not in {e["name"] for e in api(off)["containers"][0]["env"]}
+
+    on = _template(HPE, "--set", "servingPlane.switchyard.mode=shadow")
+    cms = overlay_cms(on)
+    assert len(cms) == 1
+    assert yaml.safe_load(cms[0]["data"]["routing.yaml"]) == {"switchyard": {"mode": "shadow"}}
+    spec = api(on)
+    env = {e["name"]: e.get("value") for e in spec["containers"][0]["env"]}
+    assert env["SP_CONFIG_OVERLAY_DIR"] == "/etc/routeforge/config-overlay"
+    assert any(v["name"] == "routing-overlay" for v in spec["volumes"])
+
+    proc = subprocess.run(
+        ["helm", "template", "rel", str(HPE), "--set", "servingPlane.switchyard.mode=enforce"],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "off or shadow" in proc.stderr
