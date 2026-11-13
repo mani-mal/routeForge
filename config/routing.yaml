@@ -141,3 +141,4 @@ quality_floors:
 #   confidence_threshold: 0.5    # 0..1
 #   timeout_ms: 20               # > 0
 #   classifier: null
+#   capable_tier: frontier       # mid | frontier: the tier a `capable` proposal maps to

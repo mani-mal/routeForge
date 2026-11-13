@@ -149,6 +149,10 @@ class SwitchyardCfg(BaseModel):
     confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     timeout_ms: int = Field(default=20, gt=0)
     classifier: dict | None = None
+    # B103 (design §3): the tier a `capable` proposal maps to. `efficient`
+    # always maps to `cheap`. The router still applies the risk floor and the
+    # best-allowed clamp afterwards; this only caps the advisor's own ask.
+    capable_tier: Literal["mid", "frontier"] = "frontier"
 
     @field_validator("mode", mode="before")
     @classmethod

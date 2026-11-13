@@ -274,7 +274,23 @@ headers until upstream exposes caller-owned `State` in Python (B106 blocked on u
 
 **Accept when:** the owner signs off. No code.
 
-## B103 — FEATURE (Switchyard S2): the adapter  🔴 OPEN
+## B103 — FEATURE (Switchyard S2): the adapter  ✅ RESOLVED (2026-11-12, feat/b103-switchyard-adapter)
+
+**Resolved.** What shipped differs from the original sketch below. The entry point is
+`SwitchyardAdvisor.advise(messages) -> AdvisorResult`, with no `roles` and no `state`:
+- **Role placeholders.** Per the B102 spec, Switchyard gets role placeholders only. The
+  router maps the role to a tier (`efficient → cheap`, `capable → switchyard.capable_tier`).
+- **Result.** It is either a content-free `SwitchyardProposal` or a fallback with
+  `fallback_cause` (`timeout | error | unconvertible | invalid_role | routing_call_refused`).
+- **Refused calls.** Any routing-time call is refused, and it forces a fallback even when
+  upstream recovers to a valid `Done`.
+- **No headers.** The advisor sends `headers=None`. A test shows a client session header
+  would otherwise create a hold.
+- **Evidence allowlist.** Only `source` (a closed enum), `confidence` and `threshold`.
+- **Latency.** Measured at about 0.3–1.7 ms.
+- **Rust logging.** The Rust core's `tracing` events reach neither Python logging nor
+  stderr on this path.
+
 
 In `app/routing/switchyard/`, add `SwitchyardAdvisor.propose(messages, roles, *, state) ->
 SwitchyardProposal | None`. It builds the algorithm once from config and reuses the handle.
