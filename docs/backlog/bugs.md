@@ -461,7 +461,7 @@ here: a live Langfuse server rendering the tags (the attribute is the SDK's own)
 `sp.switchyard.*` metadata, and a property test feeds random PII-shaped content through the advisor and finds
 none of it in any trace attribute, outcome row or log line.
 
-## B105 — FEATURE (Switchyard P1): shadow mode  🟡 PARTIAL
+## B105 — FEATURE (Switchyard P1): shadow mode  ✅ RESOLVED (2026-11-12, feat/b105-advisor-report)
 
 **Shipped (2026-11-12, feat/b105-switchyard-shadow).** With `routing.switchyard.mode:
 shadow`, `create_app()` builds one `SwitchyardAdvisor` and the pipeline calls it once per
@@ -480,9 +480,14 @@ non-stream and stream traffic, including an `onprem_only` high-risk request, giv
 backend calls, served models, client response bodies (as-is), usage rows, and outcome rows
 apart from the advisor columns. The six `switchyard_*` ALTERs must run before rolling the
 image in every mode, including `off`.
-**Remaining:** (1) the policy-simulator / `routing_outcomes` report of the agreement rate
-and the counterfactual cost of following the advisor, per app and per workload (the
-`switchyard_*` columns are its input). The overhead measurement is done: measured on the
+**Resolved (2026-11-12, feat/b105-advisor-report):** `scripts/policy_simulate.py
+--switchyard-report` writes `switchyard.json` + `switchyard.md` from the `switchyard_*`
+columns: agreement per app and workload, role split, fallback causes, rows without advice,
+and the counterfactual cost of following the advisor with bootstrap ranges. It is a
+fixed-feature replay (tier, model, cost; not task success, which is B109) that applies the
+advisor tier through the real `Router.select` via a replay-only synthetic complexity, so
+the floor and residency clamp hold and no live router code changed. See
+`docs/reference/policy-simulator.md` §12. The overhead measurement is done: measured on the
 DGX H200 test pod (2026-11-12, real `nemo-switchyard 0.4.0a1`, warm, 2000 calls per row):
 
 | Tool turns | p50 | p99 | max |
