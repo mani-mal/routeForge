@@ -1614,6 +1614,15 @@ routed request and the proposal is only recorded (`switchyard_*` columns,
    the fallback-cause breakdown (`timeout`, `error`, ...), and the rows without advice —
    split into advisor fallbacks and rows where the advisor never ran (mode `off`, or rows
    from before the six columns existed, which are all null and are handled).
+   **Pinned rows are excluded (B115).** A request that named a model (a slug, or an alias
+   resolved to one) gave the router no tier choice, so the advisor's view of it is not a
+   disagreement. Such rows are counted on their own (`pinned`, shown as "pinned: N
+   (excluded)") and left out of the agreement rate, the role split, the fallback causes,
+   the rows without advice, the counterfactual and the ranges. A row is pinned when its
+   `switchyard_fallback_cause` is `pinned` (written since B115), or — for rows written
+   before B115, which recorded a proposal or fallback on a pinned request anyway — when
+   `requested_model` is set and the advisor ran (`switchyard_mode` is set). A pinned row
+   where the advisor never ran stays "advisor not run".
 2. **The counterfactual cost of following it.** Every advised row is replayed through the
    real `feasible_set` -> `Router.select` twice on the snapshot as exported: as recorded
    (the baseline), and with the advisor's tier as the tier target. The cost is compared on
@@ -1653,7 +1662,7 @@ replay's fidelity as in §5. Only content-free columns are read.
 
 `switchyard.json` has `rows` (simulated and excluded, as §4.1), `modes`, `baseline` (the
 §5 fidelity block), and `totals`, `by_app`, `by_workload`, each holding `agreement`
-(`rows`, `advised`, `advised_served`, `agreed`, `disagreed`, `agreement`, `role`,
+(`rows`, `pinned`, `advised`, `advised_served`, `agreed`, `disagreed`, `agreement`, `role`,
 `fallback_cause`, `without_advice`) and `counterfactual` (`replayed`, `both_routed`,
 `cost_usd.{baseline,advisor,delta,delta_share}`, `recorded_cost_usd`, `tier_vs_baseline`,
 `model_changed`, `held_above_proposal`, `clamped_below_proposal`, `newly_rejected`,

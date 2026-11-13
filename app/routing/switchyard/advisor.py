@@ -61,8 +61,12 @@ if TYPE_CHECKING:
     from app.config.schema import SwitchyardCfg
 
 Role = Literal["efficient", "capable"]
+# `pinned` (B115) is never produced by `advise()`: the pipeline records it
+# without calling the advisor when the request names a specific model, so
+# there is no tier choice to advise on.
 FallbackCause = Literal[
-    "timeout", "error", "unconvertible", "invalid_role", "routing_call_refused"
+    "timeout", "error", "unconvertible", "invalid_role", "routing_call_refused",
+    "pinned",
 ]
 
 ROLES: frozenset[str] = frozenset(get_args(Role))

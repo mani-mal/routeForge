@@ -104,6 +104,19 @@ unconvertible message, an invalid role or a requested routing-time call becomes 
 with a cause. If the advisor or the recording code raises anyway, the pipeline logs at ERROR
 (the exception type only, never the messages) and the request continues unchanged.
 
+**Pinned requests (B115).** When the request names a model instead of `auto` (a slug, or a
+per-app `model_aliases` alias, which `routes.py` resolves to its slug before the gate), the
+router has no tier choice: the feasible set's pin stage leaves only that model. The advisor
+would be answering a question nobody asked, and its proposal would read as a disagreement
+(`agreed=false`) in the shadow data and the B105 report. So the pipeline does **not call the
+advisor** (no latency is spent) and records a fallback with cause `pinned`: content-free, no
+role or tier, `applied` false, `agreed` null, Langfuse tag `switchyard:fallback`. The signal
+is `ctx.requested_model` (non-null for anything but `auto`, after alias resolution), the
+same one the router's pin stage reads. It applies in `shadow` and `enforce` alike; `off`
+still records nothing. A `pinned` record carries no `version` / `algorithm` either, since no
+advisor ran. The `--switchyard-report` counts these rows as `pinned` and excludes them from
+the agreement rate and the counterfactual (policy-simulator.md §12).
+
 ### What is recorded, and where to see it
 
 All values come from the allowlisted `AdvisorResult` record (ids, enums, numbers, bools).
@@ -176,7 +189,7 @@ behaves exactly like `shadow`: recorded with `mode: enforce`, `applied: false`.
 
 **`applied`.** True when the proposal was passed to the router; false in `shadow`, for an
 unsampled `enforce` request, on any fallback (timeout, error, invalid role, unconvertible,
-refused routing call — today's routing) and when a B80 floor decided. `agreed` is
+refused routing call, pinned — today's routing) and when a B80 floor decided. `agreed` is
 unchanged: proposal tier == served tier.
 
 **What the client sees.** The response `policy` block names `"adaptive_routing":
