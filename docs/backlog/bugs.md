@@ -238,7 +238,7 @@ unambiguous. Check UI strings and the drawio diagram for the same codename.
 
 ## B102 — SPEC (Switchyard S1): where the advisor decides, and what it may see  ✅ RESOLVED (2026-11-12, signed off)
 
-**Resolved.** The spec is [`docs/superpowers/specs/2026-11-12-switchyard-advisor-design.md`](../superpowers/specs/2026-11-12-switchyard-advisor-design.md).
+**Resolved.** The spec is [`docs/architecture/switchyard-advisor-design.md`](../architecture/switchyard-advisor-design.md).
 The owner decided: the plain role mapping (`efficient → cheap`, `capable → frontier`, cap
 through `switchyard.capable_tier`, clamped by the unchanged floor and best-allowed logic),
 and the exact pin `0.4.0a1` for B103–B105, with enforce for real apps waiting on a final
