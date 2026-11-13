@@ -190,7 +190,9 @@ the audit trail in that sweep's task report.
 > **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
 > B110 starts as soon as B100 lands. B111 is gated on B109's go decision. B112 is optional.
 
-## B100 — FEATURE (Switchyard S0): dependency contract — upstream stays separate  🔴 OPEN
+## B100 — FEATURE (Switchyard S0): dependency contract — upstream stays separate  ✅ RESOLVED (2026-11-12, feat/b100-switchyard-dependency-contract)
+
+**Resolved.** Shipped the contract only; no routing behaviour. Optional extra `switchyard = ["nemo-switchyard==0.4.0a1"]` (exact pin; moves to the 0.4.x final when released) with `uv.lock` updated; adapter package `app/routing/switchyard/` (version helpers, `SUPPORTED`, the separation rule); AST import-guard test `tests/routing/switchyard/test_import_guard.py`; optional `switchyard:` block on `RoutingCfg` (default `mode: off`, routing-owned in the lint ownership map); lint codes `SWITCHYARD_NOT_INSTALLED`, `SWITCHYARD_VERSION_UNSUPPORTED`, `SWITCHYARD_ALGORITHM_UNKNOWN`, all inert when `mode: off`; `docs/reference/switchyard-integration.md` and a `NOTICE` entry. Nothing is wired at runtime until B105/B108.
 
 **Shape.**
 - Add an optional extra `routeforge[switchyard]` with an **exact** pin `nemo-switchyard==0.4.x`.
