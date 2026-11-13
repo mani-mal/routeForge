@@ -636,6 +636,31 @@ policy-compliant.
 - **Next:** DevFoundry builds a per-arm project binding with `model: "auto"` (their F-909)
   plus `run_purpose=eval` (F-214), then runs the frozen task set.
 
+## B116 — A truncated completion that the backend labels `tool_calls` reaches the client as `tool_calls`  🔴 OPEN
+
+**Found 2026-11-13 (DevFoundry, DGX lab).** Four `glm-5.3-flash` calls had
+`completion_tokens == max_tokens == 32000` but `finish_reason = tool_calls`:
+`req-432738e5…`, `req-3dd5e3f4…`, `req-b4052ac7…`, `req-62c54470…`. vLLM's `glm47` tool parser
+found a tool call in the truncated output and reported `tool_calls`. RouteForge forwards the
+backend's reason faithfully, and the pattern predates B113 (11-12 00h), so it isn't a B113
+regression. An agent client still gets a cut-off turn labelled as a complete tool call.
+
+**Fix:** in `client_finish_reason`, report `length` when `completion_tokens >= the request's
+max_tokens` (or the backend's effective cap), whatever the backend's label. Add a test per path,
+as in B113.
+
+**Timing:** not deployed during the B109 run window, to keep the system fixed.
+
+## B117 — `backend_failed` rows don't record why the backend call failed  🔴 OPEN
+
+**Found 2026-11-13.** There were 12 `backend_failed` calls on `glm-5.3-flash` between 18:43 and
+21:28Z, each with a ~28–37k-token prompt and `max_tokens` 32000, failing after about 5 s on a
+single attempt. The cause can't be determined afterwards: the outcome row has no error class,
+the serving api pod had been replaced, and vLLM keeps no request log.
+
+**Fix:** record a content-free error class on the outcome row and the trace: the exception
+type, HTTP status, and timeout vs connect vs 4xx vs 5xx. Never the message body.
+
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
 **Resolved.** `Pipeline._advise` no longer calls the advisor when `ctx.requested_model` is
