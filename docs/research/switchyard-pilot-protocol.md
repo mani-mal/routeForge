@@ -269,4 +269,11 @@ shared with concurrent lab traffic, not the advisor's own cost.
   agents never see the checker or the hidden tests; binary patches and suspicious names are
   refused or flagged for blind review; and success also requires visible validation. The
   risk is symmetric across arms. It was accepted rather than rewriting all 44 hidden suites.
+- **The capable model's long-context repetition.** On the lab, about 0.3–0.4% of
+  `glm-5.3-flash` calls run away to the 32k output cap (degenerate repetition, visible as
+  speculative-decoding acceptance of 1.0). The rate per call is steady since 11-11, and the
+  server is unchanged and lightly loaded. It is treated as a property of the capable model
+  wherever it serves (B, C, and D's mid calls), not as infrastructure. Some of those
+  truncations are labelled `tool_calls` by vLLM rather than `length` (B116). That isn't
+  fixed during the run, so the system stays fixed.
 - **Alpha dependency:** 0.4.0a1. The verdict applies to this version only.
