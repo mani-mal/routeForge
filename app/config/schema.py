@@ -1,5 +1,6 @@
 import datetime
 import logging
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -134,6 +135,29 @@ class QualityFloorsCfg(BaseModel):
         return v
 
 
+class SwitchyardCfg(BaseModel):
+    """Optional NVIDIA Switchyard advisor (B100). An absent block means `off`.
+
+    Only the dependency contract exists today: shadow/enforce are wired by
+    B105/B108. The config lint (SWITCHYARD_*) checks the install and the
+    algorithm only when `mode != off`.
+    """
+    # Quoted `off` in YAML: a bare `off` is a boolean (see QualityFloorsCfg).
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    algorithm: str = "stage_router"
+    picker: Literal["efficient_first", "capable_first"] = "efficient_first"
+    confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    timeout_ms: int = Field(default=20, gt=0)
+    classifier: dict | None = None
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _yaml_bool_mode(cls, v):
+        if v is False:
+            return "off"
+        return v
+
+
 class RoutingCfg(BaseModel):
     tiers: list[str]
     score_on: str
@@ -178,6 +202,8 @@ class RoutingCfg(BaseModel):
     # non-positive value (QUALITY_REFRESH_NOT_POSITIVE).
     quality_refresh_s: float = 60.0
     quality_floors: QualityFloorsCfg = QualityFloorsCfg()
+    # Optional Switchyard advisor (B100). Step-6 policy, so routing owns it.
+    switchyard: SwitchyardCfg = SwitchyardCfg()
 
     @model_validator(mode="before")
     @classmethod

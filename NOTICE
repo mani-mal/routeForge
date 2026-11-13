@@ -2,3 +2,9 @@ RouteForge
 Copyright 2026 Mani Malarvannan
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product can optionally use NVIDIA NeMo Switchyard (nemo-switchyard),
+Copyright NVIDIA CORPORATION & AFFILIATES, licensed under the Apache License,
+Version 2.0. It is an optional, unmodified dependency installed from PyPI via
+the `switchyard` extra and is not redistributed in this repository. See the
+NOTICE file shipped with that package.

@@ -13,6 +13,7 @@ from app.policy.merge import PROTECTED_ENTITIES
 from app.policy.enums import PROMPT_RETENTION_VALUES, RAW_SENSITIVE_VALUES
 from app.policy.enums import RESIDENCY as valid_residency
 from app.prompts.store import load_artifact
+from app.routing import switchyard as _switchyard
 from app.routing.strategy import _STRATEGIES as _KNOWN_STRATEGIES
 
 
@@ -214,6 +215,27 @@ def lint_settings(s: Settings) -> list[str]:
         if r.risk_class not in RISK_CLASS:
             errs.append(f"RULE_RISK_CLASS_UNKNOWN {r.risk_class} not in "
                         f"{sorted(RISK_CLASS)}")
+
+    # B100: Switchyard is checked only when switched on, so a deployment
+    # without the optional extra boots unchanged. (The adapter package reads
+    # package metadata; it never imports `switchyard`.)
+    sw = s.routing.switchyard
+    if sw.mode != "off":
+        version = _switchyard.installed_version()
+        if version is None:
+            errs.append(f"SWITCHYARD_NOT_INSTALLED routing.switchyard.mode="
+                        f"{sw.mode!r} but nemo-switchyard is not installed "
+                        f"(install the `switchyard` extra: uv sync --extra switchyard)")
+        elif not _switchyard.is_supported(version):
+            errs.append(f"SWITCHYARD_VERSION_UNSUPPORTED nemo-switchyard "
+                        f"{version} is installed; supported: "
+                        f"{_switchyard.SUPPORTED}")
+        if sw.algorithm != "stage_router" or sw.classifier is not None:
+            errs.append(f"SWITCHYARD_ALGORITHM_UNKNOWN routing.switchyard."
+                        f"algorithm={sw.algorithm!r} classifier="
+                        f"{'set' if sw.classifier is not None else 'unset'}; "
+                        f"only `stage_router` without a `classifier` is "
+                        f"allowed until B111")
 
     # One owner per concern. A top-level key another file owns is a boot
     # failure; one nobody owns only warns (a stale key, e.g. a removed switch,

@@ -1584,6 +1584,20 @@ wheels = [
 ]
 
 [[package]]
+name = "nemo-switchyard"
+version = "0.4.0a1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/f8/088042a9e7152402384107a900d252f9aae1a9ad92764b1f866387413929/nemo_switchyard-0.4.0a1.tar.gz", hash = "sha256:8399becc03cc6f77e4885a95f70c0565d9aba27f15bfea6758596fdf81043097", size = 768645, upload-time = "2026-10-29T22:20:19.364Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/38/e1b2473dac6c847d7513c17d75eca220d8a9088b991c5fb73a4934791027/nemo_switchyard-0.4.0a1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1f34de8c0a4626c34b566db8b55c9591acda5121e249b8fffc9010cbe4578d3f", size = 9101897, upload-time = "2026-10-29T22:20:08.381Z" },
+    { url = "https://files.pythonhosted.org/packages/38/82/4e6cefc7db47967f903718d54e7b08b9c48ffbd71f74f3dc06fc37fbe0ee/nemo_switchyard-0.4.0a1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:2c9777180635fceb30ff6144ec03443337fc0ab0e008b9ad25ab6802433214a7", size = 8796148, upload-time = "2026-10-29T22:20:10.886Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/6b/abc7e73629e4d34ad2c923e63996bbdcbb3c96e515c44fdd2b5734688e45/nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a943433bd0294e86942f9c29ffc6ff6ad2717c27619a59dd730635603f1dea12", size = 9841418, upload-time = "2026-10-29T22:20:12.703Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/92/c53d48d794fc11c59c1219f8839f7313fa9d499e75753d22a58407be2535/nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5a63b3d26b49802827dec3ba6a187765c0b6e26b732bf0a16de59f593ad32a9e", size = 9709820, upload-time = "2026-10-29T22:20:14.612Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/95/058f0fbb48670c904fe2c93b8d9959073402293cc6dfbb6ac074b70c2c3f/nemo_switchyard-0.4.0a1-cp310-abi3-win_amd64.whl", hash = "sha256:ae42923283f3b88ebf0a92d3161729654a9987a1208478498e764e06cb8bd7dc", size = 8273177, upload-time = "2026-10-29T22:20:16.372Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/52/7561cc1988733e87fce82df8cf4a52beaa109e6b0bf5eff52661db113f97/nemo_switchyard-0.4.0a1-cp310-abi3-win_arm64.whl", hash = "sha256:6e7517ff21b7c8a4f1617e84e45ed03686ed30c31709c0a6d3be8b8f4a50ae23", size = 7910792, upload-time = "2026-10-29T22:20:17.997Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2473,6 +2487,9 @@ presidio = [
     { name = "presidio-analyzer" },
     { name = "presidio-anonymizer" },
 ]
+switchyard = [
+    { name = "nemo-switchyard" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -2496,6 +2513,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "langfuse", marker = "extra == 'observability'", specifier = ">=3.0" },
     { name = "litellm", specifier = ">=1.93,<2" },
+    { name = "nemo-switchyard", marker = "extra == 'switchyard'", specifier = "==0.4.0a1" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'observability'", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.27" },
     { name = "presidio-analyzer", marker = "extra == 'presidio'", specifier = ">=2.2" },
@@ -2507,7 +2525,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
-provides-extras = ["presidio", "observability", "compression", "postgres", "dspy"]
+provides-extras = ["presidio", "observability", "compression", "postgres", "dspy", "switchyard"]
 
 [package.metadata.requires-dev]
 dev = [

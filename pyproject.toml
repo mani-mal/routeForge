@@ -92,6 +92,13 @@ postgres = ["asyncpg>=0.30"]
 # the request-serving path (see tools/prompt_opt/). Opt-in: `uv sync --extra dspy`.
 dspy = ["dspy-ai>=2.5"]
 
+# NVIDIA NeMo Switchyard routing advisor (B100). Optional, unmodified upstream,
+# EXACT pin; never a core dependency. Only app/routing/switchyard/ may import it.
+# 0.4.0a1 is the only 0.4 build on PyPI; this pin (and SUPPORTED in
+# app/routing/switchyard/__init__.py) moves to the 0.4.x final when released.
+# Opt-in: `uv sync --extra switchyard`.
+switchyard = ["nemo-switchyard==0.4.0a1"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

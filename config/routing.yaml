@@ -128,3 +128,16 @@ quality_refresh_s: 60
 quality_floors:
   mode: "off"   # quoted: bare off is a YAML boolean
   workloads: {}
+
+# Optional NVIDIA Switchyard routing advisor (B100). An absent block == mode off.
+# Requires the `switchyard` extra (`uv sync --extra switchyard`); nothing is
+# wired at runtime yet (shadow/enforce arrive with B105/B108). Left disabled:
+# uncomment and set mode to "shadow" only once the extra is installed.
+# See docs/reference/switchyard-integration.md.
+# switchyard:
+#   mode: "off"                  # off | shadow | enforce (quote it: bare off is a YAML boolean)
+#   algorithm: stage_router      # only stage_router (no classifier) until B111
+#   picker: efficient_first      # efficient_first | capable_first
+#   confidence_threshold: 0.5    # 0..1
+#   timeout_ms: 20               # > 0
+#   classifier: null
