@@ -121,4 +121,11 @@ wider, shadow-monitored rollout, not enforce-by-default.
   cheap-vs-frontier pool.
 - **Stateless advisor:** B106 is blocked upstream, so no holds are carried across turns.
   Upstream's own numbers assume them.
+- **The baseline routes nearly everything to mid for this agent.** In arm C's smoke runs
+  (2026-11-13, sessions `att-64c4…` and `att-e6a4…`, 11 calls, before any arm ran), every
+  call targeted and was served by `glm-5.3-flash`. OpenCode's long system prompt and history
+  put the length-based target at mid on every call. For this workload, C is therefore
+  close to B (always-capable): D's cost gate is in effect measured against an almost
+  all-mid baseline. This is a real property of the current router, recorded here before
+  any results. It doesn't change the gates.
 - **Alpha dependency:** 0.4.0a1. The verdict applies to this version only.
