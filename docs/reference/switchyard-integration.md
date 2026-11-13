@@ -61,6 +61,14 @@ it; in any other file the lint fails with `CONCERN_IN_WRONG_FILE`). An absent bl
 
 ## Shadow mode (B104/B105)
 
+> **Release note (B104/B105, 2026-11-12).** This release adds six `switchyard_*` columns to
+> `routing_outcomes`. Run the six ALTERs in
+> [`routing-outcomes.md`](./routing-outcomes.md) (or `scripts/migrate_app_policies.py`)
+> **before rolling this image, in every mode, including `off`**: the ORM names the columns
+> in every outcome write, so on an unmigrated table every outcome write fails. Serving
+> continues (fail-open, logged as `outcome record failed`) and the B62 boot check warns of
+> the missing columns, but no outcome rows are recorded until the ALTERs run.
+
 Design: [`../architecture/switchyard-advisor-design.md`](../architecture/switchyard-advisor-design.md)
 §4-§9.
 
@@ -101,7 +109,7 @@ high-risk request floored above an `efficient` proposal), and null on a fallback
 |---|---|
 | **Trace (root span)** | `sp.switchyard.mode`, `.role`, `.tier`, `.confidence`, `.agreed`, `.fallback_cause`, `.latency_ms`, `.version`, `.algorithm`. Null values are omitted. Emitted regardless of `capture_io`, like `sp.candidates`. A fallback still carries `version` and `algorithm`. |
 | **Langfuse trace tags** | `langfuse.trace.tags` (the attribute the pinned SDK, langfuse 4.14.1, defines as `LangfuseOtelSpanAttributes.TRACE_TAGS`): `switchyard`, `switchyard:shadow` or `switchyard:enforce`, and `switchyard:agreed`, `switchyard:overridden` or `switchyard:fallback`. A fixed vocabulary (`SWITCHYARD_TAGS` in `app/obs/export.py`); the exporter refuses any other tag. Filter advisor traffic in the Langfuse UI by these tags. Traces go to the same project as always: the app's own, or the shared one. |
-| **DecisionRecord** | `advisor` on the **served** router hop (in the response `trace` and the console's request snapshot): `AdvisorResult.to_record()` (role, tier, confidence, allowlisted evidence, version, algorithm, fallback cause, latency) plus `mode` and `agreed`. Absent on every other hop, and on every record when the advisor did not run. |
+| **DecisionRecord** | `advisor` on the **served** router hop, on the operator surfaces only (the console's request snapshot, the live decision stream); it is removed from the client-bound response `trace` at the end of `_finalize`, so the client body is identical to `off`. The record: `AdvisorResult.to_record()` (role, tier, confidence, allowlisted evidence, version, algorithm, fallback cause, latency) plus `mode` and `agreed`. Absent on every other hop, and on every record when the advisor did not run. |
 | **`routing_outcomes`** | `switchyard_mode`, `switchyard_role`, `switchyard_tier`, `switchyard_confidence`, `switchyard_agreed`, `switchyard_fallback_cause` (nullable; deployed DBs need the ALTERs in [`routing-outcomes.md`](./routing-outcomes.md)). A failed request that reached routing keeps the proposal with `agreed` null. |
 
 Never recorded: the messages, any free-text evidence, client headers. The containment

@@ -113,9 +113,11 @@ ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_alias VARCHAR(64
 **Upgrade: Switchyard advisor columns (B104/B105, 2026-11-12).** Six nullable columns record
 what the Switchyard advisor proposed (§3.2): `switchyard_mode`, `switchyard_role`,
 `switchyard_tier`, `switchyard_confidence`, `switchyard_agreed` and
-`switchyard_fallback_cause`. Null on older rows and whenever the advisor did not run. Same
-failure mode as above if the ALTERs are missed; run them (or `scripts/migrate_app_policies.py`)
-before rolling the image, whatever `routing.switchyard.mode` is.
+`switchyard_fallback_cause`. Null on older rows and whenever the advisor did not run.
+**Release note: run these six ALTERs before rolling this image in EVERY mode, including
+`routing.switchyard.mode: off`.** Otherwise every outcome write fails: serving continues
+(fail-open, logged as `outcome record failed`) and the B62 boot check warns of the missing
+columns, but no rows are recorded until the ALTERs (or `scripts/migrate_app_policies.py`) run.
 
 ```sql
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_mode VARCHAR(16);

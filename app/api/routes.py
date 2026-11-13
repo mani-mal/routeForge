@@ -1491,6 +1491,24 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # streaming must never break serving
         logging.getLogger("serving.obs").exception(
             "bus.publish failed (swallowed)")
+    # B105: the Switchyard advisor record is OPERATOR-visible (the trace and
+    # Langfuse export, the snapshot, the decision bus, routing_outcomes -- all
+    # done above) and never CLIENT-visible: in shadow mode the client body
+    # must be identical to `off`, and the evidence classifies the caller's
+    # own history. Last thing `_finalize` does, and by REPLACEMENT -- a new
+    # list of new dicts -- never in-place mutation: the bus subscribers hold
+    # the original record dicts (the snapshot writer deep-copied already).
+    _strip_advisor(resp)
+
+
+def _strip_advisor(resp: dict) -> None:
+    """Drop `advisor` from every trace record on the client-bound `resp`."""
+    trace = resp.get("trace")
+    if isinstance(trace, list) and any(
+            isinstance(r, dict) and "advisor" in r for r in trace):
+        resp["trace"] = [
+            {k: v for k, v in r.items() if k != "advisor"} if isinstance(r, dict) else r
+            for r in trace]
 
 
 async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",

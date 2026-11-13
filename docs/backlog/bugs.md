@@ -356,7 +356,8 @@ shadow`, `create_app()` builds one `SwitchyardAdvisor` and the pipeline calls it
 routed request, after compression and before the gateway, on both paths, with
 `comp.messages` (post-gate, post-compression). Never on a semantic-cache hit or a gate
 rejection. The proposal is recorded on the trace, the outcome row and the served router
-hop's DecisionRecord (`advisor`), and never changes the target, `complexity`, `min_tier` or
+hop's DecisionRecord (`advisor`, operator surfaces only: stripped from the client-bound
+response so the client body is identical to `off`), and never changes the target, `complexity`, `min_tier` or
 anything the gateway sees. `enforce` is recorded as `enforce` and behaves exactly like
 `shadow` until B108. Advice fails open: an advisor or recording error is logged at ERROR
 and the request continues. With `off` nothing is built or imported. The console decision
@@ -364,8 +365,9 @@ inspector shows "advisor (shadow) proposed <tier> (<role>, <confidence>) · agre
 overridden" beside the served model. Identity test
 (`tests/routing/switchyard/test_shadow_identity.py`): `shadow` and `enforce` vs `off` on
 non-stream and stream traffic, including an `onprem_only` high-risk request, give identical
-backend calls, served models, response bodies, usage rows and outcome rows apart from the
-advisor fields.
+backend calls, served models, client response bodies (as-is), usage rows, and outcome rows
+apart from the advisor columns. The six `switchyard_*` ALTERs must run before rolling the
+image in every mode, including `off`.
 **Remaining:** (1) the policy-simulator / `routing_outcomes` report of the agreement rate
 and the counterfactual cost of following the advisor, per app and per workload (the
 `switchyard_*` columns are its input); (2) advisor overhead p50/p99 measured on the DGX

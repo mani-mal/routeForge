@@ -729,7 +729,7 @@ like `sp.candidates` it is emitted regardless of `capture_io`.
 |---|---|
 | **Trace, root span** — `sp.switchyard.{mode, role, tier, confidence, agreed, fallback_cause, latency_ms, version, algorithm}` | the advisor's record; a key whose value is null is omitted (a fallback has no `role`/`tier`/`confidence`/`agreed`) |
 | **Trace, root span** — `langfuse.trace.tags` | `switchyard`, `switchyard:{shadow\|enforce}`, `switchyard:{agreed\|overridden\|fallback}`: a fixed vocabulary (`SWITCHYARD_TAGS` in `app/obs/export.py`), never free text. The first tags RouteForge sets |
-| **DecisionRecord** — `advisor` on the served router hop (response `trace`, console snapshot) | the same record plus the allowlisted `evidence`; absent from every other hop |
+| **DecisionRecord** — `advisor` on the served router hop (console snapshot, decision stream; never the client response) | the same record plus the allowlisted `evidence`; absent from every other hop |
 | **Outcome row** — `switchyard_*` columns | mode, role, tier, confidence, agreed, fallback cause (see [`routing-outcomes.md`](./routing-outcomes.md)) |
 
 `agreed` means the proposal's tier equals the served hop's `chosen_tier`; `overridden` is

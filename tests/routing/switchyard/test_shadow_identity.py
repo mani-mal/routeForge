@@ -1,6 +1,7 @@
 """B105 identity: `shadow` (and, until B108, `enforce`) changes nothing a
-client, the meter or the router sees -- only the trace, the outcome row and
-the served DecisionRecord's `advisor` field differ from `off`.
+client, the meter or the router sees -- the CLIENT body is identical to `off`
+as-is. Only operator surfaces differ: the trace, the outcome row, and the
+served DecisionRecord's `advisor` field in the console snapshot.
 
 The same fixture traffic is driven through the real `/v1/chat/completions`
 stack twice -- once with `routing.switchyard.mode: off`, once with the mode
@@ -57,7 +58,8 @@ STREAM = [
     {"messages": [{"role": "user", "content": f"my SSN is {SSN}"}], "stream": True},
 ]
 
-# The only places the advisor may show up.
+# The advisor may show up on operator surfaces only (snapshots), never in a
+# client body.
 _ADVISOR_KEYS = frozenset({"advisor"})
 
 
@@ -93,10 +95,11 @@ def _drive(monkeypatch, mode: str) -> dict:
             assert r.status_code == 200, r.text
             frames.append(_sse(r.text))
         snapshots = [c.get(f"/api/requests/{f[0]['id']}").json() for f in frames]
+        body_snapshots = [c.get(f"/api/requests/{b['id']}").json() for b in bodies]
         return {
             "calls": [dict(k) for k in _litellm_fake.CALLS],
             "bodies": bodies, "served": served, "frames": frames,
-            "snapshots": snapshots,
+            "snapshots": snapshots, "body_snapshots": body_snapshots,
             "usage": [columns(u) for u in usage_rows(c)],
             "outcomes": [columns(o) for o in outcomes(c)],
             "spans": [switchyard_attrs(s) for s in root_spans(c)],
@@ -120,11 +123,13 @@ def test_shadow_is_identical_to_off(monkeypatch, mode):
     assert on["calls"] == off["calls"]
     # 2. Same served model on every request.
     assert on["served"] == off["served"]
-    # 3. Response bodies identical, apart from the served hop's `advisor`.
-    assert normalize(on["bodies"], drop=_ADVISOR_KEYS) == normalize(off["bodies"])
+    # 3. Client bodies identical AS-IS (only ids and clocks normalized): the
+    #    advisor record never reaches a client.
+    assert normalize(on["bodies"]) == normalize(off["bodies"])
     assert normalize(on["frames"]) == normalize(off["frames"])
-    assert (normalize(on["snapshots"], drop=_ADVISOR_KEYS)
-            == normalize(off["snapshots"]))
+    #    The operator copies (console snapshots) differ only by `advisor`.
+    assert (normalize(on["snapshots"] + on["body_snapshots"], drop=_ADVISOR_KEYS)
+            == normalize(off["snapshots"] + off["body_snapshots"]))
     # 4. Metering and cost identical.
     assert normalize(on["usage"]) == normalize(off["usage"])
     # 5. Outcome rows identical apart from the switchyard columns.
@@ -140,8 +145,11 @@ def test_shadow_is_identical_to_off(monkeypatch, mode):
         assert f"switchyard:{mode}" in attrs["langfuse.trace.tags"]
     assert all(o["switchyard_mode"] is None for o in off["outcomes"])
     assert all(o["switchyard_mode"] == mode for o in on["outcomes"])
-    for body in off["bodies"]:
+    for body in off["bodies"] + on["bodies"]:
         assert all("advisor" not in rec for rec in body["trace"])
-    for body in on["bodies"]:
-        served = [r for r in body["trace"] if r.get("step") == "router" and r.get("chosen")]
+    for snap in off["snapshots"] + off["body_snapshots"]:
+        assert all("advisor" not in rec for rec in snap["trace"])
+    # The console snapshot (operator surface) DOES carry it, stream and not.
+    for snap in on["snapshots"] + on["body_snapshots"]:
+        served = [r for r in snap["trace"] if r.get("step") == "router" and r.get("chosen")]
         assert served[-1]["advisor"]["mode"] == mode

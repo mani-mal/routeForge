@@ -17,6 +17,7 @@ import string
 import pytest
 
 from tests import _litellm_fake
+from tests.test_admin_api import _login
 from tests.routing.switchyard._shadow_harness import (
     DEMO, client, columns, install_fake, outcomes,
 )
@@ -73,6 +74,8 @@ def test_canary_never_reaches_switchyard_telemetry(monkeypatch, caplog):
                 r = c.post("/v1/chat/completions", headers=DEMO, json=req)
                 assert r.status_code == 200, r.text
                 runs.append((secrets, r.json()))
+            _login(c)
+            snaps = [c.get(f"/api/requests/{body['id']}").json() for _, body in runs]
             spans = c.mem.get_finished_spans()
             rows = [columns(o) for o in outcomes(c)]
 
@@ -80,8 +83,9 @@ def test_canary_never_reaches_switchyard_telemetry(monkeypatch, caplog):
     span_blob = repr([(s.name, dict(s.attributes)) for s in spans])
     rows_blob = repr(rows)
     log_blob = "\n".join(r.getMessage() for r in caplog.records)
-    advisor_blob = repr([[rec.get("advisor") for rec in body["trace"]]
-                         for _, body in runs])
+    # The advisor record lives on the operator snapshot (never the client body).
+    assert all("advisor" not in rec for _, body in runs for rec in body["trace"])
+    advisor_blob = repr([[rec.get("advisor") for rec in snap["trace"]] for snap in snaps])
     # The content really flowed: each canary reached the model (and so the
     # advisor, which is handed the same post-gate messages).
     wire_blob = repr(_litellm_fake.CALLS)
