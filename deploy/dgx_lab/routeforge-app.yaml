@@ -53,7 +53,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: api
-          image: ghcr.io/mani-mal/serving-plane-api:0.40.0
+          image: ghcr.io/mani-mal/serving-plane-api:0.41.0
           ports: [{name: http, containerPort: 8080}]
           env:
           - {name: SP_SERVER_PORT, value: "8080"}
@@ -150,12 +150,19 @@ items:
             httpGet: {path: /health, port: 8080}
             periodSeconds: 5
             failureThreshold: 60
+          # B114: the default 1 s probe timeout restarted the api 48 times in 13 h
+          # (exit 143) while /health itself answers in ~2 ms -- a slow NodePort or
+          # a busy event loop is not a dead process. Give each probe headroom and
+          # require several consecutive liveness misses before a restart.
           readinessProbe:
             httpGet: {path: /health, port: 8080}
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet: {path: /health, port: 8080}
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - {name: config-overlay, mountPath: /etc/routeforge/config-overlay, readOnly: true}
         volumes:
@@ -185,6 +192,10 @@ items:
       model_pool:
         - {name: openrouter-mid,      provider: openrouter, tier: mid,      display_name: "Nemotron 3 Super 120B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-super-120b-a12b:free"}
         - {name: openrouter-frontier, provider: openrouter, tier: frontier, display_name: "Nemotron 3 Ultra 550B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"}
+      # B105/B107: NVIDIA Switchyard advisor in SHADOW -- records what it would
+      # route, changes nothing a client, the meter or the router sees.
+      switchyard:
+        mode: "shadow"
     pricing.yaml: |
       # DGX lab overlay. The pooled ids are FREE variants (billed $0). These are the same
       # models' paid list prices on OpenRouter, USD per 1M tokens, read 2026-10-09, so a $0
@@ -285,7 +296,7 @@ items:
         - name: ghcr-pull
         containers:
         - name: ui
-          image: ghcr.io/mani-mal/serving-plane-ui:0.40.0
+          image: ghcr.io/mani-mal/serving-plane-ui:0.41.0
           ports: [{name: http, containerPort: 80}]
           resources:
             requests: {cpu: "50m", memory: 64Mi}
