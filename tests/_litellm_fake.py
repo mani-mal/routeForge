@@ -73,15 +73,19 @@ class FakeResponse:
 
 def make_response(*, content: str | None = "ok", tool_calls: list[dict] | None = None,
                   prompt_tokens: int = 10, completion_tokens: int = 5,
-                  logprobs: list[float] | None = None) -> FakeResponse:
+                  logprobs: list[float] | None = None,
+                  finish_reason: str | None = None) -> FakeResponse:
     message: dict = {"role": "assistant", "content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
     lp = None
     if logprobs is not None:
         lp = {"content": [{"logprob": v} for v in logprobs]}
+    choice: dict = {"message": message, "logprobs": lp}
+    if finish_reason is not None:   # the backend's own reason (B113 tests)
+        choice["finish_reason"] = finish_reason
     return FakeResponse({
-        "choices": [{"message": message, "logprobs": lp}],
+        "choices": [choice],
         "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
     })
 
@@ -155,7 +159,8 @@ class _FakeStreamChunk:
 
 
 def make_streaming_acompletion(deltas: list[str], *, prompt_tokens: int = 12,
-                               completion_tokens: int = 7):
+                               completion_tokens: int = 7,
+                               finish_reason: str | None = None):
     """Factory for a fake `litellm.acompletion` that STREAMS. Install via
     `monkeypatch.setattr(litellm_backend, "acompletion",
     make_streaming_acompletion([...]))`.
@@ -164,13 +169,16 @@ def make_streaming_acompletion(deltas: list[str], *, prompt_tokens: int = 12,
     `_FakeStreamChunk` per delta (in order), then a terminal usage chunk
     (empty choices + usage) -- exactly the shape
     `LiteLLMBackend.generate_stream` consumes. Records each call's kwargs in
-    the module-level CALLS list so tests can assert `stream=True` etc."""
+    the module-level CALLS list so tests can assert `stream=True` etc.
+    `finish_reason`, when given, is sent on its own chunk before usage."""
     async def _call(**kwargs):
         CALLS.append(kwargs)
 
         async def _gen():
             for d in deltas:
                 yield _FakeStreamChunk(content=d)
+            if finish_reason is not None:
+                yield _FakeStreamChunk(finish_reason=finish_reason)
             yield _FakeStreamChunk(
                 empty_choices=True,
                 usage={"prompt_tokens": prompt_tokens,
@@ -182,12 +190,14 @@ def make_streaming_acompletion(deltas: list[str], *, prompt_tokens: int = 12,
 
 
 def make_streaming_tool_acompletion(items: list, *, prompt_tokens: int = 12,
-                                    completion_tokens: int = 7):
+                                    completion_tokens: int = 7,
+                                    finish_reason: str | None = None):
     """Like `make_streaming_acompletion` but each item is a text delta (str),
     a list of tool-call fragment dicts (``{index, id?, type?, function:
     {name?, arguments?}}``), a float (seconds to sleep), or an
     `asyncio.Event`-free callable invoked for its side effect. Emits a final
-    finish_reason chunk ("tool_calls" if any fragment was sent) then usage."""
+    finish_reason chunk ("tool_calls" if any fragment was sent, unless
+    `finish_reason` overrides it) then usage."""
     async def _call(**kwargs):
         CALLS.append(kwargs)
 
@@ -203,7 +213,8 @@ def make_streaming_tool_acompletion(items: list, *, prompt_tokens: int = 12,
                     await asyncio.sleep(it)
                 elif callable(it):
                     it()
-            yield _FakeStreamChunk(finish_reason="tool_calls" if sent_tools else "stop")
+            yield _FakeStreamChunk(finish_reason=finish_reason or (
+                "tool_calls" if sent_tools else "stop"))
             yield _FakeStreamChunk(
                 empty_choices=True,
                 usage={"prompt_tokens": prompt_tokens,

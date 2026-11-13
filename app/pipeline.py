@@ -14,7 +14,7 @@ from app.gateway.gateway import Gateway
 from app.models import (
     CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
-    Message, Usage, VerificationRecord,
+    Message, Usage, VerificationRecord, client_finish_reason,
 )
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
@@ -1239,6 +1239,8 @@ class Pipeline:
         # message carries `tool_calls` with `content: null` and the choice's
         # finish_reason is "tool_calls" (OpenAI clients switch on this to run
         # their tools and call back). Ordinary answers keep content + "stop".
+        # B113: a backend `length`/`content_filter` wins over both -- one rule,
+        # `client_finish_reason`, shared with every streamed path.
         # `redacted_tool_calls` (not `result.tool_calls`): the client-facing
         # message must carry egress-redacted arguments (Task 2).
         tool_calls = redacted_tool_calls or None
@@ -1246,7 +1248,7 @@ class Pipeline:
             role="assistant",
             content=(text or None) if tool_calls else text,
             tool_calls=tool_calls)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+        finish_reason = client_finish_reason(result.finish_reason, bool(tool_calls))
         return {
             "id": request_id,
             "model": result.model,

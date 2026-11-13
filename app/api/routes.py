@@ -44,7 +44,7 @@ from app.apps.privacy import AppPrivacyProfile
 from app.errors import (
     BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate, PolicyGateError,
 )
-from app.models import ChatRequest, ExecutionPolicyContext
+from app.models import ChatRequest, ExecutionPolicyContext, client_finish_reason
 from app.obs import metrics
 from app.obs.export import export_failure_trace, export_trace, resolve_capture_io
 from app.obs.redact import redacted_copy
@@ -1109,7 +1109,8 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     message = resp["choices"][0]["message"]
     return sse_response(chunk_text(request_id, resp["model"], message["content"] or "",
                                    tool_calls=message.get("tool_calls"),
-                                   usage=_stream_usage(body, resp.get("usage"))))
+                                   usage=_stream_usage(body, resp.get("usage")),
+                                   finish_reason=resp["choices"][0].get("finish_reason")))
 
 
 def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str,
@@ -1632,7 +1633,8 @@ async def _keepalive_stream(request: Request, *, task: "asyncio.Task[dict]",
         message = resp["choices"][0]["message"]
         async for frame in chunk_text(request_id, resp["model"], message["content"] or "",
                                       tool_calls=message.get("tool_calls"),
-                                      usage=_stream_usage(body, resp.get("usage"))):
+                                      usage=_stream_usage(body, resp.get("usage")),
+                                      finish_reason=resp["choices"][0].get("finish_reason")):
             yield frame
     finally:
         # Snapshot before cancel: task.cancel() doesn't flip done() right
@@ -1819,10 +1821,11 @@ def _stream_unverified_response(
                 yield sse_frame(openai_chunk(request_id, model, delta=delta,
                                              created=created))
             meta = get_meta()  # valid only now that `deltas` is fully drained
-            # A truncated tool call ("length") must not read as a clean one.
-            finish = ("length" if streamed_tool_calls
-                      and getattr(get_meta, "finish_reason", None) == "length"
-                      else "tool_calls" if streamed_tool_calls else "stop")
+            # B113: a truncated (or filtered) turn must not read as a clean
+            # one -- text or tool call alike. `get_meta.finish_reason` is the
+            # backend's own reason, set once the stream drained.
+            finish = client_finish_reason(
+                getattr(get_meta, "finish_reason", None), streamed_tool_calls)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -1921,7 +1924,12 @@ def _incremental_verify_response(
                 yield sse_frame(openai_chunk(request_id, model, delta=tail,
                                              created=created))
             meta = get_meta()  # valid only now that `deltas` is fully drained
-            yield sse_frame(openai_chunk(request_id, model, finish_reason="stop",
+            # B113: the backend's `length`/`content_filter` reaches the client.
+            # No tool calls on this path (a tool turn floors to
+            # verified_then_stream), so the fallback is "stop".
+            finish = client_finish_reason(
+                getattr(get_meta, "finish_reason", None), False)
+            yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
             if usage is not None:   # B53: only when the client asked for it
@@ -2045,7 +2053,9 @@ async def _finalize_stream(
         if tool_calls:
             message["tool_calls"] = tool_calls
         resp["choices"] = [{"index": 0, "message": message,
-                            "finish_reason": "tool_calls" if tool_calls else "stop"}]
+                            "finish_reason": client_finish_reason(
+                                getattr(get_meta, "finish_reason", None),
+                                bool(tool_calls))}]
         # Make the trace's VerificationRecord say WHY (Global Constraint 2).
         # run_stream stamps a performed=False/passed=True "waived" record; name
         # the reason + performed flag for this specific mode so the console and

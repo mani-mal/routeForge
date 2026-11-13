@@ -88,11 +88,48 @@ class Usage(BaseModel):
     cached_prompt_tokens: int | None = 0
 
 
+# Backend finish reasons that must reach the client verbatim (B113): both mean
+# "this answer is NOT complete", which a client must never read as a clean end.
+TERMINAL_BACKEND_FINISH_REASONS = frozenset({"length", "content_filter"})
+
+
+def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> str:
+    """The `finish_reason` RouteForge sends the CLIENT -- the one rule every
+    response path (non-stream, verified_then_stream / keepalive chunking,
+    stream_unverified, incremental_verify, the recorded live-stream response)
+    goes through (B113).
+
+    Precedence, highest first:
+      1. the backend reported `length` or `content_filter` -> that value,
+         with or without tool calls. A truncated tool call is still truncated
+         (OpenAI reports `length` there too); an agent client that read it as
+         `tool_calls`/`stop` would treat a cut-off turn as finished.
+      2. the turn ends in tool calls -> `"tool_calls"`.
+      3. otherwise -> `"stop"`.
+
+    `backend_reason` is the backend's own, enum-normalised finish reason
+    (`GenerationResult.finish_reason`; None when it reported none, `"other"`
+    for an unknown value) -- anything outside rule 1 falls through to the
+    tool-call rule, so an unreported reason keeps the pre-B113 behaviour.
+
+    Step 9 never overrides this: verification that rewrites/redacts the text
+    leaves the backend's truncation in place (a redacted truncated answer is
+    still truncated), and a verification FAILURE never produces a response at
+    all (it raises; the route sends an error), so there is no competing
+    verifier-set reason to rank. A semantic-cache hit stores no backend
+    reason and replays rule 2/3 (`"stop"`)."""
+    if backend_reason in TERMINAL_BACKEND_FINISH_REASONS:
+        return backend_reason
+    return "tool_calls" if has_tool_calls else "stop"
+
+
 class Choice(BaseModel):
     index: int
     message: Message
-    # "stop" for a normal answer; "tool_calls" when the assistant message
-    # carries tool_calls (OpenAI clients switch on this to run their tools).
+    # Decided by `client_finish_reason` above: "stop" for a normal answer;
+    # "tool_calls" when the assistant message carries tool_calls (OpenAI
+    # clients switch on this to run their tools); the backend's "length" /
+    # "content_filter" when it reported one (B113).
     finish_reason: str = "stop"
 
 
@@ -408,7 +445,7 @@ class GenerationResult(BaseModel):
     cached_prompt_tokens: int | None = None
     # B71 item 6: the BACKEND's own finish reason (an enum value; None when it
     # reported none) and its reasoning-token count, for the content-free
-    # outcome row. Distinct from the `finish_reason` RouteForge sends the
-    # client, which is derived from whether tool calls are present.
+    # outcome row. The client-facing `finish_reason` is derived from it by
+    # `client_finish_reason` (B113: `length`/`content_filter` pass through).
     finish_reason: str | None = None
     reasoning_tokens: int | None = None
