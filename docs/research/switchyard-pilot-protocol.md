@@ -182,6 +182,33 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   is reported as a finding. B109 then mainly answers the cost question (D vs C at equal
   success).
 
+### 5c. Run 1 voided: risk floor made the cheap tier unreachable (amended 2026-11-13)
+
+The first frozen run started at 18:03:31Z and **was stopped after IR-10 (IR-11 partial)**.
+Wiring was correct, and arm D showed `applied` on every call. But every call was classed
+`confidential` → `medium` risk, because Presidio detects `PERSON`, `LOCATION` and `DATE_TIME`
+(plus `URL` and `US_DRIVER_LICENSE`) in source code and agent context. The deployment's
+`risk_floors.medium = mid` therefore raised every target to mid. Arm D's `efficient` proposals
+were applied and then floored back to mid, so **D was identical to C by construction**.
+
+**Amendment (owner decision).** All four eval apps get the same
+`pii_entity_denylist: [PERSON, LOCATION, DATE_TIME, URL, US_DRIVER_LICENSE]`. This is the
+per-app, surgical "detect-but-exempt" lever: exempted types are dropped before redaction and
+classification. Detection otherwise stays Presidio, and placement stays `onprem_only`. The task
+repo is synthetic with no real PII, and US_SSN, cards and email are still detected. A live check
+after the change classed a code snippet with names, URLs and dates as `public`/`low`, and both
+C and D could serve the cheap tier. **This is the one deliberate difference from the
+`dev-foundary` policy.** It is applied identically to every arm.
+
+**Void data.** The run-1 sessions (44, listed in `data/switchyard-pilot-void-run1.json`) are
+excluded. They were never analysed: they were inspected only for routing correctness. The
+frozen task set, seed and arm orders are unchanged. Run 2 starts from spec 1 with fresh plan
+state.
+
+**Product finding (independent of B109).** Under its real policy, `dev-foundary`'s traffic is
+floored at mid by the same Presidio false positives on code. That is a cost lever, through the
+same denylist, outside this experiment.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
