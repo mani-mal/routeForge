@@ -38,19 +38,35 @@ coding-agent harness (OpenCode) that already sends real traffic through the DGX 
 
 ## 3. Arms
 
-Each arm is a dedicated RouteForge **eval app** on the DGX lab with its own token. All arms
-share the same deployment, models and policy except for the one setting under test.
+Each arm is a dedicated RouteForge **eval app** on the DGX lab with its own token. **Every
+arm sends `model: "auto"`.** DevFoundry's production app pins every role through
+`model_aliases` (`df.* -> glm-5.3-flash`). A pinned request bypasses tier choice, so with
+pins neither the router nor Switchyard could change anything. The eval apps therefore have
+**no aliases**, and the client request is identical across arms. Each app copies
+`dev-foundary`'s policy exactly: `onprem_only`, `passthrough`, `pii_detection: presidio`,
+`verified_then_stream`, `model_input`/`client_output: raw`, `content_integrity: exact`,
+`capture_io: redacted`, `compression_enabled: false`, and `max_cost_usd_per_request: 2`. Only
+the setting under test differs, and **all arms share the same two-model pool**:
 
-| Arm | App policy | Meaning |
-|---|---|---|
-| A. always-efficient | allowed models = the cheap model only (`glm-flash-econ`) | lower bound on cost |
-| B. always-capable | allowed models = the capable model only (`glm-5.3-flash`, mid) | upper bound on quality |
-| C. current router | default (`adaptive_routing: off`) | baseline |
-| D. Switchyard | `adaptive_routing: enforce`, `sample_rate: 1.0` | treatment |
+| Arm | `allowed_models` | `adaptive_routing` | Meaning |
+|---|---|---|---|
+| A. always-efficient | `[qwen38-cheap-b109]` | off | lower bound on cost |
+| B. always-capable | `[glm-5.3-flash]` | off | upper bound on quality |
+| C. current router | `[qwen38-cheap-b109, glm-5.3-flash]` | off | baseline |
+| D. Switchyard | `[qwen38-cheap-b109, glm-5.3-flash]` | `enforce`, rate 1.0 | treatment |
 
-On the lab, `capable` maps to the best allowed tier, which is **mid**, because the lab has
-no frontier model. "Capable" therefore means the strongest model actually deployed there.
-The `dev-foundary` production app is never switched to enforce.
+**Cheap = `qwen38-cheap-b109`** (the real Qwen3.8-27B server, onboarded a second time as
+tier `cheap` through `deploy/dgx_lab/alias-proxy-qwen.yaml`, with `allowed_app_ids` set to the
+four eval apps only). **Mid = `glm-5.3-flash`.** The lab's `glm-flash-econ` was rejected as
+the cheap model. It is a price alias of `glm-5.3-flash`, the same model, so quality would be
+identical across arms by construction.
+
+**Live check (2026-11-13, 0.42.0).** Arms C and D were sent a short request carrying
+repeated test failures. C (length heuristic) served `qwen38-cheap-b109`, while D (Switchyard,
+applied) escalated to `glm-5.3-flash`. On a plain question both served cheap. The lab has no frontier
+model, so `capable` clamps to mid, the strongest model deployed there. The `dev-foundary`
+production app is never switched to enforce; it has no `adaptive_routing` setting, so it
+stays in shadow under the lab's `enforce` ceiling.
 
 ## 4. Metrics
 

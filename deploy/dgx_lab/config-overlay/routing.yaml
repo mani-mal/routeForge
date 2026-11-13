@@ -6,5 +6,6 @@ model_pool:
   - {name: openrouter-frontier, provider: openrouter, tier: frontier, display_name: "Nemotron 3 Ultra 550B (OpenRouter, free)", litellm_model: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"}
 # B105/B107: NVIDIA Switchyard advisor in SHADOW -- records what it would
 # route, changes nothing a client, the meter or the router sees.
+# B108: ceiling enforce for the B109 eval app; apps without adaptive_routing stay shadow.
 switchyard:
-  mode: "shadow"
+  mode: "enforce"

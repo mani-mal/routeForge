@@ -1,0 +1,56 @@
+# TEST-AND-EVAL TOOLING ONLY (B109). Not part of RouteForge and never part of serving.
+#
+# Second instance of the alias proxy (deploy/dgx_lab/alias-proxy.yaml; it reuses that
+# file's `alias-proxy` ConfigMap), fronting the REAL Qwen3.8-27B server so it can be
+# onboarded a second time under an eval-only slug:
+#
+#   http://alias-proxy-qwen.runai-routeforge:8000/a/qwen38-cheap-b109/v1
+#       -> http://qwen38.runai-glm-coding:8000/v1, model name rewritten to qwen3.8-27b
+#
+# Why: the B109 Switchyard pilot needs a cheap tier that is a genuinely DIFFERENT
+# model from the capable one (glm-5.3-flash). glm-flash-econ is a price alias of
+# glm-5.3-flash, so it can't serve. The onboarded entry `qwen38-cheap-b109` (tier cheap)
+# is restricted by allowed_app_ids to the four b109-* eval apps, so no other app sees
+# it. The existing `qwen3.8-27b` (mid) entry is untouched.
+# See docs/research/switchyard-pilot-protocol.md. Remove after B109.
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata: {name: alias-proxy-qwen, namespace: runai-routeforge}
+    spec:
+      replicas: 1
+      selector: {matchLabels: {app: alias-proxy-qwen}}
+      template:
+        metadata:
+          labels: {app: alias-proxy-qwen, runai/node-pool: default}
+        spec:
+          tolerations:
+            - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - {key: nvidia.com/gpu.present, operator: DoesNotExist}
+          containers:
+            - name: proxy
+              image: python:3.12-slim
+              command: ["python", "-u", "/app/proxy.py"]
+              env:
+                - {name: UPSTREAM, value: "http://qwen38.runai-glm-coding:8000"}
+                - {name: REAL_MODEL, value: "qwen3.8-27b"}
+              ports: [{containerPort: 8000}]
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "1", memory: 256Mi}
+              volumeMounts: [{name: app, mountPath: /app}]
+          volumes:
+            - {name: app, configMap: {name: alias-proxy}}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: alias-proxy-qwen, namespace: runai-routeforge}
+    spec:
+      selector: {app: alias-proxy-qwen}
+      ports: [{port: 8000, targetPort: 8000}]
