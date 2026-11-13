@@ -1,6 +1,6 @@
 # Switchyard pilot — evaluation protocol (B109)
 
-**Status:** pre-registered on 2026-11-13, before any arm was run. The margins and gates
+**Status:** pre-registered on 2026-11-13, before any arm was run. **Task set frozen 2026-11-13T17:27:21Z.** The margins and gates
 below are fixed now. Changing them after results exist must be recorded in this file, with
 the reason. **Backlog:** B109. **Design:** `docs/architecture/switchyard-advisor-design.md`.
 **Results:** go to `docs/research/switchyard-pilot-results.md`.
@@ -26,6 +26,15 @@ coding-agent harness (OpenCode) that already sends real traffic through the DGX 
   frozen by id in `docs/research/data/switchyard-pilot-tasks.json`. The target is N = 40,
   split between `issue-resolver` and `ci-repair`, and taken from tasks DevFoundry already
   has validators for. They must be synthetic or sample repositories, with no customer code.
+- **Frozen 2026-11-13T17:27:21Z.** `docs/research/data/switchyard-pilot-tasks.json`, sha256
+  `c2bce18e414796b661864ff0891a0c6c9b5425868cbad2c84a2f78d33c93f2ff`. It holds 40 specs (20 IR
+  + 20 CI, each split 7 trivial / 7 moderate / 6 harder) on `mani-mal/b109-eval-tasks` at
+  `1660fcf` (tag `b109-base`).
+  - **Seed:** `375454972` = `int(main_sha[:8], 16)`, so it couldn't be chosen in hindsight.
+  - **Arm order:** fixed per spec.
+  - **Pins:** identical across arms (packs, environment image digest, policy v2).
+  - **Excluded:** 30 `calibration_sessions`.
+  - **Hashes only:** request texts and hidden tests are not in this public repo.
 - **Success:** DevFoundry's automatic validation verdict (tests/CI pass), plus a scripted
   per-task check. A human review verdict isn't practical across four arms and isn't used.
   RouteForge records neither, so DevFoundry reports them per task, per arm.
@@ -126,6 +135,21 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   - **agent:** `agent_error`, `validation_failure`, `timeout`, `budget_exhausted` (the task's
     own token, cost or wall budget), `no_change` and `output_truncated`.
   - **none:** `completed` or `awaiting_review` on the arm's own patch.
+- **Repair not offered** (ci-repair; DevFoundry `7dd4d73`). If the arm's own diagnosis judged
+  the failure not repairable, the row is `agent` (`repair_not_offered: diagnosis=<verdict>`).
+  If the spec is repairable but no repair was offered for a system reason, the row is
+  `infra` (`repair_not_offered: system=<reason>`).
+- **Guard refusal** (DevFoundry `c23c7f4`). A repair refused by DevFoundry's ci-repair guard is
+  `agent` (`guard_refused:<rules>`). It is the arm's own patch tripping a documented rule
+  that every arm faces. Every CI reference fix passes the guard with 0 violations. Other
+  `policy_denied` causes are infra.
+- **Manual review is blind to the arm.** The checker flags patches that look like attempts to
+  forge the hidden-test result. Before any verdict, patches are renamed to random ids and the
+  id→arm key is sealed. The reviewer records the verdict, reason, reviewer and time before
+  the key is opened. A patch found forging counts as `agent` failure for its arm. Manually
+  reviewed rows are counted per arm, and if they decide the gate, that is called out.
+- **Only DevFoundry's export sessions are analysed.** RouteForge-originated test calls
+  (no session) are never joined.
 - **Not analysed:** the calibration specs and the two arm C smoke sessions, all listed under
   `calibration_sessions` in the frozen task JSON.
 - **No deploys during the run window.** Neither RouteForge nor DevFoundry is deployed while
@@ -148,6 +172,11 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   and B. The cheap arm passed both hard issue-resolver specs. → One more hardening round:
   root causes two or more calls away in another module, behaviour pinned only in docstrings,
   and CI failures whose test points at the wrong module.
+- **Round 3** (17:0x–17:15Z, repo `1660fcf`). CAL-07 passed on both arms. CAL-08: A failed
+  the hidden tests, B passed — a clean cheap-model miss. **The stopping rule is satisfied.**
+  CAL-09 exposed a spec-validity bug rather than a difficulty one: stale-assertion CI specs
+  can't be repaired under the guard's no-test-changes rule. CI-01, CI-13 and CI-15 were
+  replaced by same-tier failures whose correct repair is in source, with no recalibration.
 - **Stopping rule.** Round 3 is the last. If the cheap arm still passes every hard
   calibration spec, the set is frozen anyway, and "the cheap model saturates this task set"
   is reported as a finding. B109 then mainly answers the cost question (D vs C at equal
@@ -183,4 +212,9 @@ These rules were added 2026-11-13, before any arm ran. They are procedural and c
   close to B (always-capable): D's cost gate is in effect measured against an almost
   all-mid baseline. This is a real property of the current router, recorded here before
   any results. It doesn't change the gates.
+- **Residual forgery risk.** The patched code runs in the same process as the hidden tests,
+  so a deliberately obfuscated forgery can't be ruled out. Several things mitigate it:
+  agents never see the checker or the hidden tests; binary patches and suspicious names are
+  refused or flagged for blind review; and success also requires visible validation. The
+  risk is symmetric across arms. It was accepted rather than rewriting all 44 hidden suites.
 - **Alpha dependency:** 0.4.0a1. The verdict applies to this version only.
