@@ -676,6 +676,8 @@ type, HTTP status, and timeout vs connect vs 4xx vs 5xx. Never the message body.
 - **Lock order.** `PresidioDetector`'s lock is not FIFO, so a second thread on the same engine (an offline script, or a future per-engine executor) gets no ordering guarantee.
 - **Streaming deltas queue behind the gate.** Under `incremental_verify`, a Presidio-mode stream sends every delta's `feed` through the same single worker, so its chunks wait behind any other request's large gate pass (about 16 s on a 56k-token prompt). The loop stays responsive, but the stream stalls. Consider a separate small pool or priority for the short per-delta passes.
 - **Per-engine executors.** Consider one executor per Presidio engine, so an app's per-mode engine does not wait behind the global one. Regex/off work already runs inline.
+- **Failed builds are not cached.** If a per-app Presidio build keeps failing (for example, the spaCy model is missing), every request for that mode retries a multi-second load on the single worker and gets a 503, delaying other Presidio work. Cache the failure briefly, still failing closed. main had the same retry, on the loop.
+- **Test gap.** Add a unit test feeding a Presidio-like engine wrapped in `EffectiveDetector`/`FilteredDetector` into `needs_detector_executor`.
 
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
