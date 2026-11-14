@@ -313,6 +313,27 @@ cross-traffic during a b109 session is production (lab-sample / OpenCode) and Ro
     overlap is flagged in §7, by arm. It is **not** reclassified; the class stays §5a's.
     The flag lets the reader judge whether production load, rather than the arm, cost it time.
 
+### 5h. Run 4 voided: 0.43.0 detector-queue convoy (amended 2026-11-14)
+
+**Finding.** On 0.43.0, a Presidio app's per-call gateway overhead on 40–60k-token tool
+conversations rose from a median of 12 s (0.42.0) to 44 s (B120). B118 had put a no-op
+step, the raw tool view, on the single-worker detector queue. Concurrent Presidio sessions
+then convoyed, each call paying every in-flight gate pass. IR-01/C convoyed with a
+production dev-foundary session and timed out at 1800 s. In run 3, on 0.42.0, the same spec
+passed in 13 minutes. The slowdown grows with prompt size and with concurrent Presidio
+traffic, so it lands unevenly across arms. That is a gateway-induced bias that §5a would
+wrongly count as arm behaviour.
+
+**Decision (owner and DevFoundry, 2026-11-14).**
+- **Run 4 is void and never analysed.** It started 13:59:43Z and was paused 14:34:43Z. It
+  covered IR-01 on all arms, IR-02 on B and A, and IR-02/D cancelled in flight. DevFoundry keeps
+  its state and log at `/home/manimal/b109-runs/run4/` as evidence.
+- **The lab moves to 0.43.1 (B120).** Before run 5, a smoke must pass with Presidio checks on:
+  every `/health` and call returns 200, and the per-call time of 2 parallel 45k-token sessions is
+  ≤ 1.2× the sequential per-call time. The smoke result is recorded in the deploy PR.
+- **Run 5** uses the same frozen plan and order (sha `157e76ff…`), fresh state and the label
+  `run5`. §5a–§5g apply unchanged; §5g's no-probe rule covers run 5.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
