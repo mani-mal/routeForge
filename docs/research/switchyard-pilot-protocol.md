@@ -263,6 +263,31 @@ from its cost per success. (Suggested by DevFoundry.)
   deployed. It is not a GO.
 - Runs after run 3 must use a build with B118, the gate off the event loop.
 
+### 5f. Run 3 stopped as a pilot; run 4 on the B118 build (amended 2026-11-14, owner decision)
+
+**Why.** By IR-16, run 3 had lost 4 of 40 specs to gateway infra under §5a: IR-05, IR-10,
+IR-12 and IR-15. A fifth loss makes the primary INCONCLUSIVE. Every loss came from a B or C
+session where GLM looped into a huge prompt. Two failure modes caused them. The first is the
+B118 event-loop stall: 10 liveness kills, plus 502s after the stall. The second is one
+upstream connect error (IR-15/B, 04:00:48Z, B117). Both scale with prompt size, and at the
+observed rate about 6 more of the remaining 24 specs would have been lost. The evidence is in
+`data/switchyard-pilot-run3-gateway-infra.json` (5 sessions, matched by DevFoundry's export).
+
+**Decision (owner, 2026-11-14).**
+- **Run 3 stopped** at 13:24Z. IR-01 to IR-15 ran on all four arms, and IR-16 on A and C;
+  IR-16/B was cancelled in flight. Run 3 is a **reported pilot**: it is summarised in the
+  results doc, with §5e's sensitivity view where useful, but it is **never pooled with run 4
+  and never decides the verdict.**
+- **The lab moves to 0.43.0**, which contains B118: detector work runs off the event loop.
+  A large-prompt smoke must show `/health` answering during a long Presidio pass before
+  run 4 starts.
+- **Run 4** uses the same frozen task list and plan (sha `157e76ff…`, seed 375454972, the
+  same order), the task repo at `1660fcf`, fresh DevFoundry state and the label `run4`. All
+  §5a–§5e rules apply unchanged. Sharing the order with the pilot means the pilot cannot be
+  used as an order-effect check; it was never meant to be one.
+- B117 connect errors can still exclude specs in run 4. If run 4 is INCONCLUSIVE on
+  exclusions alone, the next step is B117, not another rerun.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
