@@ -535,3 +535,76 @@ def test_presidio_cache_miss_builds_off_loop_and_loop_installs_it(monkeypatch):
                             for n in built_on)
     assert pipeline._detectors["presidio"] is instances[0]
     instances[0].assert_all_on_detector_thread()
+
+
+# --- B120: no executor hop when the tool view does no detector work ----------
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_raw_model_input_tool_view_skips_executor_hop(monkeypatch, stream: bool):
+    """B120: under `model_input: raw` the tool-conversation view is `reps.raw`
+    and runs no detector pass, so it must NOT queue on the single-worker
+    detector executor. On 0.43.0 that hop put each request's backend call
+    behind every other in-flight gate pass, and concurrent Presidio sessions
+    convoyed (each paid K gate passes per call). Here, as this request's gate
+    finishes, another request's 0.5 s pass is queued on the executor: the raw
+    view must run inline on the loop thread and NOT wait behind it, while the
+    gate itself still ran on the executor."""
+    from app.apps.policy import AppPolicyView
+
+    det = _RecordingDetector()
+    pipeline = _pipeline(det)
+    # Detection stays ON (the global mode, i.e. the recording detector): only
+    # the model's VIEW is raw. passthrough alone would also turn detection off.
+    # run_stream's live tool path needs stream_unverified + raw output (else it
+    # falls back to run(), which the stream=False case already covers).
+    policy = AppPolicyView(pii_detection="regex", model_input="raw",
+                           client_output="raw",
+                           residency="any",
+                           stream_mode="stream_unverified" if stream else None)
+    # No PII in this conversation: a detected SSN would raise the residency
+    # floor, which forces the complete-then-stream fallback.
+    request = _tool_request().model_copy(update={"messages": [
+        Message(role="user", content="look up the record"),
+        Message(role="assistant", content=None, tool_calls=[{
+            "id": "call_0", "type": "function",
+            "function": {"name": "lookup", "arguments": '{"id": "42"}'}}]),
+        Message(role="tool", tool_call_id="call_0", content="record 42: ok"),
+    ]})
+    seen: list[bool] = []
+    real_view = Pipeline._tool_turn_messages
+    real_evaluate = pipeline._gate.evaluate
+
+    def evaluate(*a, **kw):
+        # Runs ON the detector executor. As the gate finishes, another
+        # request's long pass is queued behind it (no wait -- we are the
+        # worker). Any later hop of THIS request now queues behind that pass.
+        out = real_evaluate(*a, **kw)
+        detector_pool._EXECUTOR.submit(time.sleep, _SLOW_S)
+        return out
+
+    def view(reps, eff):
+        assert eff.protection.model_input == "raw"
+        seen.append(_on_detector_thread())
+        return real_view(reps, eff)
+
+    monkeypatch.setattr(pipeline._gate, "evaluate", evaluate)
+    monkeypatch.setattr(Pipeline, "_tool_turn_messages", staticmethod(view))
+
+    async def main():
+        t0 = time.monotonic()
+        if stream:
+            # The tool view is built inside run_stream, before it returns the
+            # delta iterator; the backend stream itself is not under test.
+            await pipeline.run_stream(
+                "req-b120s", "acme", request, app_policy=policy)
+        else:
+            await pipeline.run("req-b120", "acme", request, app_policy=policy)
+        return time.monotonic() - t0
+
+    elapsed = asyncio.run(main())
+    detector_pool._EXECUTOR.submit(lambda: None).result()    # drain the queued pass
+    assert seen, "the tool view was never built"
+    assert seen[0] is False, "raw tool view hopped onto the detector executor"
+    det.assert_all_on_detector_thread()          # the gate itself still went off-loop
+    assert elapsed < _SLOW_S * 0.8, f"request waited for the busy executor: {elapsed:.3f}s"

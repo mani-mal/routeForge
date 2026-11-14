@@ -1072,8 +1072,16 @@ class Pipeline:
             # there is nothing to redact and the raw view IS the redacted one.
             # B118: `reps.redacted` is built lazily -- one detector pass
             # per message -- so build it off the event loop too.
-            san_messages = await run_detector_for(
-                reps.detector, self._tool_turn_messages, reps, eff)
+            # B120: but only when it IS built. Under `model_input: raw` the
+            # view is `reps.raw` with no detector work, and a hop through the
+            # single-worker detector executor would queue this request's
+            # backend call behind every other in-flight gate pass (a convoy:
+            # K concurrent Presidio sessions each paid K gate passes per call).
+            san_messages = (
+                self._tool_turn_messages(reps, eff)
+                if eff.protection.model_input == "raw" else
+                await run_detector_for(
+                    reps.detector, self._tool_turn_messages, reps, eff))
             recall = RecallResult([], None)
             self._record_tool_arg_stats(internals, reps.tool_arg_stats())
         else:
@@ -1624,8 +1632,16 @@ class Pipeline:
             # helpers); no memory, no compression.
             # B118: `reps.redacted` is built lazily -- one detector pass
             # per message -- so build it off the event loop too.
-            san_messages = await run_detector_for(
-                reps.detector, self._tool_turn_messages, reps, eff)
+            # B120: but only when it IS built. Under `model_input: raw` the
+            # view is `reps.raw` with no detector work, and a hop through the
+            # single-worker detector executor would queue this request's
+            # backend call behind every other in-flight gate pass (a convoy:
+            # K concurrent Presidio sessions each paid K gate passes per call).
+            san_messages = (
+                self._tool_turn_messages(reps, eff)
+                if eff.protection.model_input == "raw" else
+                await run_detector_for(
+                    reps.detector, self._tool_turn_messages, reps, eff))
             recall = RecallResult([], None)
             comp = self._tool_turn_compression(san_messages, tools)
             # B69: ingress only -- a live tool turn's egress arguments are
