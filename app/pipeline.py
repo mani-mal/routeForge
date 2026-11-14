@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -22,6 +21,7 @@ from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
 from app.policy.context import pinned_model_reason
 from app.policy.feasible import feasible_set
+from app.policy.detector_pool import run_detector
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import (Gate, Representations, ToolArgStats,
@@ -768,10 +768,11 @@ class Pipeline:
             return "requested_model"
         return None
 
-    def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
-                          sanitized: str, model_text: str, entry: CacheEntry,
-                          det: Detector, client_output: str,
-                          check_latency_ms: float, eff: EffectivePolicy) -> dict | None:
+    async def _serve_from_cache(self, request_id: str, ctx: ExecutionPolicyContext,
+                                sanitized: str, model_text: str, entry: CacheEntry,
+                                det: Detector, client_output: str,
+                                check_latency_ms: float,
+                                eff: EffectivePolicy) -> dict | None:
         """C4 keystone: re-verify the cached text against the CURRENT
         request's per-app detector + ctx before ever serving it -- this is
         the step-9 verification for the served response; compress/gateway/
@@ -812,8 +813,9 @@ class Pipeline:
             # now resolves to a different provider the cached answer came from
             # somewhere this request never evaluated. See `_eligible_now`.
             return None
-        text, vrec = verify(det, ctx, entry.response_text,
-                            client_output=client_output)
+        # B118: the re-verify is a detector pass -- off the event loop.
+        text, vrec = await run_detector(verify, det, ctx, entry.response_text,
+                                        client_output=client_output)
         if not vrec.passed:
             return None
         # Priced on what the MODEL would have been sent (`model_text`), not on
@@ -929,19 +931,24 @@ class Pipeline:
         # PolicyGateError, which the route maps to a 503. Never a permissive
         # default, and nothing external has run at this point.
         try:
-            det, rules, eff = self._gate_inputs(app_policy, profile)
+            # B118: composing the detector may BUILD and warm one (a spaCy
+            # load on an app's first use of a non-global mode) -- detector
+            # work, so it runs on the detector executor too.
+            det, rules, eff = await run_detector(
+                self._gate_inputs, app_policy, profile)
             # B72: read the trajectory envelope before the gate and write it
             # back after, both inside this fail-closed block -- an envelope
             # that cannot be read or written rejects the request.
             inherited = (await trajectory.inherited(eff.trajectory_mode)
                          if trajectory is not None else frozenset())
             # B118: the gate's detector (Presidio) is CPU-bound -- ~16 s on a
-            # 56k-token prompt -- so it runs on a worker thread. Run on the
+            # 56k-token prompt -- so it runs on the dedicated detector
+            # executor (app/policy/detector_pool.py). Run on the
             # loop it starved /health (liveness kills) and every other
             # coroutine. Same arguments; still awaited to completion here, so
             # nothing external runs before it, and any exception still lands
             # in the fail-closed handler below.
-            ctx, reps, eff = await asyncio.to_thread(
+            ctx, reps, eff = await run_detector(
                 self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
@@ -1019,7 +1026,7 @@ class Pipeline:
             # there is nothing to redact and the raw view IS the redacted one.
             # B118: `reps.redacted` is built lazily -- one detector pass
             # per message -- so build it off the event loop too.
-            san_messages = await asyncio.to_thread(
+            san_messages = await run_detector(
                 self._tool_turn_messages, reps, eff)
             recall = RecallResult([], None)
             self._record_tool_arg_stats(internals, reps.tool_arg_stats())
@@ -1111,7 +1118,7 @@ class Pipeline:
                     # detector/ctx before ever serving cached text. A failed
                     # re-verify is treated as an ordinary miss below (falls
                     # through to compress/gateway/verify), never served.
-                    hit_resp = self._serve_from_cache(
+                    hit_resp = await self._serve_from_cache(
                         request_id, ctx, sanitized, model_text, entry, det,
                         client_output, check_latency_ms, eff)
                     if hit_resp is not None:
@@ -1158,7 +1165,7 @@ class Pipeline:
 
         # B118: step-9 verification runs the detector over the whole
         # completion -- off the event loop, like the gate.
-        text, vrec = await asyncio.to_thread(
+        text, vrec = await run_detector(
             verify, det, ctx, result.text, client_output=client_output)
         if not vrec.passed:
             if internals is not None:
@@ -1210,7 +1217,7 @@ class Pipeline:
         # `tool_args_min_score`; what passed below it is counted, ingress and
         # egress summed, on the certificate/trace and the outcome row.
         raw_tool_calls = result.tool_calls
-        tc_redaction = await asyncio.to_thread(
+        tc_redaction = await run_detector(
             redact_tool_calls_with_entities,
             raw_tool_calls, egress_detector(det, client_output),
             eff.protection.tool_args_min_score, eff.protection.tool_args_bar_types)
@@ -1465,19 +1472,24 @@ class Pipeline:
         # recognizers/rules; fail closed), so the streaming path can never
         # drift from the direct one.
         try:
-            det, rules, eff = self._gate_inputs(app_policy, profile)
+            # B118: composing the detector may BUILD and warm one (a spaCy
+            # load on an app's first use of a non-global mode) -- detector
+            # work, so it runs on the detector executor too.
+            det, rules, eff = await run_detector(
+                self._gate_inputs, app_policy, profile)
             # B72: read the trajectory envelope before the gate and write it
             # back after, both inside this fail-closed block -- an envelope
             # that cannot be read or written rejects the request.
             inherited = (await trajectory.inherited(eff.trajectory_mode)
                          if trajectory is not None else frozenset())
             # B118: the gate's detector (Presidio) is CPU-bound -- ~16 s on a
-            # 56k-token prompt -- so it runs on a worker thread. Run on the
+            # 56k-token prompt -- so it runs on the dedicated detector
+            # executor (app/policy/detector_pool.py). Run on the
             # loop it starved /health (liveness kills) and every other
             # coroutine. Same arguments; still awaited to completion here, so
             # nothing external runs before it, and any exception still lands
             # in the fail-closed handler below.
-            ctx, reps, eff = await asyncio.to_thread(
+            ctx, reps, eff = await run_detector(
                 self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
@@ -1564,7 +1576,7 @@ class Pipeline:
             # helpers); no memory, no compression.
             # B118: `reps.redacted` is built lazily -- one detector pass
             # per message -- so build it off the event loop too.
-            san_messages = await asyncio.to_thread(
+            san_messages = await run_detector(
                 self._tool_turn_messages, reps, eff)
             recall = RecallResult([], None)
             comp = self._tool_turn_compression(san_messages, tools)

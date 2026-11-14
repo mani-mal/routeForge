@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 import threading
 from typing import Protocol
@@ -14,6 +16,30 @@ _PATTERNS = {
     "PHONE_NUMBER": re.compile(r"\b\d{3}[-.]\d{3}[-.]\d{4}\b"),
     "US_BANK_NUMBER": re.compile(r"\b\d{8,17}\b"),
 }
+
+
+_log = logging.getLogger("serving.policy")
+
+#: B118 guard. A detector pass on the event-loop thread blocks every other
+#: request (and `/health`) for its whole duration -- ~16 s for Presidio on a
+#: 56k-token prompt -- so every request-path caller goes through
+#: `app.policy.detector_pool.run_detector`. In production a violation is
+#: logged; tests/conftest.py sets this True so it fails the test instead.
+STRICT_OFF_LOOP = False
+
+
+def check_off_loop(what: str) -> None:
+    """Log (or, under STRICT_OFF_LOOP, raise) if called on a thread that is
+    running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop on this thread: a worker, a script, or boot
+    msg = (f"{what} ran on the event-loop thread (B118); route it through "
+           "app.policy.detector_pool.run_detector")
+    if STRICT_OFF_LOOP:
+        raise RuntimeError(msg)
+    _log.warning(msg)
 
 
 class Detector(Protocol):
@@ -101,16 +127,20 @@ class PresidioDetector:
     def __init__(self) -> None:
         from presidio_analyzer import AnalyzerEngine
         self._analyzer = AnalyzerEngine()
-        # B118: the pipeline calls the detector from worker threads
-        # (`asyncio.to_thread`), so two requests can now reach one engine at
-        # once. spaCy does not promise its pipeline is thread-safe (its
-        # tokenizer, for one, mutates an internal cache on every call), so
-        # one engine is used by one thread at a time. That is exactly the
-        # throughput it had when every call ran on the event loop; what
-        # changes is that the loop is no longer blocked while it works.
+        # B118: request-path detector work runs on the dedicated
+        # single-worker detector executor (app/policy/detector_pool.py), which
+        # already serialises it. This lock is defence in depth for any other
+        # thread that reaches the engine (an offline script, a future second
+        # executor): spaCy does not promise its pipeline is thread-safe (its
+        # tokenizer mutates an internal cache on every call), so one engine
+        # is used by one thread at a time.
         self._lock = threading.Lock()
 
     def analyze(self, text: str) -> list[Entity]:
+        check_off_loop("PresidioDetector.analyze")
+        return self._analyze(text)
+
+    def _analyze(self, text: str) -> list[Entity]:
         with self._lock:
             results = self._analyzer.analyze(text=text, language="en")
         # Carry Presidio's confidence onto the Entity: dedupe already treats a
@@ -144,7 +174,10 @@ class PresidioDetector:
         # call — that first call is what paid cold-start latency and occasionally
         # tripped the fail-closed gate into a 503 on a demo's opening request.
         # Run one throwaway analyze at boot so real traffic never pays it.
-        self.analyze(_WARMUP_TEXT)
+        # Unchecked: boot may import the app under uvicorn's loop, before any
+        # request exists to be blocked. A runtime warm-up (`_detector_for`)
+        # already runs on the detector executor.
+        self._analyze(_WARMUP_TEXT)
 
 
 def make_detector(mode: str) -> Detector:

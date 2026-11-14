@@ -178,3 +178,13 @@ def _no_fleet_cache(monkeypatch):
     from app.api import ui_routes
     monkeypatch.setattr(ui_routes, "_FLEET_CACHE_TTL_S", 0)
     monkeypatch.setattr(ui_routes, "_fleet_cache", {})
+
+
+@pytest.fixture(autouse=True)
+def _detector_never_on_event_loop(monkeypatch):
+    """B118 guard, suite-wide: a Presidio pass on the event-loop thread is a
+    test failure, not a log line. A request-path caller that skips
+    `app.policy.detector_pool.run_detector` raises (inside the gate, that
+    fails closed to a 503) wherever the presidio extra is installed."""
+    from app.policy import detectors
+    monkeypatch.setattr(detectors, "STRICT_OFF_LOOP", True)
