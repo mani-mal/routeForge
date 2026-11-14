@@ -331,6 +331,24 @@ wrongly count as arm behaviour.
 - **The lab moves to 0.43.1 (B120).** Before run 5, a smoke must pass with Presidio checks on:
   every `/health` and call returns 200, and the per-call time of 2 parallel 45k-token sessions is
   ≤ 1.2× the sequential per-call time. The smoke result is recorded in the deploy PR.
+- **Smoke criterion amended (owner decision, 2026-11-14, after two smokes).** The ≤ 1.2× bar
+  assumed each call's backend phase lasts longer than a gate pass G. On the lab the model is
+  faster than that, so two Presidio sessions saturate the single detector worker by construction:
+  the per-call floor is max(G+b, 2G) whatever the scheduling, and 0.42.0 serialized the same way.
+  The gate is now **parity with pre-B118 behaviour**:
+  - **In-pod A/B (DGX test pod, K=4, 15 s backend):** 3.37 s pre-B118, 13.05 s on 0.43.0,
+    3.25 s fixed. Parity passes.
+  - **Lab smoke:** every `/health` and call returns 200, and the parallel per-call median is
+    ≤ 1.1 × max(G+b, 2G), where G and b are measured from the sequential calls and the outcome
+    rows.
+    - Smoke 1 (512 tokens): G ≈ 18.5 s, b ≈ 6 s; parallel 38.6 s against a 37 s floor. **Pass.**
+    - Smoke 2 (2048 tokens): G ≈ 20 s, b ≈ 12.4 s; parallel 40.2 s against a 40 s floor. **Pass.**
+    - A convoy would have added b on top (≈ 52 s). Completions were staggered, not paired.
+    - Health: 496/496 and 577/577 at 200, slowest 0.55 s; 0 restarts.
+  - **Remaining coupling (B119):** each call's redacted telemetry export queues behind other
+    requests' gate passes, so concurrent Presidio sessions, including production dev-foundary,
+    still wait on one another. That matches 0.42.0, where one thread ran everything, and it falls
+    under §5g's cross-traffic report.
 - **Run 5** uses the same frozen plan and order (sha `157e76ff…`), fresh state and the label
   `run5`. §5a–§5g apply unchanged; §5g's no-probe rule covers run 5.
 
