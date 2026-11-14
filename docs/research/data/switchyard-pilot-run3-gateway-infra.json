@@ -1,0 +1,7 @@
+{"sessions": {
+ "att-ca2b74c64118418a97b91ae05f35a8b0": "IR-05/B: routeforge-api liveness kills 00:01:47Z and 00:07:16Z (event loop blocked by synchronous Presidio on large prompt, B118); 2x 502 backend_failed 23:42:03Z, 23:42:41Z (Connection error after loop stall)",
+ "att-aca2e0aaf32e4f4f81074727b7cc9571": "IR-10/B: no pod kill; 1x 502 backend_failed 01:23:00Z (Connection error after ~17 s, consistent with the same loop stall, B118)",
+ "att-52ba9c75fb2e417aa47d7263e171ab75": "IR-12/C: routeforge-api liveness kills 02:05:24Z, 02:10:54Z, 02:12:56Z, 02:16:22Z (event loop blocked by synchronous Presidio, B118)",
+ "att-f96b365d05d144ed8c2efed897250379": "IR-12/B: routeforge-api liveness kills 02:48:45Z, 02:50:23Z, 02:54:21Z, 02:56:50Z (event loop blocked by synchronous Presidio, B118); 4x 502 backend_failed 02:37:33Z, 02:37:51Z, 02:59:47Z, 03:00:07Z",
+ "att-f51d6b3ba8464122af2bd0c03fdca67d": "no pod kill; 1x 502 backend_failed 04:00:48Z (glm-5.3-flash Connection error after 4.9 s at ~23.8k prompt tokens; no loop stall seen around it, so upstream connect failure, B117)"
+}}
