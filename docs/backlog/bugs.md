@@ -667,6 +667,24 @@ type, HTTP status, and timeout vs connect vs 4xx vs 5xx. Never the message body.
 **Root cause.** `Pipeline.run`/`run_stream` called `Gate.evaluate` synchronously, and its Presidio pass is CPU-bound. On a 56k-token prompt it held the asyncio loop for about 16 s, so `/health` could not answer within its 5 s timeout. Other request-path callers made the same kind of synchronous detector pass: verify, redaction, streaming, telemetry and detector warm-up.
 **Fix.** No Presidio call runs on the event loop. Every request-path caller goes through `run_detector_for` (`app/policy/detector_pool.py`). Work that can reach a Presidio engine runs on a dedicated single-worker FIFO executor; regex/off work runs inline, as before. The default executor is not used, because that is where the loop resolves DNS. The callers are the gate, the per-message tool view, step-9 `verify`, egress tool-call redaction, the cache-hit re-verify, `StreamingVerifier.feed`/`flush`, and the exporter and console copies whenever capture is on. The exporter is included because it can downgrade `full` to `redacted` by itself. Detector composition stays on the loop. Only a cache miss that must build and warm a Presidio engine goes to the executor, and the loop is the cache's single writer. Arguments, ordering and fail-closed handling are unchanged. `PresidioDetector` keeps a per-engine lock as defence in depth and records any on-loop call; tests fail on one even if a caller swallows the raise. `get_app_tracer`'s cache build is locked. Tests: `tests/test_gate_off_event_loop.py`.
 
+## B120 — Presidio sessions convoy on the detector executor (0.43.0 regression)  ✅ RESOLVED (2026-11-14, fix/b120-raw-tool-view-no-executor-hop)
+
+**Found 2026-11-14 on the DGX lab, B109 run 4 IR-01/C.** On 0.43.0, gateway overhead for
+Presidio apps at 40–60k-token tool conversations rose from a median of 12 s (0.42.0) to 44 s.
+IR-01/C (b109-c-router) ran at about 44 s per call, in lockstep with a concurrent production
+dev-foundary session (both Presidio): their calls completed in the same seconds.
+**Root cause.** B118 routed `_tool_turn_messages` through `run_detector_for` at both call sites
+(`run()`, `run_stream()`). That function chooses the single-worker FIFO detector executor by
+detector *type*. Under `model_input: raw` the view is `reps.raw` and does no detector work, yet
+the hop queued the request's backend call behind every other in-flight gate pass. Concurrent
+Presidio sessions then convoyed, each call paying K gate passes instead of 1. A profile on the
+DGX test pod reproduced 3.4 s → 13 s at K=4, and 3.25 s with the fix. Per-request Presidio work
+is identical on 0.42.0 and 0.43.0 (3 passes, same sizes); this is pure scheduling.
+**Fix.** Build the raw view inline. Only the `redact` view, which runs detector passes, goes to
+the executor. Test: `test_raw_model_input_tool_view_skips_executor_hop` (run and stream) fails
+without the fix. For `model_input: redact` apps the hop is real work and can still convoy; see
+B119 (fold the view into the gate's executor job, and prioritise short passes).
+
 ## B119 — The detector executor has no admission bound  🔴 OPEN
 
 **Follow-up to B118.** `app/policy/detector_pool.py` is one shared, unbounded, single-worker queue, so a burst of large prompts queues without limit, and each request waits behind every pass ahead of it.
