@@ -27,6 +27,11 @@ _log = logging.getLogger("serving.policy")
 #: logged; tests/conftest.py sets this True so it fails the test instead.
 STRICT_OFF_LOOP = False
 
+#: Every violation seen while STRICT_OFF_LOOP is on, recorded BEFORE raising:
+#: a caller with a blanket `except Exception` (the exporter has one) would
+#: otherwise swallow the raise, so tests/conftest.py asserts this stays empty.
+OFF_LOOP_VIOLATIONS: list[str] = []
+
 
 def check_off_loop(what: str) -> None:
     """Log (or, under STRICT_OFF_LOOP, raise) if called on a thread that is
@@ -38,6 +43,7 @@ def check_off_loop(what: str) -> None:
     msg = (f"{what} ran on the event-loop thread (B118); route it through "
            "app.policy.detector_pool.run_detector")
     if STRICT_OFF_LOOP:
+        OFF_LOOP_VIOLATIONS.append(msg)
         raise RuntimeError(msg)
     _log.warning(msg)
 

@@ -21,7 +21,7 @@ from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
 from app.policy.context import pinned_model_reason
 from app.policy.feasible import feasible_set
-from app.policy.detector_pool import run_detector
+from app.policy.detector_pool import run_detector, run_detector_for
 from app.policy.detectors import Detector, detection_ran, make_detector
 from app.policy.effective import EffectiveDetector, FilteredDetector
 from app.policy.gate import (Gate, Representations, ToolArgStats,
@@ -76,6 +76,16 @@ def _attempt_log(internals: dict | None) -> list[str] | None:
     """The route's record of which candidates the gateway started calling, read
     back if the client disconnects mid-call (B78). Names only, never content."""
     return None if internals is None else internals.setdefault("attempted", [])
+
+
+class _DetectorBuildNeeded(Exception):
+    """Raised by `Pipeline._detector_for(..., build=False)` when the mode's
+    detector is not cached yet and building it is expensive (Presidio). Caught
+    only by `Pipeline._gate_inputs_async`, which builds it off the loop."""
+
+    def __init__(self, mode: str) -> None:
+        super().__init__(mode)
+        self.mode = mode
 
 
 def _is_tool_conversation(request: ChatRequest) -> bool:
@@ -273,7 +283,7 @@ class Pipeline:
             _advisor_log.error("switchyard advice recording failed request=%s (%s)",
                                request_id, type(exc).__name__)
 
-    def _detector_for(self, mode: str | None) -> Detector:
+    def _detector_for(self, mode: str | None, *, build: bool = True) -> Detector:
         """Resolve the base detector for an app's `pii_detection` override.
 
         `None` (no override) or a mode matching the global config both return
@@ -293,12 +303,17 @@ class Pipeline:
         cached = self._detectors.get(mode)
         if cached is not None:
             return cached
+        if not build and mode not in ("off", "regex"):
+            # B118: building this one loads a spaCy model and warms it --
+            # seconds of CPU the request path must not spend on the loop.
+            raise _DetectorBuildNeeded(mode)
         built = make_detector(mode)
         built.warmup()
         self._detectors[mode] = built
         return built
 
-    def _base_detector_for(self, app_policy, kind: str) -> Detector:
+    def _base_detector_for(self, app_policy, kind: str, *,
+                           build: bool = True) -> Detector:
         """The app's base detector (`_detector_for`) wrapped in the app's PII
         entity denylist / score threshold / value-shape exemption
         (FilteredDetector) when any is set.
@@ -315,7 +330,7 @@ class Pipeline:
         `kind` is the COMPILED `detection` axis (`eff.protection.detection`),
         never the raw nullable column: it has already had the deployment
         default folded in and the `allow_app_pii_downgrade` ceiling applied."""
-        base = self._detector_for(kind)
+        base = self._detector_for(kind, build=build)
         deny = app_policy.pii_entity_denylist if app_policy else None
         thr = app_policy.pii_score_threshold if app_policy else None
         exempt = app_policy.pii_exempt_patterns if app_policy else None
@@ -323,7 +338,8 @@ class Pipeline:
             return FilteredDetector(base, deny, thr, exempt)
         return base
 
-    def _gate_inputs(self, app_policy, profile: AppPrivacyProfile | None
+    def _gate_inputs(self, app_policy, profile: AppPrivacyProfile | None, *,
+                     build: bool = True,
                      ) -> tuple[Detector, list | None, EffectivePolicy]:
         """Compose `(detector, sensitivity rules, effective policy)` for one
         request. The ONE place the gate's detector is built: `run()` and
@@ -389,11 +405,40 @@ class Pipeline:
                   or eff.escalate_residency_on_detection)
         no_protection = p.model_input == "raw" and p.client_output == "raw"
         if not needed or (p.detection == "off" and no_protection):
-            return self._detector_for("off"), rules, eff
-        base = self._base_detector_for(app_policy, p.detection)
+            return self._detector_for("off", build=build), rules, eff
+        base = self._base_detector_for(app_policy, p.detection, build=build)
         if profile is not None:
             return EffectiveDetector(base, list(profile.recognizers)), rules, eff
         return base, rules, eff
+
+    async def _gate_inputs_async(self, app_policy, profile: AppPrivacyProfile | None
+                                 ) -> tuple[Detector, list | None, EffectivePolicy]:
+        """`_gate_inputs` for the request path (B118). Composed on the loop
+        from the detector cache -- cheap. Only a cache miss whose build loads a
+        spaCy model (`_DetectorBuildNeeded`) builds and warms it on the detector
+        executor, then composes again.
+
+        The `self._detectors` cache has a SINGLE WRITER, the event loop: the
+        executor only builds and returns the engine (re-reading the cache
+        first, so two queued misses for one mode build it once), and the loop
+        installs it with `setdefault`. A read from the executor thread is a
+        plain dict lookup, safe under the GIL; no lock is needed."""
+        try:
+            return self._gate_inputs(app_policy, profile, build=False)
+        except _DetectorBuildNeeded as need:
+            built = await run_detector(self._build_detector, need.mode)
+            self._detectors.setdefault(need.mode, built)
+            return self._gate_inputs(app_policy, profile, build=False)
+
+    def _build_detector(self, mode: str) -> Detector:
+        """Build and warm the base detector for `mode` (runs on the detector
+        executor; never writes the cache -- see `_gate_inputs_async`)."""
+        cached = self._detectors.get(mode)
+        if cached is not None:
+            return cached
+        built = make_detector(mode)
+        built.warmup()
+        return built
 
     @staticmethod
     def _policy_mode_stamp(eff: EffectivePolicy) -> str:
@@ -814,8 +859,9 @@ class Pipeline:
             # somewhere this request never evaluated. See `_eligible_now`.
             return None
         # B118: the re-verify is a detector pass -- off the event loop.
-        text, vrec = await run_detector(verify, det, ctx, entry.response_text,
-                                        client_output=client_output)
+        text, vrec = await run_detector_for(
+            egress_detector(det, client_output), verify, det, ctx,
+            entry.response_text, client_output=client_output)
         if not vrec.passed:
             return None
         # Priced on what the MODEL would have been sent (`model_text`), not on
@@ -931,25 +977,25 @@ class Pipeline:
         # PolicyGateError, which the route maps to a 503. Never a permissive
         # default, and nothing external has run at this point.
         try:
-            # B118: composing the detector may BUILD and warm one (a spaCy
-            # load on an app's first use of a non-global mode) -- detector
-            # work, so it runs on the detector executor too.
-            det, rules, eff = await run_detector(
-                self._gate_inputs, app_policy, profile)
+            # B118: composed on the loop from the detector cache; only a
+            # cache miss that must BUILD and warm a Presidio engine goes to
+            # the detector executor (`_gate_inputs_async`).
+            det, rules, eff = await self._gate_inputs_async(app_policy, profile)
             # B72: read the trajectory envelope before the gate and write it
             # back after, both inside this fail-closed block -- an envelope
             # that cannot be read or written rejects the request.
             inherited = (await trajectory.inherited(eff.trajectory_mode)
                          if trajectory is not None else frozenset())
             # B118: the gate's detector (Presidio) is CPU-bound -- ~16 s on a
-            # 56k-token prompt -- so it runs on the dedicated detector
-            # executor (app/policy/detector_pool.py). Run on the
+            # 56k-token prompt -- so a Presidio-backed gate runs on the
+            # dedicated detector executor (app/policy/detector_pool.py;
+            # regex/off stay inline, they are cheap). Run on the
             # loop it starved /health (liveness kills) and every other
             # coroutine. Same arguments; still awaited to completion here, so
             # nothing external runs before it, and any exception still lands
             # in the fail-closed handler below.
-            ctx, reps, eff = await run_detector(
-                self._gate.evaluate,
+            ctx, reps, eff = await run_detector_for(
+                det, self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
                 inherited_entity_types=inherited)
@@ -1026,8 +1072,8 @@ class Pipeline:
             # there is nothing to redact and the raw view IS the redacted one.
             # B118: `reps.redacted` is built lazily -- one detector pass
             # per message -- so build it off the event loop too.
-            san_messages = await run_detector(
-                self._tool_turn_messages, reps, eff)
+            san_messages = await run_detector_for(
+                reps.detector, self._tool_turn_messages, reps, eff)
             recall = RecallResult([], None)
             self._record_tool_arg_stats(internals, reps.tool_arg_stats())
         else:
@@ -1164,8 +1210,9 @@ class Pipeline:
             internals["outcome_ctx"].update(reply_shape(result))
 
         # B118: step-9 verification runs the detector over the whole
-        # completion -- off the event loop, like the gate.
-        text, vrec = await run_detector(
+        # completion -- a Presidio pass goes off the event loop, like the gate.
+        text, vrec = await run_detector_for(
+            egress_detector(det, client_output),
             verify, det, ctx, result.text, client_output=client_output)
         if not vrec.passed:
             if internals is not None:
@@ -1217,9 +1264,10 @@ class Pipeline:
         # `tool_args_min_score`; what passed below it is counted, ingress and
         # egress summed, on the certificate/trace and the outcome row.
         raw_tool_calls = result.tool_calls
-        tc_redaction = await run_detector(
-            redact_tool_calls_with_entities,
-            raw_tool_calls, egress_detector(det, client_output),
+        egress_det = egress_detector(det, client_output)
+        tc_redaction = await run_detector_for(
+            egress_det, redact_tool_calls_with_entities,
+            raw_tool_calls, egress_det,
             eff.protection.tool_args_min_score, eff.protection.tool_args_bar_types)
         redacted_tool_calls = tc_redaction.tool_calls
         tool_args = reps.tool_arg_stats() + tc_redaction.stats
@@ -1472,25 +1520,25 @@ class Pipeline:
         # recognizers/rules; fail closed), so the streaming path can never
         # drift from the direct one.
         try:
-            # B118: composing the detector may BUILD and warm one (a spaCy
-            # load on an app's first use of a non-global mode) -- detector
-            # work, so it runs on the detector executor too.
-            det, rules, eff = await run_detector(
-                self._gate_inputs, app_policy, profile)
+            # B118: composed on the loop from the detector cache; only a
+            # cache miss that must BUILD and warm a Presidio engine goes to
+            # the detector executor (`_gate_inputs_async`).
+            det, rules, eff = await self._gate_inputs_async(app_policy, profile)
             # B72: read the trajectory envelope before the gate and write it
             # back after, both inside this fail-closed block -- an envelope
             # that cannot be read or written rejects the request.
             inherited = (await trajectory.inherited(eff.trajectory_mode)
                          if trajectory is not None else frozenset())
             # B118: the gate's detector (Presidio) is CPU-bound -- ~16 s on a
-            # 56k-token prompt -- so it runs on the dedicated detector
-            # executor (app/policy/detector_pool.py). Run on the
+            # 56k-token prompt -- so a Presidio-backed gate runs on the
+            # dedicated detector executor (app/policy/detector_pool.py;
+            # regex/off stay inline, they are cheap). Run on the
             # loop it starved /health (liveness kills) and every other
             # coroutine. Same arguments; still awaited to completion here, so
             # nothing external runs before it, and any exception still lands
             # in the fail-closed handler below.
-            ctx, reps, eff = await run_detector(
-                self._gate.evaluate,
+            ctx, reps, eff = await run_detector_for(
+                det, self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
                 inherited_entity_types=inherited)
@@ -1576,8 +1624,8 @@ class Pipeline:
             # helpers); no memory, no compression.
             # B118: `reps.redacted` is built lazily -- one detector pass
             # per message -- so build it off the event loop too.
-            san_messages = await run_detector(
-                self._tool_turn_messages, reps, eff)
+            san_messages = await run_detector_for(
+                reps.detector, self._tool_turn_messages, reps, eff)
             recall = RecallResult([], None)
             comp = self._tool_turn_compression(san_messages, tools)
             # B69: ingress only -- a live tool turn's egress arguments are

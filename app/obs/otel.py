@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 
 from app.config.schema import Settings
 from app.obs.redact import redact_value
@@ -39,6 +40,11 @@ _deeplink_host: str | None = None  # browser-reachable Langfuse host (public_hos
 # cached separately from any redacted one. None means "tried and failed / SDK
 # missing" — don't retry.
 _app_providers: dict[tuple[str, bool], object] = {}
+# B118: `get_app_tracer` is reached from the event loop AND from the detector
+# executor thread (an export under `capture_io` redacted/full runs there), so
+# its check-then-build-then-set is done under this lock -- one provider per
+# key, never two racing builds.
+_app_providers_lock = threading.Lock()
 
 
 def trace_url(trace_id: int) -> str | None:
@@ -86,6 +92,14 @@ def get_app_tracer(host: str, public_key: str, secret_key: str,
     which case its own exporter is built with skip_io=True so raw I/O is kept
     in ITS project only. Cached per (public_key, capture_io_full) so a single
     app's redacted and full exporters (if ever both requested) don't collide."""
+    with _app_providers_lock:
+        return _get_app_tracer_locked(host, public_key, secret_key,
+                                      capture_io_full)
+
+
+def _get_app_tracer_locked(host: str, public_key: str, secret_key: str,
+                           capture_io_full: bool):
+    """`get_app_tracer`'s body; the caller holds `_app_providers_lock`."""
     cache_key = (public_key, capture_io_full)
     if cache_key in _app_providers:
         p = _app_providers[cache_key]

@@ -52,7 +52,7 @@ from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
 from app.policy.compile import compile_policy
-from app.policy.detector_pool import run_detector
+from app.policy.detector_pool import run_detector_for
 from app.policy.context import requestable_models
 from app.policy.enums import STREAM_MODES
 
@@ -1177,17 +1177,12 @@ def _full_capture_io(body: ChatRequest, resp: dict, prompt: str, completion: str
     return prompt, completion, raw_completion, display_completion
 
 
-async def _run_inline(fn, /, *args, **kwargs):
-    """Call `fn` inline on the loop -- `run_detector`'s counterpart for work
-    that runs no detector, so a caller can pick either with one expression."""
-    return fn(*args, **kwargs)
-
-
 def _redacted_display(*, raw_prompt: str | None, prompt: str,
                       redacted_prompt: str | None, display_completion: str,
                       detector, recognizers) -> dict:
-    """The console's `display` block under `capture_io: redacted`. Runs on the
-    detector executor (B118): each `redacted_copy` is a detector pass."""
+    """The console's `display` block under `capture_io: redacted`. Each
+    `redacted_copy` is a detector pass, so a Presidio-backed one runs on the
+    detector executor (B118)."""
     return {
         "mode": "redacted",
         # `prepared` pairs with `raw_prompt` and only with it (the
@@ -1334,12 +1329,15 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # the load-bearing part of its trace.
             prompt, completion, raw_completion, display_completion = _full_capture_io(
                 body, resp, prompt, completion, raw_completion, raw_tool_calls)
-        # B118: under `capture_io: redacted` the exporter builds its own
-        # redacted copy -- a detector pass over the prompt and completion --
-        # so that export runs on the detector executor. Every other mode
-        # runs no detector and stays inline.
-        run = run_detector if capture_io == "redacted" else _run_inline
-        te = await run(
+        # B118: any capture but `off` may build a redacted copy -- a detector
+        # pass over the prompt and completion. Not only `redacted`: the
+        # exporter itself downgrades `full` to `redacted` when the app's own
+        # tracer cannot be built (and that failure is cached, so it repeats
+        # on every request). So whenever a detector is present and capture is
+        # on, the export runs where that detector's work belongs: on the
+        # detector executor for Presidio, inline for regex/off.
+        te = await run_detector_for(
+            detector if capture_io != "off" else None,
             export_trace,
             request_id=resp["id"], tenant_id=tenant, model=resp["model"],
             cost=resp["cost"], policy=resp["policy"], trace=resp["trace"],
@@ -1380,9 +1378,9 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
         if te.capture_io == "full":
             resp["display"] = {"mode": "full", "input": prompt, "output": display_completion}
         elif te.capture_io == "redacted":
-            # B118: detector passes -- built on the detector executor.
-            resp["display"] = await run_detector(
-                _redacted_display, raw_prompt=raw_prompt, prompt=prompt,
+            # B118: detector passes -- Presidio work off the event loop.
+            resp["display"] = await run_detector_for(
+                detector, _redacted_display, raw_prompt=raw_prompt, prompt=prompt,
                 redacted_prompt=redacted_prompt,
                 display_completion=display_completion, detector=detector,
                 recognizers=profile.recognizers)
@@ -1937,15 +1935,18 @@ def _incremental_verify_response(
             yield sse_frame(openai_chunk(request_id, model, role="assistant",
                                          created=created))
             async for delta in watched:
-                # B118: a detector pass per delta -- on the detector
-                # executor, so a chunk may wait but the event loop does not.
-                out = await run_detector(verifier.feed, delta)
+                # B118: a detector pass per delta. A Presidio one runs on the
+                # detector executor (a chunk may wait, the loop does not);
+                # regex/off stays inline.
+                out = await run_detector_for(get_meta.detector,  # type: ignore[attr-defined]
+                                             verifier.feed, delta)
                 if out:
                     released.append(out)
                     yield sse_frame(openai_chunk(request_id, model, delta=out,
                                                  created=created))
             # release the held-back window (B118: off the event loop too)
-            tail = await run_detector(verifier.flush)
+            tail = await run_detector_for(get_meta.detector,  # type: ignore[attr-defined]
+                                          verifier.flush)
             if tail:
                 released.append(tail)
                 yield sse_frame(openai_chunk(request_id, model, delta=tail,

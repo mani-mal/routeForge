@@ -2,9 +2,12 @@
 
 Presidio is CPU-bound; on a 56k-token prompt `Gate.evaluate` blocked the loop
 for ~16 s, so `/health` could not answer and the k8s liveness probe killed the
-pod. Every request-path detector call is now awaited through
-`app.policy.detector_pool.run_detector` -- a dedicated single-worker executor,
-not the default one the loop also resolves DNS on. These tests pin:
+pod. Every request-path detector call now goes through
+`app.policy.detector_pool.run_detector_for`: work that can reach an expensive
+engine runs on a dedicated single-worker executor (not the default one the
+loop also resolves DNS on), regex/off work stays inline. The stand-in for an
+expensive engine below is a RegexDetector SUBCLASS, which the pool treats as
+expensive (only the exact cheap types run inline). These tests pin:
 
 * the loop keeps turning while a slow detector runs (a concurrent ticker
   coroutine makes progress), on `run()` and on `run_stream()`;
@@ -15,6 +18,8 @@ not the default one the loop also resolves DNS on. These tests pin:
 * under contention (the executor busy with another request's pass) a
   cache-hit and an incremental_verify stream WAIT for it without blocking the
   loop;
+* regex-mode work never waits for the executor;
+* a Presidio cache miss is built off the loop and installed by the loop;
 * fail-closed (CLAUDE.md rule 5) is unchanged -- a detector exception in the
   executor still surfaces as `PolicyGateError` and nothing downstream runs.
 """
@@ -256,6 +261,16 @@ def test_cache_hit_reverify_runs_on_detector_executor():
     det.assert_all_on_detector_thread()
 
 
+def _expensive_app_detector(monkeypatch) -> _RecordingDetector:
+    """Make `create_app` boot with a detector the pool treats as expensive
+    (Presidio stand-in), so its work must land on the executor."""
+    import app.main as main_mod
+
+    det = _RecordingDetector()
+    monkeypatch.setattr(main_mod, "make_detector", lambda _mode: det)
+    return det
+
+
 def test_capture_io_redacted_copies_run_on_detector_executor(monkeypatch):
     """`capture_io: redacted` builds telemetry and console redacted copies --
     detector passes -- on the executor, and `full`/`off` never reach it."""
@@ -275,6 +290,7 @@ def test_capture_io_redacted_copies_run_on_detector_executor(monkeypatch):
 
     monkeypatch.setattr(routes, "redacted_copy", copy)
     monkeypatch.setattr(export, "redacted_copy", copy)
+    _expensive_app_detector(monkeypatch)
 
     client = TestClient(create_app())
     from tests.test_stream_unverified import _make_app
@@ -331,7 +347,7 @@ def test_contention_cache_hit_and_incremental_verify_wait_without_blocking_loop(
 
         def get_meta():
             return {"raw_completion": "one two", "trace": [], "model": "local-8b"}
-        get_meta.detector = None
+        get_meta.detector = _RecordingDetector()   # Presidio stand-in
         get_meta.ctx = None
 
         resp = routes._incremental_verify_response(
@@ -409,3 +425,113 @@ def test_off_loop_guard_fails_an_on_loop_detector_call():
 
     with pytest.raises(RuntimeError, match="B118"):
         asyncio.run(on_loop())
+    # Recorded too (so a swallowed raise still fails the test at teardown);
+    # cleared here because this violation is the point of the test.
+    assert detectors.OFF_LOOP_VIOLATIONS
+    detectors.OFF_LOOP_VIOLATIONS.clear()
+
+
+# --- review round 2 ------------------------------------------------------------
+
+
+def test_full_capture_downgraded_by_tracer_failure_redacts_on_detector_executor(
+        monkeypatch):
+    """`full` requested, but the app's own tracer cannot be built: the exporter
+    downgrades to `redacted` and builds a redacted copy -- a detector pass the
+    route could not see coming from its own `capture_io`. It must still run on
+    the detector executor, and no on-loop call may have been swallowed by the
+    exporter's blanket except."""
+    pytest.importorskip("opentelemetry.sdk.trace")
+    from fastapi.testclient import TestClient
+
+    from app.api import routes
+    from app.main import create_app
+    from app.obs import export
+    from app.obs.redact import redacted_copy as real_copy
+    from tests.test_raw_completion_capture import (
+        force_full_capture_with_enforced_client,
+    )
+    from tests.test_trace_full_io import _make_full_app
+
+    threads: list[bool] = []
+
+    def copy(*a, **kw):
+        threads.append(_on_detector_thread())
+        return real_copy(*a, **kw)
+
+    monkeypatch.setattr(export, "redacted_copy", copy)
+    monkeypatch.setattr(routes, "redacted_copy", copy)
+    monkeypatch.setattr(export, "get_app_tracer", lambda *a, **k: None)  # build fails
+    det = _expensive_app_detector(monkeypatch)
+    force_full_capture_with_enforced_client(monkeypatch)
+
+    client = TestClient(create_app())
+    token = _make_full_app(client, "b118-full-down", enforced_client=True)
+    r = client.post("/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"model": "auto", "messages": [
+                        {"role": "user", "content": f"my ssn is {_SSN}"}]})
+    assert r.status_code == 200, r.text
+    assert threads, "the downgraded export built no redacted copy"
+    assert all(threads), f"redacted_copy ran off the detector executor: {threads}"
+    det.assert_all_on_detector_thread()
+    assert not detectors.OFF_LOOP_VIOLATIONS
+
+
+@pytest.mark.parametrize("det_factory", [RegexDetector, detectors.NullDetector])
+def test_cheap_detector_request_does_not_wait_for_busy_executor(det_factory):
+    """A regex/off request runs its detector work inline: while another
+    request's Presidio pass holds the executor for 0.5 s, it completes without
+    waiting for it."""
+    pipeline = _pipeline(det_factory())
+    asyncio.run(pipeline.run("warm", "acme", _request()))    # warm caches
+
+    async def main():
+        holder = _occupy_executor(_SLOW_S)
+        try:
+            t0 = time.monotonic()
+            resp = await pipeline.run("req-b118-cheap", "acme", _request())
+            return resp, time.monotonic() - t0
+        finally:
+            holder.join()
+
+    resp, elapsed = asyncio.run(main())
+    assert resp is not None
+    assert elapsed < _SLOW_S * 0.6, f"regex-mode request queued: {elapsed:.3f}s"
+
+
+def test_presidio_cache_miss_builds_off_loop_and_loop_installs_it(monkeypatch):
+    """An app's first use of a non-global expensive mode: the build + warm-up
+    (a spaCy load for real Presidio) runs on the detector executor, the loop
+    installs it in the cache, and the next request reuses it -- built once."""
+    import app.pipeline as pipeline_mod
+    from app.apps.policy import AppPolicyView
+
+    built_on: list[str] = []
+    instances: list[_RecordingDetector] = []
+
+    class _FakePresidio(_RecordingDetector):
+        def warmup(self) -> None:
+            built_on.append(threading.current_thread().name)
+            detectors.check_off_loop("_FakePresidio.warmup")
+
+    def fake_make(mode):
+        assert mode == "presidio"
+        d = _FakePresidio()
+        instances.append(d)
+        return d
+
+    monkeypatch.setattr(pipeline_mod, "make_detector", fake_make)
+    pipeline = _pipeline(RegexDetector())                     # global: regex
+    policy = AppPolicyView(pii_detection="presidio")
+
+    async def main():
+        await pipeline.run("p1", "acme", _request(), app_policy=policy)
+        await pipeline.run("p2", "acme", _request(), app_policy=policy)
+
+    asyncio.run(main())
+    assert len(instances) == 1, "the Presidio detector was built more than once"
+    assert built_on and all(n.startswith(detector_pool.THREAD_NAME_PREFIX)
+                            for n in built_on)
+    assert pipeline._detectors["presidio"] is instances[0]
+    instances[0].assert_all_on_detector_thread()
