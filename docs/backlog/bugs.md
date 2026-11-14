@@ -696,6 +696,11 @@ B119 (fold the view into the gate's executor job, and prioritise short passes).
 - **Per-engine executors.** Consider one executor per Presidio engine, so an app's per-mode engine does not wait behind the global one. Regex/off work already runs inline.
 - **Failed builds are not cached.** If a per-app Presidio build keeps failing (for example, the spaCy model is missing), every request for that mode retries a multi-second load on the single worker and gets a 503, delaying other Presidio work. Cache the failure briefly, still failing closed. main had the same retry, on the loop.
 - **Test gap.** Add a unit test feeding a Presidio-like engine wrapped in `EffectiveDetector`/`FilteredDetector` into `needs_detector_executor`.
+- **Hops with no detector work convoy like B120** (found in the B120 review). Decide each hop by whether real detector work will happen, not by the detector's type:
+  - *Medium:* egress tool-call redaction (`pipeline.py` `redact_tool_calls_with_entities`). For any `client_output: redact` Presidio app it queues even when the completion has no tool_calls, after the backend call and before the response.
+  - *Medium:* the export hop (`routes.py` `_finalize`). Under resolved `capture_io: full` with a working per-app tracer it does no Presidio work but still queues. Decide the hop after tracer resolution, keeping B118's downgrade case on the executor.
+  - *Low:* step-9 `verify` (and the cache re-verify) over an empty completion, i.e. a tool-call-only turn under `client_output: redact`; and the redacted export/display with an empty completion.
+  - *Single-source the raw check:* B120 repeats `_tool_turn_messages`' raw/redact selection at the call site. Prefer `run_detector_for(None if raw else reps.detector, ...)` or a helper.
 
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
