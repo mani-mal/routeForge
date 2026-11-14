@@ -230,6 +230,39 @@ shared with concurrent lab traffic, not the advisor's own cost.
 - The run-2 sessions (6, in `data/switchyard-pilot-void-run2.json`) are void and never
   analysed. Run 3 restarts from spec 1 with fresh state and the same frozen plan.
 
+### 5e. Run 3: gateway stalls correlated with arm (amended 2026-11-14, before analysis)
+
+**Finding.** During run 3, the lab api pod was killed by its liveness probe 10 times between
+00:01Z and 02:57Z. The policy gate runs Presidio synchronously on the event loop. On very
+large prompts that blocks the loop for about 16 s per request, so `/health` times out (B118).
+The exact kill times come from Prometheus (`kube_pod_container_status_last_terminated_timestamp`).
+They map to three sessions: IR-05/B, IR-12/C and IR-12/B. A fourth, IR-10/B, received a
+gateway 502 with no kill. Under §5a all four are infra, so IR-05, IR-10 and IR-12 are
+excluded from every arm. DevFoundry could not see the drops itself, because OpenCode retried
+the dropped streams silently. The evidence is RouteForge's, passed to the export as
+`--gateway-infra`. The run-2 advisor timeouts (§5d) were very likely the same loop stall.
+
+**Why this matters.** These infra events are **not independent of the arm**. Huge prompts
+come from GLM looping in B and C (6–14M input tokens per session), and every excluded
+session was a looping B/C session that ended in an 1800 s timeout. Symmetric exclusion
+therefore removes B/C failures and inflates B and C relative to A and D. For the D-vs-C
+gates that bias runs **against** D: C's success rate rises, and C loses expensive failures
+from its cost per success. (Suggested by DevFoundry.)
+
+**Amendments (fixed before any gate is computed).**
+- **Primary analysis is unchanged.** §5a exclusion and the >10%-of-specs INCONCLUSIVE rule
+  decide the verdict.
+- **Required sensitivity analysis.** Every gate is also computed with gateway-infra specs
+  included and each gateway-infra session scored as a **failure** for its arm. The other arms
+  on that spec are scored as they finished. Both results are reported side by side, along
+  with the count of specs lost and the arms of the sessions that caused each loss.
+- **How the two combine.** The verdict comes from the primary analysis. If the primary is
+  GO, it stands, because the exclusion bias runs against D. If the primary is NO-GO or
+  INCONCLUSIVE but the sensitivity analysis would pass every gate, the results doc says so
+  explicitly, and the recommended next step is a confirmation run on a build with B118
+  deployed. It is not a GO.
+- Runs after run 3 must use a build with B118, the gate off the event loop.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
