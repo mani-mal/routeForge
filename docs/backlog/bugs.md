@@ -661,6 +661,24 @@ the serving api pod had been replaced, and vLLM keeps no request log.
 **Fix:** record a content-free error class on the outcome row and the trace: the exception
 type, HTTP status, and timeout vs connect vs 4xx vs 5xx. Never the message body.
 
+## B118 — The policy gate blocks the event loop, so the liveness probe kills the pod  ✅ RESOLVED (2026-11-13, fix/b118-gate-off-event-loop; not yet deployed)
+
+**Symptom (DGX lab).** The pod was killed by the liveness probe 10 times in 4 hours, and every in-flight stream was dropped. Other coroutines also starved, causing 20 ms advisor timeouts and outbound connect timeouts.
+**Root cause.** `Pipeline.run`/`run_stream` called `Gate.evaluate` synchronously, and its Presidio pass is CPU-bound. On a 56k-token prompt it held the asyncio loop for about 16 s, so `/health` could not answer within its 5 s timeout. Other request-path callers made the same kind of synchronous detector pass: verify, redaction, streaming, telemetry and detector warm-up.
+**Fix.** No Presidio call runs on the event loop. Every request-path caller goes through `run_detector_for` (`app/policy/detector_pool.py`). Work that can reach a Presidio engine runs on a dedicated single-worker FIFO executor; regex/off work runs inline, as before. The default executor is not used, because that is where the loop resolves DNS. The callers are the gate, the per-message tool view, step-9 `verify`, egress tool-call redaction, the cache-hit re-verify, `StreamingVerifier.feed`/`flush`, and the exporter and console copies whenever capture is on. The exporter is included because it can downgrade `full` to `redacted` by itself. Detector composition stays on the loop. Only a cache miss that must build and warm a Presidio engine goes to the executor, and the loop is the cache's single writer. Arguments, ordering and fail-closed handling are unchanged. `PresidioDetector` keeps a per-engine lock as defence in depth and records any on-loop call; tests fail on one even if a caller swallows the raise. `get_app_tracer`'s cache build is locked. Tests: `tests/test_gate_off_event_loop.py`.
+
+## B119 — The detector executor has no admission bound  🔴 OPEN
+
+**Follow-up to B118.** `app/policy/detector_pool.py` is one shared, unbounded, single-worker queue, so a burst of large prompts queues without limit, and each request waits behind every pass ahead of it.
+**Fix:**
+- **Bounded admission.** When the queue is full, reject fail-closed with a 503 rather than queueing.
+- **Cancelled work.** Skip queued work whose request was cancelled. Work still queued is dropped today, because asyncio cancels the pending future. Work already running is not.
+- **Lock order.** `PresidioDetector`'s lock is not FIFO, so a second thread on the same engine (an offline script, or a future per-engine executor) gets no ordering guarantee.
+- **Streaming deltas queue behind the gate.** Under `incremental_verify`, a Presidio-mode stream sends every delta's `feed` through the same single worker, so its chunks wait behind any other request's large gate pass (about 16 s on a 56k-token prompt). The loop stays responsive, but the stream stalls. Consider a separate small pool or priority for the short per-delta passes.
+- **Per-engine executors.** Consider one executor per Presidio engine, so an app's per-mode engine does not wait behind the global one. Regex/off work already runs inline.
+- **Failed builds are not cached.** If a per-app Presidio build keeps failing (for example, the spaCy model is missing), every request for that mode retries a multi-second load on the single worker and gets a 503, delaying other Presidio work. Cache the failure briefly, still failing closed. main had the same retry, on the loop.
+- **Test gap.** Add a unit test feeding a Presidio-like engine wrapped in `EffectiveDetector`/`FilteredDetector` into `needs_detector_executor`.
+
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
 **Resolved.** `Pipeline._advise` no longer calls the advisor when `ctx.requested_model` is
