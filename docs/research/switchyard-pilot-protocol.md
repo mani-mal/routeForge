@@ -288,6 +288,31 @@ observed rate about 6 more of the remaining 24 specs would have been lost. The e
 - B117 connect errors can still exclude specs in run 4. If run 4 is INCONCLUSIVE on
   exclusions alone, the next step is B117, not another rerun.
 
+### 5g. Run 4: shared detector queue (amended 2026-11-14, before any run-4 result)
+
+Run 4 started at 2026-11-14T13:59:43Z (label `run4`) on lab API 0.43.0. Since B118, Presidio work
+is serialized on one worker shared by every app (B119). A huge prompt from any source therefore
+delays every concurrent detector call, including short calls on arms A and D and production
+calls outside the experiment. The runner executes one task at a time, so the only possible
+cross-traffic during a b109 session is production (lab-sample / OpenCode) and RouteForge probes.
+(Suggested by DevFoundry.)
+
+- **No probe traffic.** RouteForge sends no smoke, probe or test request to the lab while
+  run 4 is in progress.
+- **The primary is unchanged.** Latency a session's own prompts cause belongs to its arm
+  (§5a: timeouts = agent).
+- **Required §7 report.** The queue wait is not recorded per call, and adding it would mean a
+  mid-run deploy. It is estimated from `routing_outcomes` instead, with no code change:
+  - **Overhead per b109 call:** for consecutive calls in a session, the inter-call gap
+    minus the previous call's `latency_ms`. This bounds the gateway's pre- and post-processing
+    plus the client's think time.
+  - **Cross-traffic:** every non-b109 call whose time interval overlaps a b109 session, with
+    its `prompt_tokens`.
+  - **Flag:** for every b109 session that ended in timeout, report its overhead distribution and
+    any overlapping non-b109 call with `prompt_tokens` ≥ 50k. A timed-out session with such
+    overlap is flagged in §7, by arm. It is **not** reclassified; the class stays §5a's.
+    The flag lets the reader judge whether production load, rather than the arm, cost it time.
+
 ## 6. Procedure
 
 1. **Freeze inputs:** the RouteForge image/version, the Switchyard version (0.4.0a1),
