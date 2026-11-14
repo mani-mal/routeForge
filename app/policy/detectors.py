@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import Protocol
 
 from app.models import Entity
@@ -100,9 +101,18 @@ class PresidioDetector:
     def __init__(self) -> None:
         from presidio_analyzer import AnalyzerEngine
         self._analyzer = AnalyzerEngine()
+        # B118: the pipeline calls the detector from worker threads
+        # (`asyncio.to_thread`), so two requests can now reach one engine at
+        # once. spaCy does not promise its pipeline is thread-safe (its
+        # tokenizer, for one, mutates an internal cache on every call), so
+        # one engine is used by one thread at a time. That is exactly the
+        # throughput it had when every call ran on the event loop; what
+        # changes is that the loop is no longer blocked while it works.
+        self._lock = threading.Lock()
 
     def analyze(self, text: str) -> list[Entity]:
-        results = self._analyzer.analyze(text=text, language="en")
+        with self._lock:
+            results = self._analyzer.analyze(text=text, language="en")
         # Carry Presidio's confidence onto the Entity: dedupe already treats a
         # missing score as 0.0 (so this only ever SHARPENS same-span tie-breaks,
         # and the SSN backstop's score=1.0 still wins), and it is what a per-app

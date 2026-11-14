@@ -661,6 +661,12 @@ the serving api pod had been replaced, and vLLM keeps no request log.
 **Fix:** record a content-free error class on the outcome row and the trace: the exception
 type, HTTP status, and timeout vs connect vs 4xx vs 5xx. Never the message body.
 
+## B118 — The policy gate blocks the event loop, so the liveness probe kills the pod  ✅ RESOLVED (2026-11-13, fix/b118-gate-off-event-loop; not yet deployed)
+
+**Symptom (DGX lab).** The pod was killed by the liveness probe 10 times in 4 hours, and every in-flight stream was dropped. Other coroutines also starved, causing 20 ms advisor timeouts and outbound connect timeouts.
+**Root cause.** `Pipeline.run`/`run_stream` called `Gate.evaluate` synchronously, and its Presidio pass is CPU-bound. On a 56k-token prompt it held the asyncio loop for about 16 s, so `/health` could not answer within its 5 s timeout. Step-9 `verify()`, egress tool-call redaction and the lazy per-message `reps.redacted` view made the same kind of synchronous detector pass over whole texts.
+**Fix.** All four now run through `await asyncio.to_thread(...)`, with unchanged arguments, ordering and fail-closed handling. A gate exception is still a `PolicyGateError` and returns a 503. `PresidioDetector.analyze` holds a per-engine lock because spaCy does not promise thread safety. Tests: `tests/test_gate_off_event_loop.py`.
+
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
 **Resolved.** `Pipeline._advise` no longer calls the advisor when `ctx.requested_model` is

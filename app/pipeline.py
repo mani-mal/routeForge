@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -934,7 +935,14 @@ class Pipeline:
             # that cannot be read or written rejects the request.
             inherited = (await trajectory.inherited(eff.trajectory_mode)
                          if trajectory is not None else frozenset())
-            ctx, reps, eff = self._gate.evaluate(
+            # B118: the gate's detector (Presidio) is CPU-bound -- ~16 s on a
+            # 56k-token prompt -- so it runs on a worker thread. Run on the
+            # loop it starved /health (liveness kills) and every other
+            # coroutine. Same arguments; still awaited to completion here, so
+            # nothing external runs before it, and any exception still lands
+            # in the fail-closed handler below.
+            ctx, reps, eff = await asyncio.to_thread(
+                self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
                 inherited_entity_types=inherited)
@@ -1009,7 +1017,10 @@ class Pipeline:
             # replayed tool call's arguments reach the model verbatim.
             # `reps.redacted` is None only when no detector ran, in which case
             # there is nothing to redact and the raw view IS the redacted one.
-            san_messages = self._tool_turn_messages(reps, eff)
+            # B118: `reps.redacted` is built lazily -- one detector pass
+            # per message -- so build it off the event loop too.
+            san_messages = await asyncio.to_thread(
+                self._tool_turn_messages, reps, eff)
             recall = RecallResult([], None)
             self._record_tool_arg_stats(internals, reps.tool_arg_stats())
         else:
@@ -1145,7 +1156,10 @@ class Pipeline:
         if internals is not None:
             internals["outcome_ctx"].update(reply_shape(result))
 
-        text, vrec = verify(det, ctx, result.text, client_output=client_output)
+        # B118: step-9 verification runs the detector over the whole
+        # completion -- off the event loop, like the gate.
+        text, vrec = await asyncio.to_thread(
+            verify, det, ctx, result.text, client_output=client_output)
         if not vrec.passed:
             if internals is not None:
                 # P2b-2 (final review #1): a model WAS served before step 9
@@ -1196,7 +1210,8 @@ class Pipeline:
         # `tool_args_min_score`; what passed below it is counted, ingress and
         # egress summed, on the certificate/trace and the outcome row.
         raw_tool_calls = result.tool_calls
-        tc_redaction = redact_tool_calls_with_entities(
+        tc_redaction = await asyncio.to_thread(
+            redact_tool_calls_with_entities,
             raw_tool_calls, egress_detector(det, client_output),
             eff.protection.tool_args_min_score, eff.protection.tool_args_bar_types)
         redacted_tool_calls = tc_redaction.tool_calls
@@ -1456,7 +1471,14 @@ class Pipeline:
             # that cannot be read or written rejects the request.
             inherited = (await trajectory.inherited(eff.trajectory_mode)
                          if trajectory is not None else frozenset())
-            ctx, reps, eff = self._gate.evaluate(
+            # B118: the gate's detector (Presidio) is CPU-bound -- ~16 s on a
+            # 56k-token prompt -- so it runs on a worker thread. Run on the
+            # loop it starved /health (liveness kills) and every other
+            # coroutine. Same arguments; still awaited to completion here, so
+            # nothing external runs before it, and any exception still lands
+            # in the fail-closed handler below.
+            ctx, reps, eff = await asyncio.to_thread(
+                self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
                 inherited_entity_types=inherited)
@@ -1540,7 +1562,10 @@ class Pipeline:
         if tool_mode:
             # Same structured messages + tools as run()'s tool path (shared
             # helpers); no memory, no compression.
-            san_messages = self._tool_turn_messages(reps, eff)
+            # B118: `reps.redacted` is built lazily -- one detector pass
+            # per message -- so build it off the event loop too.
+            san_messages = await asyncio.to_thread(
+                self._tool_turn_messages, reps, eff)
             recall = RecallResult([], None)
             comp = self._tool_turn_compression(san_messages, tools)
             # B69: ingress only -- a live tool turn's egress arguments are
