@@ -26,15 +26,40 @@ Deliberately NOT here yet (backlog B119): a bound on the queue (fail-closed 503
 when full) and a per-engine executor. A caller cancelled while its work is
 still QUEUED does get that work dropped: asyncio cancels the pending
 concurrent future, so it never starts.
+
+**Timing (B119 step 1, measurement only).** Every call is timed against a
+per-request `DetectorTiming` accumulator held in a `ContextVar`
+(`start_request_timing` installs one at the top of the chat route). For an
+executor job: *queue* = submission (loop) to the worker starting it, *run* =
+the worker's start to finish, and the number of jobs already in flight at
+submission (`queue_depth_max`). Inline (regex/off) work counts as *inline*
+with no queue. The worker only writes two floats on a per-job `_JobClock`;
+the accumulator itself is only ever mutated on the loop thread, when the
+awaiting coroutine resumes (result, exception or cancellation). A job whose
+awaiter was cancelled still counts: cancelled while queued as its wait until
+the cancel, cancelled mid-run ("orphaned") as its wait plus run so far; both
+also count in `jobs_cancelled`. The Prometheus histograms are observed from
+the job's done callback, once its clock is final, with a bounded `outcome`
+label (`done | cancelled_queued | orphaned`). With no accumulator installed
+(boot warm-up, offline scripts) nothing per-request is recorded. All of this
+is wrapped so a timing failure is logged and never reaches the caller.
+Nothing here changes what runs where, or in what order.
 """
 from __future__ import annotations
 
 import asyncio
 import contextvars
 import functools
+import json
+import logging
+import threading
+import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any
+
+from app.obs import metrics
 
 from app.policy.detectors import NullDetector, RegexDetector
 from app.policy.effective import EffectiveDetector, FilteredDetector
@@ -45,16 +70,211 @@ THREAD_NAME_PREFIX = "rf-detector"
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix=THREAD_NAME_PREFIX)
 
+log = logging.getLogger("serving.detector_pool")
 
-async def run_detector[T](fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
+#: Hop label used when a caller names none.
+UNLABELLED = "other"
+
+
+# --- per-request timing (B119 step 1) ----------------------------------------
+
+
+@dataclass
+class DetectorTiming:
+    """One request's detector timings, summed. Milliseconds, floats until
+    `attributes()` rounds them. `by_hop[label]` is
+    `[executor_jobs, queue_ms, run_ms, inline_ms]`. Content-free: counts,
+    durations and fixed hop labels only."""
+    jobs: int = 0
+    jobs_cancelled: int = 0
+    queue_ms: float = 0.0
+    run_ms: float = 0.0
+    inline_calls: int = 0
+    inline_ms: float = 0.0
+    queue_depth_max: int = 0
+    by_hop: dict[str, list[float]] = field(default_factory=dict)
+
+    def _hop(self, label: str) -> list[float]:
+        return self.by_hop.setdefault(label, [0, 0.0, 0.0, 0.0])
+
+    def add_job(self, label: str, queue_ms: float, run_ms: float, depth: int,
+                *, cancelled: bool = False) -> None:
+        self.jobs += 1
+        self.jobs_cancelled += int(cancelled)
+        self.queue_ms += queue_ms
+        self.run_ms += run_ms
+        self.queue_depth_max = max(self.queue_depth_max, depth)
+        hop = self._hop(label)
+        hop[0] += 1
+        hop[1] += queue_ms
+        hop[2] += run_ms
+
+    def add_inline(self, label: str, run_ms: float) -> None:
+        self.inline_calls += 1
+        self.inline_ms += run_ms
+        self._hop(label)[3] += run_ms
+
+    @property
+    def empty(self) -> bool:
+        return self.jobs == 0 and self.inline_calls == 0
+
+    def by_hop_json(self) -> str:
+        """`{label: [jobs, queue_ms, run_ms, inline_ms]}`, rounded ms ints."""
+        return json.dumps({label: [int(v[0]), round(v[1]), round(v[2]), round(v[3])]
+                           for label, v in sorted(self.by_hop.items())},
+                          separators=(",", ":"))
+
+    def attributes(self) -> dict[str, int | str]:
+        """The `sp.detector_*` trace attributes (rounded ms ints)."""
+        return {
+            "sp.detector_queue_ms": round(self.queue_ms),
+            "sp.detector_run_ms": round(self.run_ms),
+            "sp.detector_inline_ms": round(self.inline_ms),
+            "sp.detector_jobs": self.jobs,
+            "sp.detector_jobs_cancelled": self.jobs_cancelled,
+            "sp.detector_queue_depth_max": self.queue_depth_max,
+            "sp.detector_by_hop": self.by_hop_json(),
+        }
+
+
+_TIMING: contextvars.ContextVar[DetectorTiming | None] = contextvars.ContextVar(
+    "routeforge_detector_timing", default=None)
+
+
+def start_request_timing() -> DetectorTiming:
+    """Install a fresh accumulator for the current request and return it.
+    Call it in the request's own task before the pipeline task is created
+    (a task copies the context) and before a streaming response is returned
+    (its generator runs in a task that inherits this context), so every hop
+    of the request sees this object."""
+    timing = DetectorTiming()
+    _TIMING.set(timing)
+    return timing
+
+
+def current_timing() -> DetectorTiming | None:
+    """The current request's accumulator, or None outside a request."""
+    return _TIMING.get()
+
+
+class _JobClock:
+    """`started`/`ended` are written once each by the worker; `orphaned` by
+    the loop when the awaiter is cancelled while the job runs. Plain float /
+    bool attribute stores, read by the loop after the await returns and by
+    the done callback once the job is finished (or cancelled unstarted)."""
+    __slots__ = ("hop", "submitted", "started", "ended", "orphaned")
+
+    def __init__(self, hop: str) -> None:
+        self.hop = hop
+        self.submitted = time.perf_counter()
+        self.started: float | None = None
+        self.ended: float | None = None
+        self.orphaned = False
+
+
+def _timed_call[T](clock: _JobClock, call: Callable[[], T]) -> T:
+    clock.started = time.perf_counter()
+    try:
+        return call()
+    finally:
+        clock.ended = time.perf_counter()
+
+
+#: Jobs submitted through `run_detector` and not yet finished (queued or
+#: running). Incremented on submission, decremented by the future's done
+#: callback -- which also fires for a job cancelled while still queued.
+_in_flight = 0
+_in_flight_lock = threading.Lock()
+
+
+def _admit() -> int:
+    """Count a new job in; return how many were in flight ahead of it."""
+    global _in_flight
+    with _in_flight_lock:
+        ahead = _in_flight
+        _in_flight += 1
+    return ahead
+
+
+def _release(_future: Future | None = None) -> None:
+    global _in_flight
+    with _in_flight_lock:
+        _in_flight -= 1
+
+
+def _on_job_done(clock: _JobClock, _future: Future) -> None:
+    """The concurrent future's done callback: release the in-flight slot and
+    observe the histograms. Runs on the worker when the job finishes, or on
+    the cancelling thread (the loop) when it is cancelled while queued -- in
+    both cases the clock is final."""
+    _release()
+    try:
+        if clock.started is None:      # cancelled before the worker took it
+            metrics.observe_detector_job(
+                clock.hop, "cancelled_queued",
+                time.perf_counter() - clock.submitted, None)
+            return
+        ended = clock.ended if clock.ended is not None else time.perf_counter()
+        metrics.observe_detector_job(
+            clock.hop, "orphaned" if clock.orphaned else "done",
+            clock.started - clock.submitted, ended - clock.started)
+    except Exception:
+        log.warning("detector job metrics failed (ignored)", exc_info=True)
+
+
+def _record_job(clock: _JobClock, depth: int) -> None:
+    """On the loop, when the awaiting coroutine resumes. Completed jobs count
+    their queue + run. A job cancelled while queued counts its wait up to the
+    cancel; one cancelled mid-run (orphaned: it keeps running on the worker)
+    counts its wait plus its run so far. Both are flagged as cancelled."""
+    timing = _TIMING.get()
+    if timing is None:
+        return
+    now = time.perf_counter()
+    started, ended = clock.started, clock.ended
+    if started is None:
+        timing.add_job(clock.hop, (now - clock.submitted) * 1000.0, 0.0, depth,
+                       cancelled=True)
+        return
+    queue_ms = max(0.0, started - clock.submitted) * 1000.0
+    if ended is None:
+        timing.add_job(clock.hop, queue_ms, (now - started) * 1000.0, depth,
+                       cancelled=True)
+        return
+    timing.add_job(clock.hop, queue_ms, max(0.0, ended - started) * 1000.0, depth)
+
+
+async def run_detector[T](fn: Callable[..., T], /, *args: Any,
+                          hop_label: str = UNLABELLED, **kwargs: Any) -> T:
     """Run `fn(*args, **kwargs)` on the detector executor and await its result.
 
     Same semantics as `asyncio.to_thread`: the caller's contextvars travel with
     the call, and an exception raised by `fn` is re-raised here unchanged, so
-    a caller's fail-closed handler sees exactly what it saw before."""
+    a caller's fail-closed handler sees exactly what it saw before.
+
+    `hop_label` names the call site for the timing breakdown (B119); it is
+    never passed to `fn`. `executor.submit` + `wrap_future` is exactly what
+    `loop.run_in_executor` does, spelled out so the job's concurrent future
+    can carry the in-flight counter's done callback."""
     loop = asyncio.get_running_loop()
     call = functools.partial(contextvars.copy_context().run, fn, *args, **kwargs)
-    return await loop.run_in_executor(_EXECUTOR, call)
+    depth = _admit()
+    clock = _JobClock(hop_label)
+    try:
+        future = _EXECUTOR.submit(_timed_call, clock, call)
+    except BaseException:
+        _release()
+        raise
+    future.add_done_callback(functools.partial(_on_job_done, clock))
+    try:
+        return await asyncio.wrap_future(future, loop=loop)
+    finally:
+        try:
+            if clock.started is not None and clock.ended is None:
+                clock.orphaned = True   # awaiter cancelled; job still running
+            _record_job(clock, depth)
+        except Exception:
+            log.warning("detector job timing failed (ignored)", exc_info=True)
 
 
 #: Detector types known to be cheap enough to run inline on the loop. Matched
@@ -74,10 +294,25 @@ def needs_detector_executor(detector: object) -> bool:
 
 
 async def run_detector_for[T](detector: object, fn: Callable[..., T], /,
-                              *args: Any, **kwargs: Any) -> T:
+                              *args: Any, hop_label: str = UNLABELLED,
+                              **kwargs: Any) -> T:
     """`fn(*args, **kwargs)` on the detector executor when `detector` needs it
     (`needs_detector_executor`), inline otherwise. Exceptions propagate
-    unchanged either way."""
+    unchanged either way.
+
+    `hop_label` (never passed to `fn`) names the call site for the B119
+    timing breakdown. Inline work is timed as the whole inline call; with
+    `detector is None` no detector runs at all and nothing is recorded."""
     if needs_detector_executor(detector):
-        return await run_detector(fn, *args, **kwargs)
-    return fn(*args, **kwargs)
+        return await run_detector(fn, *args, hop_label=hop_label, **kwargs)
+    timing = _TIMING.get() if detector is not None else None
+    if timing is None:
+        return fn(*args, **kwargs)
+    started = time.perf_counter()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        try:
+            timing.add_inline(hop_label, (time.perf_counter() - started) * 1000.0)
+        except Exception:
+            log.warning("inline detector timing failed (ignored)", exc_info=True)

@@ -651,7 +651,7 @@ as in B113.
 
 **Timing:** not deployed during the B109 run window, to keep the system fixed.
 
-## B117 — `backend_failed` rows don't record why the backend call failed  🔴 OPEN
+## B117 — `backend_failed` rows don't record why the backend call failed  ✅ RESOLVED (2026-11-15, fix/b117-backend-error-class; not yet deployed)
 
 **Found 2026-11-13.** There were 12 `backend_failed` calls on `glm-5.3-flash` between 18:43 and
 21:28Z, each with a ~28–37k-token prompt and `max_tokens` 32000, failing after about 5 s on a
@@ -660,6 +660,19 @@ the serving api pod had been replaced, and vLLM keeps no request log.
 
 **Fix:** record a content-free error class on the outcome row and the trace: the exception
 type, HTTP status, and timeout vs connect vs 4xx vs 5xx. Never the message body.
+
+**Resolution.** `classify_backend_error` (`app/gateway/gateway.py`) is a pure, never-raising classifier returning only
+`{type: class name, http_status, kind}`, with `kind` from a closed enum (`timeout | connect | http_4xx | http_429 |
+http_5xx | context_overflow | local_error | other`). Timeout is checked before connect, and connect before the status
+code, because litellm's `Timeout` is also an `APIConnectionError` and litellm reports status 500 on a connection error.
+The gateway stamps it on the failed hop's `DecisionRecord.backend_error` (buffered failover loop and the stream's router
+record, which the pipeline re-dumps into the stashed trace). New nullable JSON column `routing_outcomes.backend_errors`
+holds one `{model, type, http_status, kind}` per failed attempt, in `attempts` order, on `backend_failed`,
+`context_overflow` and failed-over `ok` rows. The failure trace carries `sp.backend_error_kinds`, and each failed hop's
+span `sp.backend_error`. Deployed DBs need `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS backend_errors JSON;`
+(also in `scripts/migrate_app_policies.py`). Tests: `tests/test_backend_error_class.py` (classifier across litellm,
+openai, httpx and asyncio errors; failover, single-endpoint, all-fail, stream and overflow rows; a sentinel proves no
+message text or host reaches the row or the trace).
 
 ## B118 — The policy gate blocks the event loop, so the liveness probe kills the pod  ✅ RESOLVED (2026-11-13, fix/b118-gate-off-event-loop; not yet deployed)
 
@@ -686,6 +699,9 @@ without the fix. For `model_input: redact` apps the hop is real work and can sti
 B119 (fold the view into the gate's executor job, and prioritise short passes).
 
 ## B119 — The detector executor has no admission bound  🔴 OPEN
+
+Step 1 (2026-11-15, feat/b119-detector-timing): per-request queue-wait/run-time instrumentation; decide the fix from lab data.
+(`sp.detector_*` trace attributes, a `detector_timing` log line, `routeforge_detector_{queue,run}_seconds{hop}`; see `docs/reference/routing-observability.md` §8.)
 
 **Follow-up to B118.** `app/policy/detector_pool.py` is one shared, unbounded, single-worker queue, so a burst of large prompts queues without limit, and each request waits behind every pass ahead of it.
 **Fix:**
