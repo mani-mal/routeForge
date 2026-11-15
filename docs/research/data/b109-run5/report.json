@@ -1,0 +1,349 @@
+{
+ "export_sha_note": "157e76ff5192b5120f2fed3fd2907b36fe13cbda18c9a83daa52dade8570b713",
+ "specs": 40,
+ "excluded_specs": [
+  "CI-15",
+  "IR-16"
+ ],
+ "excluded_share": 0.05,
+ "inconclusive_on_exclusions": false,
+ "mechanical_infra_specs": [
+  "CI-15",
+  "IR-16"
+ ],
+ "mechanical_matches_export": true,
+ "gate1_violations": {
+  "rows_checked": 580,
+  "violations": [],
+  "pass": true
+ },
+ "gate4_advisor_latency": {
+  "calls": 580,
+  "p50_ms": 0.684,
+  "p99_ms": 2.8,
+  "p99_nearest_rank_ms": 3.138,
+  "max_ms": 16.271,
+  "applied": 580,
+  "roles": {
+   "efficient": 538,
+   "capable": 42
+  },
+  "budget_ms": 20.0,
+  "pass": true
+ },
+ "advisor_behaviour": {
+  "rows": 580,
+  "proposed_tier__served_tier__reason": {
+   "cheap|cheap|advisor": 366,
+   "cheap|mid|placement": 172,
+   "frontier|mid|only_eligible": 42
+  },
+  "floor_or_clamp_changed_proposal": 214,
+  "fallback_causes": []
+ },
+ "d_timeout_error_fallback_share": 0.0,
+ "variants": {
+  "primary": {
+   "specs": 38,
+   "arms": {
+    "A": {
+     "n": 38,
+     "successes": 37,
+     "success_rate": 0.9737,
+     "wilson95": [
+      0.8651,
+      0.9953
+     ],
+     "total_cost_usd": 9.544186,
+     "cost_per_success_usd": 0.257951,
+     "calls_per_task": 14.39,
+     "tokens_per_task": 251163
+    },
+    "B": {
+     "n": 38,
+     "successes": 35,
+     "success_rate": 0.9211,
+     "wilson95": [
+      0.792,
+      0.9728
+     ],
+     "total_cost_usd": 103.29384,
+     "cost_per_success_usd": 2.951253,
+     "calls_per_task": 17.39,
+     "tokens_per_task": 271826
+    },
+    "C": {
+     "n": 38,
+     "successes": 34,
+     "success_rate": 0.8947,
+     "wilson95": [
+      0.7587,
+      0.9583
+     ],
+     "total_cost_usd": 109.977004,
+     "cost_per_success_usd": 3.234618,
+     "calls_per_task": 18.13,
+     "tokens_per_task": 289942
+    },
+    "D": {
+     "n": 38,
+     "successes": 35,
+     "success_rate": 0.9211,
+     "wilson95": [
+      0.792,
+      0.9728
+     ],
+     "total_cost_usd": 36.974459,
+     "cost_per_success_usd": 1.056413,
+     "calls_per_task": 14.34,
+     "tokens_per_task": 227376
+    }
+   },
+   "gate2_noninferior": {
+    "D_minus_C_pp": 2.63,
+    "ci90_pp": [
+     -7.89,
+     13.16
+    ],
+    "threshold_pp": -10.0,
+    "pass": true
+   },
+   "gate3_cheaper": {
+    "D_over_C_cost_per_success": 0.3266,
+    "ci90": [
+     0.2142,
+     0.4879
+    ],
+    "pass": true
+   }
+  },
+  "ir20_doc_hunk_ignored": {
+   "specs": 38,
+   "arms": {
+    "A": {
+     "n": 38,
+     "successes": 37,
+     "success_rate": 0.9737,
+     "wilson95": [
+      0.8651,
+      0.9953
+     ],
+     "total_cost_usd": 9.544186,
+     "cost_per_success_usd": 0.257951,
+     "calls_per_task": 14.39,
+     "tokens_per_task": 251163
+    },
+    "B": {
+     "n": 38,
+     "successes": 35,
+     "success_rate": 0.9211,
+     "wilson95": [
+      0.792,
+      0.9728
+     ],
+     "total_cost_usd": 103.29384,
+     "cost_per_success_usd": 2.951253,
+     "calls_per_task": 17.39,
+     "tokens_per_task": 271826
+    },
+    "C": {
+     "n": 38,
+     "successes": 34,
+     "success_rate": 0.8947,
+     "wilson95": [
+      0.7587,
+      0.9583
+     ],
+     "total_cost_usd": 109.977004,
+     "cost_per_success_usd": 3.234618,
+     "calls_per_task": 18.13,
+     "tokens_per_task": 289942
+    },
+    "D": {
+     "n": 38,
+     "successes": 36,
+     "success_rate": 0.9474,
+     "wilson95": [
+      0.8271,
+      0.9854
+     ],
+     "total_cost_usd": 36.974459,
+     "cost_per_success_usd": 1.027068,
+     "calls_per_task": 14.34,
+     "tokens_per_task": 227376
+    }
+   },
+   "gate2_noninferior": {
+    "D_minus_C_pp": 5.26,
+    "ci90_pp": [
+     -2.63,
+     13.16
+    ],
+    "threshold_pp": -10.0,
+    "pass": true
+   },
+   "gate3_cheaper": {
+    "D_over_C_cost_per_success": 0.3175,
+    "ci90": [
+     0.2078,
+     0.4752
+    ],
+    "pass": true
+   }
+  },
+  "s5e_gateway_infra_as_failure": {
+   "specs": 40,
+   "still_excluded": [],
+   "arms": {
+    "A": {
+     "n": 40,
+     "successes": 39,
+     "success_rate": 0.975,
+     "wilson95": [
+      0.8712,
+      0.9956
+     ],
+     "total_cost_usd": 10.430087,
+     "cost_per_success_usd": 0.267438,
+     "calls_per_task": 14.8,
+     "tokens_per_task": 260752
+    },
+    "B": {
+     "n": 40,
+     "successes": 36,
+     "success_rate": 0.9,
+     "wilson95": [
+      0.7695,
+      0.9604
+     ],
+     "total_cost_usd": 151.92345,
+     "cost_per_success_usd": 4.220096,
+     "calls_per_task": 21.07,
+     "tokens_per_task": 379809
+    },
+    "C": {
+     "n": 40,
+     "successes": 34,
+     "success_rate": 0.85,
+     "wilson95": [
+      0.7093,
+      0.9294
+     ],
+     "total_cost_usd": 157.443154,
+     "cost_per_success_usd": 4.630681,
+     "calls_per_task": 21.88,
+     "tokens_per_task": 394110
+    },
+    "D": {
+     "n": 40,
+     "successes": 37,
+     "success_rate": 0.925,
+     "wilson95": [
+      0.8014,
+      0.9742
+     ],
+     "total_cost_usd": 40.833801,
+     "cost_per_success_usd": 1.103616,
+     "calls_per_task": 14.5,
+     "tokens_per_task": 230777
+    }
+   },
+   "gate2_noninferior": {
+    "D_minus_C_pp": 7.5,
+    "ci90_pp": [
+     -2.5,
+     17.5
+    ],
+    "threshold_pp": -10.0,
+    "pass": true
+   },
+   "gate3_cheaper": {
+    "D_over_C_cost_per_success": 0.2383,
+    "ci90": [
+     0.1485,
+     0.4189
+    ],
+    "pass": true
+   }
+  }
+ },
+ "gates_all_pass": {
+  "primary": "GO",
+  "ir20_doc_hunk_ignored": "GO",
+  "s5e_gateway_infra_as_failure": "GO"
+ },
+ "s5g_cross_traffic": {
+  "note": "inter-call gap minus the call's own latency_ms (ts is at completion): bounds gateway pre/post-processing plus client think time; negative = overlapping calls",
+  "negative_gaps_by_arm": {
+   "A": 86,
+   "B": 76,
+   "C": 74,
+   "D": 82
+  },
+  "overhead_s_by_arm": {
+   "A": {
+    "n": 532,
+    "p50": 2.61,
+    "p90": 4.07,
+    "p99": 5.31
+   },
+   "B": {
+    "n": 783,
+    "p50": 2.67,
+    "p90": 6.19,
+    "p99": 12.56
+   },
+   "C": {
+    "n": 816,
+    "p50": 3.16,
+    "p90": 5.3,
+    "p99": 14.58
+   },
+   "D": {
+    "n": 520,
+    "p50": 2.56,
+    "p90": 3.94,
+    "p99": 5.34
+   }
+  },
+  "nonb109_calls_in_window": 131,
+  "nonb109_calls_ge50k": 94,
+  "timed_out_sessions": [
+   {
+    "spec": "IR-16",
+    "arm": "B",
+    "session": "att-5851cca4c6584bd5b5adf14c17fa90a6",
+    "class": "infra",
+    "calls": 167,
+    "overhead_s": {
+     "p50": 4.02,
+     "p90": 11.57,
+     "max": 130.39
+    },
+    "overlapping_nonb109_calls_ge50k": 0,
+    "max_overlapping_prompt_tokens": 0
+   },
+   {
+    "spec": "CI-15",
+    "arm": "C",
+    "session": "att-05755c8e21824c9c85e20d0e1a1e14a4",
+    "class": "infra",
+    "calls": 181,
+    "overhead_s": {
+     "p50": 4.51,
+     "p90": 6.02,
+     "max": 7.29
+    },
+    "overlapping_nonb109_calls_ge50k": 0,
+    "max_overlapping_prompt_tokens": 0
+   }
+  ],
+  "flagged_spec_arm": []
+ },
+ "manual_rows_per_arm": {
+  "A": 0,
+  "B": 1,
+  "C": 1,
+  "D": 1
+ }
+}
