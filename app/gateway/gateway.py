@@ -162,7 +162,8 @@ def classify_backend_error(exc: object) -> dict:
               or any("Timeout" in n for n in names)):
             kind = "timeout"
         elif (isinstance(exc, ConnectionError)
-              or names & {"APIConnectionError", "ConnectError", "NetworkError"}):
+              or names & {"APIConnectionError", "ConnectError", "NetworkError",
+                                 "RemoteProtocolError"}):
             kind = "connect"
         elif status == 429:
             kind = "http_429"

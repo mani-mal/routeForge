@@ -53,6 +53,7 @@ def _cases():
         (openai.APIConnectionError(message=SENTINEL, request=_REQ), "connect"),
         (openai.InternalServerError(SENTINEL, response=_resp(502), body=None), "http_5xx"),
         (httpx.ConnectError(SENTINEL), "connect"),
+        (httpx.RemoteProtocolError(SENTINEL), "connect"),
         (httpx.ReadTimeout(SENTINEL), "timeout"),
         (httpx.HTTPStatusError(SENTINEL, request=_REQ, response=_resp(503)), "http_5xx"),
         (httpx.HTTPStatusError(SENTINEL, request=_REQ, response=_resp(404)), "http_4xx"),
