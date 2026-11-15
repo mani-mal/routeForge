@@ -829,7 +829,10 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
     status = _outcome_failure_status(exc)
     # B119: a rejected request's detector timings (BackendUnavailable logs its
     # own via `_record_failed` -> `_export_failure_trace` above).
-    _log_detector_timing(current_timing(), request_id, outcome=status or "rejected")
+    # An unmapped exception is a 500 to the client (e.g. the keepalive stream
+    # path), not a policy rejection -- label it `error` like the plain path.
+    label = status or ("rejected" if _error_status_detail(exc) is not None else "error")
+    _log_detector_timing(current_timing(), request_id, outcome=label)
     if status is None:
         return
     await _record_failure_outcome(
