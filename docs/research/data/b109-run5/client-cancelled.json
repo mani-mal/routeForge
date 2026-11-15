@@ -1,0 +1,7 @@
+{
+ "note": "Informational, NOT gateway-infra: rows with status=cancelled mean the client closed the connection mid-call (RouteForge returned no error). Listed for the session-mapping cross-check only.",
+ "requests": {
+  "req-9c4cfd4dc6054ce4aab064bdd50635a5": "2026-11-14T18:57:58Z b109-b-capable, cancelled after 11.8 s",
+  "req-683d4707426c41beb1199fed5769d838": "2026-11-14T23:02:33Z b109-c-router, cancelled after 5.1 s"
+ }
+}
