@@ -687,6 +687,9 @@ B119 (fold the view into the gate's executor job, and prioritise short passes).
 
 ## B119 — The detector executor has no admission bound  🔴 OPEN
 
+Step 1 (2026-11-15, feat/b119-detector-timing): per-request queue-wait/run-time instrumentation; decide the fix from lab data.
+(`sp.detector_*` trace attributes, a `detector_timing` log line, `routeforge_detector_{queue,run}_seconds{hop}`; see `docs/reference/routing-observability.md` §8.)
+
 **Follow-up to B118.** `app/policy/detector_pool.py` is one shared, unbounded, single-worker queue, so a burst of large prompts queues without limit, and each request waits behind every pass ahead of it.
 **Fix:**
 - **Bounded admission.** When the queue is full, reject fail-closed with a 503 rather than queueing.
