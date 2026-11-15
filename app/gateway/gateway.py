@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -103,6 +104,77 @@ def counts_as_endpoint_unhealth(exc: Exception) -> bool:
     if code == 429:
         return True
     return not (400 <= code < 500)
+
+
+#: The closed `kind` enum of `classify_backend_error` (B117).
+BACKEND_ERROR_KINDS = ("timeout", "connect", "http_4xx", "http_429", "http_5xx",
+                       "context_overflow", "local_error", "other")
+
+
+def _error_status(exc: BaseException) -> int | None:
+    """The HTTP status an exception carries, or None. litellm/openai errors
+    expose `status_code`; `httpx.HTTPStatusError` carries it on `.response`."""
+    for raw in (getattr(exc, "status_code", None),
+                getattr(getattr(exc, "response", None), "status_code", None)):
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def classify_backend_error(exc: object) -> dict:
+    """A content-free class for a failed backend call (B117): exactly
+    `{"type", "http_status", "kind"}` -- the exception CLASS NAME, the status it
+    carries (or None) and a closed `kind` enum (`BACKEND_ERROR_KINDS`). Never
+    `str(exc)`, never a message, URL or host: an upstream error can echo request
+    content or internal topology, and this record is persisted and exported.
+
+    `kind` precedence, first match wins:
+
+    1. `context_overflow` -- `ContextWindowExceeded` (the request is too big).
+    2. `local_error` -- the local programming-error classes
+       `counts_as_endpoint_unhealth` lists (our bug, not the endpoint's).
+    3. `timeout` -- BEFORE connect, because litellm's `Timeout` subclasses
+       openai's `APITimeoutError`, which subclasses `APIConnectionError`; it
+       also carries status 408. Matches `httpx.TimeoutException`,
+       `asyncio.TimeoutError` / builtin `TimeoutError`, and any class in the
+       MRO named like `*Timeout*`.
+    4. `connect` -- BEFORE the status code, because litellm's
+       `APIConnectionError` reports `status_code=500` though no response ever
+       arrived. Matches `httpx.NetworkError`/`ConnectError`, builtin
+       `ConnectionError`, and any MRO class named `APIConnectionError`.
+    5. By status: 429 -> `http_429`, 400-499 -> `http_4xx`, >=500 -> `http_5xx`.
+    6. `other`.
+
+    Never raises: any unexpected failure reads `other`."""
+    try:
+        status = _error_status(exc)   # type: ignore[arg-type]
+        name = str(type(exc).__name__)
+        names = {c.__name__ for c in type(exc).__mro__}
+        if isinstance(exc, ContextWindowExceeded):
+            kind = "context_overflow"
+        elif isinstance(exc, _LOCAL_PROGRAMMING_ERRORS):
+            kind = "local_error"
+        elif (isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+              or any("Timeout" in n for n in names)):
+            kind = "timeout"
+        elif (isinstance(exc, ConnectionError)
+              or names & {"APIConnectionError", "ConnectError", "NetworkError"}):
+            kind = "connect"
+        elif status == 429:
+            kind = "http_429"
+        elif status is not None and 400 <= status < 500:
+            kind = "http_4xx"
+        elif status is not None and status >= 500:
+            kind = "http_5xx"
+        else:
+            kind = "other"
+        return {"type": name[:80], "http_status": status, "kind": kind}
+    except Exception:
+        return {"type": "unknown", "http_status": None, "kind": "other"}
 
 def _exhausted(last_error: str, overflow_errors: list[str], failures: int,
                 attempted: list[str], records: list[DecisionRecord],
@@ -256,6 +328,7 @@ class Gateway:
                     tools=tools, tool_choice=tool_choice, params=params)
             except Exception as exc:
                 last_error = _format_upstream_error(cand.name, exc)
+                backend_error = classify_backend_error(exc)
                 if self._signals is not None and counts_as_endpoint_unhealth(exc):
                     # This hop's model failed -- observe THAT model, not the
                     # peer that succeeds on the next iteration.
@@ -290,7 +363,9 @@ class Gateway:
                     # (scoring stays score-ranked), so the name is never
                     # inferred from the scoring order.
                     scoring=decision.scoring_record(),
-                    attempted=cand.name))
+                    attempted=cand.name,
+                    # B117: the content-free error class (type/status/kind).
+                    backend_error=backend_error))
                 failed_models.add(cand.name)
                 failover_attempts += 1
                 if failover_attempts > max_failover:
@@ -414,6 +489,9 @@ class Gateway:
                             self._breaker.record_success(cand.name)
                     yield chunk
             except Exception as exc:
+                # B117: the failed stream's router record carries the class;
+                # the pipeline re-dumps it into the outcome row's trace.
+                record.backend_error = classify_backend_error(exc)
                 if self._signals is not None and counts_as_endpoint_unhealth(exc):
                     self._signals.observe_error(cand.name, streamed=True)
                 if self._breaker is not None and counts_as_endpoint_unhealth(exc):
