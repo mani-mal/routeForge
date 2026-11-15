@@ -45,11 +45,11 @@ if AVAILABLE:
     _detector_queue = Histogram(
         "routeforge_detector_queue_seconds",
         "Time a detector-executor job waited in the queue before it started.",
-        ["hop"], buckets=_DETECTOR_BUCKETS)
+        ["hop", "outcome"], buckets=_DETECTOR_BUCKETS)
     _detector_run = Histogram(
         "routeforge_detector_run_seconds",
         "Time a detector-executor job ran on the worker.",
-        ["hop"], buckets=_DETECTOR_BUCKETS)
+        ["hop", "outcome"], buckets=_DETECTOR_BUCKETS)
 
 
 def observe_request(model: str, status: str) -> None:
@@ -86,12 +86,16 @@ def observe_breaker_transition(to_state: str) -> None:
         _breaker.labels(to_state=to_state).inc()
 
 
-def observe_detector_job(hop: str, queue_s: float, run_s: float) -> None:
+def observe_detector_job(hop: str, outcome: str, queue_s: float,
+                         run_s: float | None) -> None:
     """One detector-executor job (B119). `hop` is a fixed call-site label from
-    `app.policy.detector_pool` -- bounded, never tenant or request data."""
+    `app.policy.detector_pool`; `outcome` is `done | cancelled_queued |
+    orphaned` -- both bounded, never tenant or request data. A job cancelled
+    while queued has a queue wait (until the cancel) and no run (`None`)."""
     if AVAILABLE:
-        _detector_queue.labels(hop=hop).observe(queue_s)
-        _detector_run.labels(hop=hop).observe(run_s)
+        _detector_queue.labels(hop=hop, outcome=outcome).observe(max(0.0, queue_s))
+        if run_s is not None:
+            _detector_run.labels(hop=hop, outcome=outcome).observe(max(0.0, run_s))
 
 
 def render() -> tuple[bytes, str]:

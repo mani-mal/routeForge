@@ -398,16 +398,33 @@ def _core_record(core) -> dict | None:
         return None
 
 
-def _log_detector_timing(timing, request_id: str) -> None:
+def _detector_timing_attributes(timing, request_id: str) -> dict | None:
+    """B119 step 1: `timing.attributes()` for a trace, or None. Guarded, so a
+    timing failure can never skip the export it would have been attached to."""
+    if timing is None:
+        return None
+    try:
+        return timing.attributes()
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "detector timing snapshot failed request=%s", request_id, exc_info=True)
+        return None
+
+
+def _log_detector_timing(timing, request_id: str, outcome: str) -> None:
     """B119 step 1: one structured line per request that did detector work,
-    with the request's FINAL detector timings -- including the export and
-    console-display hops, which run after the trace's `sp.detector_*`
-    attributes were set. Content-free: counts, rounded ms, fixed hop labels."""
+    with the request's FINAL detector timings -- on success including the
+    export and console-display hops, which run after the trace's
+    `sp.detector_*` attributes were set. Also written for cancelled, failed
+    and rejected requests (`outcome`), so a long queue wait that ended in a
+    client timeout is not lost. Content-free: counts, rounded ms, fixed hop
+    labels, an outcome enum."""
     if timing is None or timing.empty:
         return
     try:
         attrs = timing.attributes()
         record = {"event": "detector_timing", "request_id": request_id,
+                  "outcome": outcome,
                   **{k.removeprefix("sp."): v for k, v in attrs.items()}}
         record["detector_by_hop"] = json.loads(record["detector_by_hop"])
         logging.getLogger("serving.api").info(json.dumps(record, sort_keys=True))
@@ -483,16 +500,21 @@ def _export_failure_trace(*, status: str, tenant: str, request_id: str,
                           app_langfuse: object | None, session_id: str | None,
                           started_ns: int | None) -> None:
     """The minimal, content-free Langfuse trace for a `cancelled` or `error`
-    request (B78). Best effort: swallowed, never changes the response."""
+    request (B78), carrying the request's detector timings (B119), plus the
+    `detector_timing` log line with the same `outcome`. Best effort:
+    swallowed, never changes the response."""
+    timing = current_timing()
     try:
         export_failure_trace(
             request_id=request_id, application_id=tenant, status=status,
             latency_ms=(time.monotonic() - started) * 1000,
             attempts=tuple(attempts), app_langfuse=app_langfuse,
-            session_id=session_id, started_ns=started_ns)
+            session_id=session_id, started_ns=started_ns,
+            detector_timing=_detector_timing_attributes(timing, request_id))
     except Exception:
         logging.getLogger("serving.obs").warning(
             "failure trace failed request=%s", request_id, exc_info=True)
+    _log_detector_timing(timing, request_id, outcome=status)
 
 
 async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
@@ -805,6 +827,9 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                              started_ns=started_ns)
         return
     status = _outcome_failure_status(exc)
+    # B119: a rejected request's detector timings (BackendUnavailable logs its
+    # own via `_record_failed` -> `_export_failure_trace` above).
+    _log_detector_timing(current_timing(), request_id, outcome=status or "rejected")
     if status is None:
         return
     await _record_failure_outcome(
@@ -881,9 +906,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     started = time.monotonic()
     started_ns = time.time_ns()
     # B119 step 1: this request's detector queue/run timings. Installed here,
-    # in the request's own task, BEFORE the pipeline task and any stream
-    # generator exist -- both copy this context, so every detector hop of the
-    # request (stream feed/flush included) lands in the same accumulator.
+    # in the request's own task, BEFORE the pipeline task is created (a task
+    # copies the context) and before any streaming response is returned (its
+    # generator is not a context boundary: it runs in the task that iterates
+    # it, which inherits this context), so every detector hop of the request
+    # (stream feed/flush included) lands in the same accumulator.
     start_request_timing()
     auth = await _authenticate(request)
     if auth is None:
@@ -1104,6 +1131,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         if mapped is None:
             logging.getLogger("serving.api").error(
                 "unhandled error for %s", request_id, exc_info=scrubbed_exception(e))
+            _log_detector_timing(current_timing(), request_id, outcome="error")
             metrics.observe_request("-", "error")
             raise ApiError(500, "internal error", code=CODE_INTERNAL_ERROR)
         if mapped[0] >= 500:
@@ -1300,6 +1328,9 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # string it has already scanned; the regex egress pass still runs.
     redacted_prompt = internals.get("redacted_prompt")
     timing = current_timing()
+    # Snapshot taken here, guarded (B119): a timing failure must never skip
+    # the export below.
+    timing_attrs = _detector_timing_attributes(timing, request_id)
     try:
         # Eval-capture (current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
@@ -1389,7 +1420,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # B119 step 1: this request's detector timings SO FAR -- the
             # export hop's own job is not in it (it is timed after this
             # snapshot; it reaches the `detector_timing` log line below).
-            detector_timing=(timing.attributes() if timing is not None else None),
+            detector_timing=timing_attrs,
             hop_label="export")
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
         # the admin drilldown ONLY — this is the request_snapshots cache, same
@@ -1426,7 +1457,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
-    _log_detector_timing(timing, request_id)
+    _log_detector_timing(timing, request_id, outcome="ok")
     # Onboarded on-prem models (e.g. local-8b) live only in the registry's
     # effective pool, not the static `s.routing.model_pool` -- both lookups
     # below must consult it too, or every on-prem model's tier/provider

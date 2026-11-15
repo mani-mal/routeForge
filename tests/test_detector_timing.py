@@ -82,7 +82,9 @@ def test_labels_attributed_and_inline_work_has_no_queue():
     attrs = timing.attributes()
     assert set(attrs) == {"sp.detector_queue_ms", "sp.detector_run_ms",
                           "sp.detector_inline_ms", "sp.detector_jobs",
+                          "sp.detector_jobs_cancelled",
                           "sp.detector_queue_depth_max", "sp.detector_by_hop"}
+    assert attrs["sp.detector_jobs_cancelled"] == 0
     assert all(isinstance(v, int) for k, v in attrs.items() if k != "sp.detector_by_hop")
 
 
@@ -275,3 +277,139 @@ def test_stream_trace_carries_feed_and_flush_jobs(client, spans, monkeypatch):
     assert {"gate", "stream_feed", "stream_flush"} <= set(by_hop)
     assert by_hop["stream_feed"][0] == len(deltas)
     assert "123-45" not in json.dumps(timing) and "6789" not in json.dumps(timing)
+
+
+# --- cancelled work is still measured (review fix 1) ---------------------------
+
+
+def _hist_count(name: str, hop: str, outcome: str) -> float:
+    from app.obs import metrics
+    if not metrics.AVAILABLE:
+        pytest.skip("prometheus_client not installed")
+    from prometheus_client import REGISTRY
+    return REGISTRY.get_sample_value(f"{name}_count",
+                                     {"hop": hop, "outcome": outcome}) or 0.0
+
+
+def _hist_sum(name: str, hop: str, outcome: str) -> float:
+    from prometheus_client import REGISTRY
+    return REGISTRY.get_sample_value(f"{name}_sum",
+                                     {"hop": hop, "outcome": outcome}) or 0.0
+
+
+def test_client_cancel_while_queued_still_reaches_histogram_trace_and_log(spans, caplog):
+    """A client that gives up while its gate pass is still QUEUED behind
+    another request's long pass: the wait it suffered must not vanish. The
+    request goes through the real disconnect path (`_await_unless_disconnected`
+    -> ClientDisconnected) and the real B78 failure-trace helper the route
+    calls from `_record_cancelled`."""
+    from app.api import routes
+
+    caplog.set_level(logging.INFO, logger="serving.api")
+    provider, mem = spans
+    q_count0 = _hist_count("routeforge_detector_queue_seconds", "gate", "cancelled_queued")
+    q_sum0 = _hist_sum("routeforge_detector_queue_seconds", "gate", "cancelled_queued")
+    wait_s = 0.25
+
+    async def main():
+        # Another request's long pass occupies the single worker.
+        blocker = asyncio.create_task(asyncio.to_thread(
+            detector_pool._EXECUTOR.submit(time.sleep, 0.6).result))
+        await asyncio.sleep(0.02)
+
+        timing = start_request_timing()
+        task = asyncio.create_task(run_detector_for(
+            _ExpensiveDetector(), lambda: None, hop_label="gate"))
+        started = time.monotonic()
+
+        async def disconnected():
+            return time.monotonic() - started >= wait_s
+
+        with pytest.raises(routes.ClientDisconnected):
+            await routes._await_unless_disconnected(task, disconnected, 0.02)
+        routes._export_failure_trace(
+            status="cancelled", tenant="acme", request_id="req-b119-cancel",
+            started=started, attempts=(), app_langfuse=None, session_id=None,
+            started_ns=None)
+        await blocker
+        return timing
+
+    timing = asyncio.run(main())
+    # The accumulator: one cancelled job, its wait until the cancel.
+    assert timing.jobs == 1 and timing.jobs_cancelled == 1
+    assert timing.run_ms == 0
+    assert abs(timing.queue_ms - wait_s * 1000) < _TOL_MS
+    # The histogram: observed from the done callback, outcome cancelled_queued.
+    assert _hist_count("routeforge_detector_queue_seconds", "gate",
+                       "cancelled_queued") == q_count0 + 1
+    observed = _hist_sum("routeforge_detector_queue_seconds", "gate",
+                         "cancelled_queued") - q_sum0
+    assert abs(observed - wait_s) < _TOL_MS / 1000
+    # The B78 cancel trace carries the timings.
+    attrs = _timing_attrs(_root_attrs(provider, mem))
+    assert attrs["sp.detector_jobs_cancelled"] == 1
+    assert abs(attrs["sp.detector_queue_ms"] - wait_s * 1000) < _TOL_MS
+    # ... and so does the log line, with its outcome.
+    line = [ln for ln in _timing_log_lines(caplog)
+            if ln["request_id"] == "req-b119-cancel"]
+    assert len(line) == 1
+    assert line[0]["outcome"] == "cancelled"
+    assert line[0]["detector_jobs_cancelled"] == 1
+    assert abs(line[0]["detector_queue_ms"] - wait_s * 1000) < _TOL_MS
+
+
+def test_orphaned_running_job_counts_wait_plus_run_so_far():
+    """The awaiter is cancelled while its job RUNS: the job keeps running on
+    the worker. The request counts its run so far (flagged cancelled); the
+    histogram observes the full run, labelled orphaned, when the job ends."""
+    r_count0 = _hist_count("routeforge_detector_run_seconds", "verify", "orphaned")
+
+    async def main():
+        timing = start_request_timing()
+        task = asyncio.create_task(run_detector_for(
+            _ExpensiveDetector(), time.sleep, 0.4, hop_label="verify"))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return timing
+
+    timing = asyncio.run(main())
+    assert timing.jobs == 1 and timing.jobs_cancelled == 1
+    assert 80 < timing.run_ms < 300            # ~150 ms so far, not the full 400
+    detector_pool._EXECUTOR.submit(lambda: None).result()   # let the job end
+    assert _hist_count("routeforge_detector_run_seconds", "verify",
+                       "orphaned") == r_count0 + 1
+    assert detector_pool._in_flight == 0
+
+
+def test_timing_failure_never_masks_fn_or_skips_work(monkeypatch):
+    """Review fix 2: a broken accumulator is logged, never raised."""
+    def broken(*a, **kw):
+        raise RuntimeError("timing broke")
+
+    async def main():
+        timing = start_request_timing()
+        monkeypatch.setattr(timing, "add_job", broken)
+        monkeypatch.setattr(timing, "add_inline", broken)
+        a = await run_detector_for(_ExpensiveDetector(), lambda: "exec")
+        b = await run_detector_for(RegexDetector(), lambda: "inline")
+        with pytest.raises(KeyError):
+            await run_detector_for(_ExpensiveDetector(), {}.__getitem__, "k")
+        return a, b
+
+    assert asyncio.run(main()) == ("exec", "inline")
+
+
+def test_finalize_export_survives_a_broken_timing_snapshot(client, spans, monkeypatch):
+    """Review fix 2: a failing `attributes()` never skips the trace export."""
+    provider, mem = spans
+    monkeypatch.setattr(detector_pool.DetectorTiming, "attributes",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("x")))
+    r = client.post("/v1/chat/completions",
+                    headers={"authorization": "Bearer demo-key"},
+                    json={"model": "auto", "messages": [
+                        {"role": "user", "content": "hello"}]})
+    assert r.status_code == 200, r.text
+    attrs = _root_attrs(provider, mem)
+    assert not _timing_attrs(attrs)            # no timings, but the trace exported

@@ -74,8 +74,8 @@ Source of truth: `app/obs/metrics.py`.
 | `routeforge_routing_overhead_seconds` | Histogram | *(none)* |
 | `routeforge_tokens_total` | Counter | `model`, `direction` (`in`\|`out`) |
 | `routeforge_breaker_transitions_total` | Counter | `to_state` (`open`\|`half_open`\|`closed`) |
-| `routeforge_detector_queue_seconds` | Histogram | `hop` (§8) |
-| `routeforge_detector_run_seconds` | Histogram | `hop` (§8) |
+| `routeforge_detector_queue_seconds` | Histogram | `hop`, `outcome` (§8) |
+| `routeforge_detector_run_seconds` | Histogram | `hop`, `outcome` (§8) |
 
 - `status` values you'll see: `ok`, `unauthorized`, `rate_limited`,
   `budget_exceeded`, `unknown_model_alias`, `rejected`, `error`. For pre-routing rejects `model` is `-`.
@@ -754,18 +754,25 @@ of the gateway's overhead was **waiting** in that queue and how much was
 detector workers if queue-dominated; not if run-dominated).
 
 **How it is measured.** The chat route installs a per-request accumulator in a
-`ContextVar` before the pipeline task or any stream generator exists, so every
-detector hop of the request lands in it, stream `feed`/`flush` included.
+`ContextVar` before the pipeline task is created (a task copies the context)
+and before any streaming response is returned (its generator runs in a task
+that inherits it), so every detector hop of the request lands in it, stream
+`feed`/`flush` included.
 For each executor job, *queue* is submission (on the loop) to the worker
 starting it, *run* is start to finish on the worker (`time.perf_counter`),
 and *depth* is the number of jobs already queued or running at submission.
 The worker only stamps two floats on a per-job clock; the accumulator is
-mutated on the loop thread after the job's future resolves. Inline work
+mutated on the loop thread when the awaiting coroutine resumes. Inline work
 (exact `RegexDetector`/`NullDetector`) is counted as *inline*: the wall time
 of the whole inline call, no queue. A hop with no detector at all records
-nothing. A job cancelled while still queued, or whose awaiter was cancelled
-mid-run, is not recorded. With no accumulator (boot warm-up, offline scripts,
-the eval runner) nothing is recorded.
+nothing. **Cancelled work still counts** — the worst waits are the ones a
+client gave up on. A job cancelled while still queued counts its wait up to
+the cancel (no run); one whose awaiter was cancelled mid-run (*orphaned*: it
+keeps running on the worker) counts its wait plus its run so far. Both are
+also counted in `sp.detector_jobs_cancelled`. With no accumulator (boot
+warm-up, offline scripts, the eval runner) nothing per-request is recorded.
+Every timing step is guarded: a failure is logged and never reaches the
+caller, masks `fn`'s exception, or skips an export.
 
 **Hop labels** (fixed, bounded): `gate`, `warmup` (a Presidio cache-miss
 build), `tool_view` (the per-message redacted view, `model_input: redact`
@@ -782,7 +789,8 @@ argument redaction), `stream_feed`/`stream_flush` (`incremental_verify`),
 | `sp.detector_queue_ms` | total executor queue wait, ms (int) |
 | `sp.detector_run_ms` | total executor run time, ms (int) |
 | `sp.detector_inline_ms` | total inline detector time, ms (int) |
-| `sp.detector_jobs` | executor jobs |
+| `sp.detector_jobs` | executor jobs (including cancelled ones) |
+| `sp.detector_jobs_cancelled` | executor jobs whose awaiter was cancelled (queued or mid-run) |
 | `sp.detector_queue_depth_max` | max jobs in flight ahead of one of this request's jobs |
 | `sp.detector_by_hop` | JSON `{"<hop>": [jobs, queue_ms, run_ms, inline_ms]}` |
 
@@ -790,24 +798,34 @@ The attributes are a snapshot taken just before the export hop is submitted,
 so **the `export` hop's own timing — and the `display` hop after it — are not
 on the request's own trace.** Both are on the log line.
 
+The same attributes are on the B78 failure/cancel trace (`sp.status`
+`cancelled` or `error`), so a convoy wait that ended in a client timeout is
+on a trace too.
+
 **On the log** — one `serving.api` INFO line per request that did detector
-work, written at the end of `_finalize` with the final totals (export and
-display included):
+work, with an `outcome`: `ok` (written at the end of `_finalize` with the
+final totals, export and display included), `cancelled` and `error` (from
+the B78 failure-trace helper), or the rejection's outcome status
+(`no_eligible`, …, else `rejected`):
 
 ```json
-{"event": "detector_timing", "request_id": "req-…", "detector_jobs": 4,
+{"event": "detector_timing", "request_id": "req-…", "outcome": "ok",
+ "detector_jobs": 4, "detector_jobs_cancelled": 0,
  "detector_queue_ms": 9120, "detector_run_ms": 3310, "detector_inline_ms": 0,
  "detector_queue_depth_max": 3,
  "detector_by_hop": {"gate": [1, 6800, 2900, 0], "verify": [1, 2100, 240, 0], …}}
 ```
 
-Failure and cancel traces (B78) do not carry these attributes.
-
-**Metrics** — `routeforge_detector_queue_seconds{hop}` and
-`routeforge_detector_run_seconds{hop}`, one observation per executor job
-(inline work is not observed). Buckets run to 80 s, since a queued 56k-token
-pass waits ~16 s per job ahead of it. Every executor job is observed, whether
-or not it ran inside a request.
+**Metrics** — `routeforge_detector_queue_seconds{hop,outcome}` and
+`routeforge_detector_run_seconds{hop,outcome}`, observed from each executor
+job's done callback, once its clock is final. `outcome` is bounded:
+`done` (ran to completion, result or exception), `cancelled_queued` (cancelled
+before the worker took it: a queue observation of submission → cancel, and
+no run observation) or `orphaned` (its awaiter was cancelled mid-run: the full
+queue and run, observed when the job ends). Inline work is not observed.
+Buckets run to 80 s, since a queued 56k-token pass waits ~16 s per job ahead
+of it. Every executor job is observed, whether or not it ran inside a
+request.
 
 ## Quick verification checklist
 

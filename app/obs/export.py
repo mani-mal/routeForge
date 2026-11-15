@@ -262,10 +262,21 @@ def _app_tracer(app_langfuse, *, full: bool):
                           app_langfuse.secret_key, capture_io_full=full)
 
 
+def _set_detector_timing(root, detector_timing: dict | None) -> None:
+    """B119 step 1: the `sp.detector_*` timing attributes. Guarded: a bad
+    value is logged and skipped, it never costs the rest of the trace."""
+    try:
+        for key, value in (detector_timing or {}).items():
+            root.set_attribute(key, value)
+    except Exception:
+        log.warning("detector timing attributes failed (skipped)", exc_info=True)
+
+
 def export_failure_trace(*, request_id: str, application_id: str, status: str,
                          latency_ms: float, attempts: tuple[str, ...] = (),
                          app_langfuse=None, session_id: str | None = None,
-                         started_ns: int | None = None) -> None:
+                         started_ns: int | None = None,
+                         detector_timing: dict | None = None) -> None:
     """Export one minimal root span for a request that ended `cancelled` or
     `error` (B78) -- neither reaches `export_trace`, so without this Langfuse
     shows no trace for them and no ERROR-level observation at all.
@@ -277,6 +288,8 @@ def export_failure_trace(*, request_id: str, application_id: str, status: str,
     including when the per-app tracer fails to build (non-`full` capture falls
     to the shared tracer there too). `error` is a span ERROR / Langfuse ERROR
     level; `cancelled` is a Langfuse WARNING (the client left, nothing broke).
+    `detector_timing` (B119) adds the request's `sp.detector_*` timings, so
+    a convoy wait that ended in a client timeout is on the trace too.
     Best effort: never raises."""
     try:
         per_app = _app_tracer(app_langfuse, full=False) if app_langfuse is not None else None
@@ -290,6 +303,7 @@ def export_failure_trace(*, request_id: str, application_id: str, status: str,
             root.set_attribute("sp.latency_ms", float(latency_ms))
             root.set_attribute("sp.attempts", json.dumps(redact_tree(list(attempts))))
             root.set_attribute("sp.capture_io", "off")
+            _set_detector_timing(root, detector_timing)
             if session_id:
                 root.set_attribute("langfuse.session.id", session_id)
             root.set_attribute("langfuse.observation.level",
@@ -409,8 +423,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.tenant_id", tenant_id)
             root.set_attribute("sp.application_id", application_id or tenant_id)
             root.set_attribute("sp.model", model)
-            for key, value in (detector_timing or {}).items():
-                root.set_attribute(key, value)
+            _set_detector_timing(root, detector_timing)
             root.set_attribute("sp.cost_total_usd", float(cost.get("total_usd", 0.0)))
             root.set_attribute("sp.cost_baseline_usd", float(cost.get("baseline_usd", 0.0)))
             root.set_attribute("sp.cost_prompt_cache_saved_usd",
