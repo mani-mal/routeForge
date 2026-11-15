@@ -52,7 +52,7 @@ from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
 from app.policy.compile import compile_policy
-from app.policy.detector_pool import run_detector_for
+from app.policy.detector_pool import current_timing, run_detector_for, start_request_timing
 from app.policy.context import requestable_models
 from app.policy.enums import STREAM_MODES
 
@@ -396,6 +396,24 @@ def _core_record(core) -> dict | None:
         logging.getLogger("serving.obs").warning(
             "conflicting core record failed (omitted)", exc_info=True)
         return None
+
+
+def _log_detector_timing(timing, request_id: str) -> None:
+    """B119 step 1: one structured line per request that did detector work,
+    with the request's FINAL detector timings -- including the export and
+    console-display hops, which run after the trace's `sp.detector_*`
+    attributes were set. Content-free: counts, rounded ms, fixed hop labels."""
+    if timing is None or timing.empty:
+        return
+    try:
+        attrs = timing.attributes()
+        record = {"event": "detector_timing", "request_id": request_id,
+                  **{k.removeprefix("sp."): v for k, v in attrs.items()}}
+        record["detector_by_hop"] = json.loads(record["detector_by_hop"])
+        logging.getLogger("serving.api").info(json.dumps(record, sort_keys=True))
+    except Exception:
+        logging.getLogger("serving.api").warning(
+            "detector_timing log line failed request=%s", request_id, exc_info=True)
 
 
 def _log_no_eligible(exc: BaseException, request_id: str) -> None:
@@ -862,6 +880,11 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     request_id = f"req-{uuid.uuid4().hex}"
     started = time.monotonic()
     started_ns = time.time_ns()
+    # B119 step 1: this request's detector queue/run timings. Installed here,
+    # in the request's own task, BEFORE the pipeline task and any stream
+    # generator exist -- both copy this context, so every detector hop of the
+    # request (stream feed/flush included) lands in the same accumulator.
+    start_request_timing()
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
@@ -1276,6 +1299,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # below pass it as `prepared=` to skip re-running the detector over a
     # string it has already scanned; the regex egress pass still runs.
     redacted_prompt = internals.get("redacted_prompt")
+    timing = current_timing()
     try:
         # Eval-capture (current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
@@ -1361,7 +1385,12 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # B104: the Switchyard advisor's content-free record, from the
             # pipeline's out-parameter (never on `resp`); None when it did
             # not run, and then nothing switchyard-shaped reaches the trace.
-            switchyard=internals.get("switchyard"))
+            switchyard=internals.get("switchyard"),
+            # B119 step 1: this request's detector timings SO FAR -- the
+            # export hop's own job is not in it (it is timed after this
+            # snapshot; it reaches the `detector_timing` log line below).
+            detector_timing=(timing.attributes() if timing is not None else None),
+            hop_label="export")
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
         # the admin drilldown ONLY — this is the request_snapshots cache, same
         # residency boundary as serving, NOT a telemetry egress.
@@ -1383,7 +1412,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                 detector, _redacted_display, raw_prompt=raw_prompt, prompt=prompt,
                 redacted_prompt=redacted_prompt,
                 display_completion=display_completion, detector=detector,
-                recognizers=profile.recognizers)
+                recognizers=profile.recognizers, hop_label="display")
         else:  # "off"
             resp["display"] = {"mode": "off", "input": None, "output": None}
         # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
@@ -1397,6 +1426,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
+    _log_detector_timing(timing, request_id)
     # Onboarded on-prem models (e.g. local-8b) live only in the registry's
     # effective pool, not the static `s.routing.model_pool` -- both lookups
     # below must consult it too, or every on-prem model's tier/provider
@@ -1939,14 +1969,15 @@ def _incremental_verify_response(
                 # detector executor (a chunk may wait, the loop does not);
                 # regex/off stays inline.
                 out = await run_detector_for(get_meta.detector,  # type: ignore[attr-defined]
-                                             verifier.feed, delta)
+                                             verifier.feed, delta,
+                                             hop_label="stream_feed")
                 if out:
                     released.append(out)
                     yield sse_frame(openai_chunk(request_id, model, delta=out,
                                                  created=created))
             # release the held-back window (B118: off the event loop too)
             tail = await run_detector_for(get_meta.detector,  # type: ignore[attr-defined]
-                                          verifier.flush)
+                                          verifier.flush, hop_label="stream_flush")
             if tail:
                 released.append(tail)
                 yield sse_frame(openai_chunk(request_id, model, delta=tail,

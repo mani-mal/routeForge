@@ -22,6 +22,8 @@ neither touches the Improvement Plane, neither weakens a privacy invariant.
 6. **The quality-floor record** (B80) — §6.
 7. **The Switchyard advisor record** (B104/B105, 2026-11-12) — `sp.switchyard.*` and the
    `switchyard*` Langfuse trace tags, recorded only (§7).
+8. **Detector queue/run timings** (B119 step 1, 2026-11-15) — `sp.detector_*` on the
+   root span, a `detector_timing` log line and two histogram families (§8).
 
 > **Superseded 2026-09-17:** this page also documented `routing.stage_signals`, a
 > flag-gated raise-only tier bias derived from the internal agent loop's state.
@@ -61,7 +63,7 @@ job).
   `observe_*` call is a no-op, and `/metrics` returns **503**
   (`metrics unavailable: install the observability extra`).
 
-### The five metric families
+### The seven metric families
 
 Source of truth: `app/obs/metrics.py`.
 
@@ -72,6 +74,8 @@ Source of truth: `app/obs/metrics.py`.
 | `routeforge_routing_overhead_seconds` | Histogram | *(none)* |
 | `routeforge_tokens_total` | Counter | `model`, `direction` (`in`\|`out`) |
 | `routeforge_breaker_transitions_total` | Counter | `to_state` (`open`\|`half_open`\|`closed`) |
+| `routeforge_detector_queue_seconds` | Histogram | `hop` (§8) |
+| `routeforge_detector_run_seconds` | Histogram | `hop` (§8) |
 
 - `status` values you'll see: `ok`, `unauthorized`, `rate_limited`,
   `budget_exceeded`, `unknown_model_alias`, `rejected`, `error`. For pre-routing rejects `model` is `-`.
@@ -740,10 +744,75 @@ the opposite (for example a high-risk request floored above an `efficient` propo
 `fallback` means the advisor made no proposal. See
 [`switchyard-integration.md`](./switchyard-integration.md).
 
+## 8. Detector queue/run timings (B119 step 1, 2026-11-15)
+
+Measurement only: nothing about where detector work runs, or in what order,
+changed. All Presidio work runs on one shared single-worker FIFO executor
+(`app/policy/detector_pool.py`, B118). These numbers say, per request, how much
+of the gateway's overhead was **waiting** in that queue and how much was
+**running** detector work, so the B119 fix can be chosen from lab data (more
+detector workers if queue-dominated; not if run-dominated).
+
+**How it is measured.** The chat route installs a per-request accumulator in a
+`ContextVar` before the pipeline task or any stream generator exists, so every
+detector hop of the request lands in it, stream `feed`/`flush` included.
+For each executor job, *queue* is submission (on the loop) to the worker
+starting it, *run* is start to finish on the worker (`time.perf_counter`),
+and *depth* is the number of jobs already queued or running at submission.
+The worker only stamps two floats on a per-job clock; the accumulator is
+mutated on the loop thread after the job's future resolves. Inline work
+(exact `RegexDetector`/`NullDetector`) is counted as *inline*: the wall time
+of the whole inline call, no queue. A hop with no detector at all records
+nothing. A job cancelled while still queued, or whose awaiter was cancelled
+mid-run, is not recorded. With no accumulator (boot warm-up, offline scripts,
+the eval runner) nothing is recorded.
+
+**Hop labels** (fixed, bounded): `gate`, `warmup` (a Presidio cache-miss
+build), `tool_view` (the per-message redacted view, `model_input: redact`
+only — the raw view is built inline with no hop, B120), `verify` (step 9),
+`cache_verify` (a semantic-cache hit's re-verify), `egress_redact` (tool-call
+argument redaction), `stream_feed`/`stream_flush` (`incremental_verify`),
+`export` (the trace export), `display` (the console's redacted copy).
+
+**On the trace** — root span `serving.request`, emitted regardless of
+`capture_io` (timings, like `sp.candidates`; no content):
+
+| Attribute | Value |
+|---|---|
+| `sp.detector_queue_ms` | total executor queue wait, ms (int) |
+| `sp.detector_run_ms` | total executor run time, ms (int) |
+| `sp.detector_inline_ms` | total inline detector time, ms (int) |
+| `sp.detector_jobs` | executor jobs |
+| `sp.detector_queue_depth_max` | max jobs in flight ahead of one of this request's jobs |
+| `sp.detector_by_hop` | JSON `{"<hop>": [jobs, queue_ms, run_ms, inline_ms]}` |
+
+The attributes are a snapshot taken just before the export hop is submitted,
+so **the `export` hop's own timing — and the `display` hop after it — are not
+on the request's own trace.** Both are on the log line.
+
+**On the log** — one `serving.api` INFO line per request that did detector
+work, written at the end of `_finalize` with the final totals (export and
+display included):
+
+```json
+{"event": "detector_timing", "request_id": "req-…", "detector_jobs": 4,
+ "detector_queue_ms": 9120, "detector_run_ms": 3310, "detector_inline_ms": 0,
+ "detector_queue_depth_max": 3,
+ "detector_by_hop": {"gate": [1, 6800, 2900, 0], "verify": [1, 2100, 240, 0], …}}
+```
+
+Failure and cancel traces (B78) do not carry these attributes.
+
+**Metrics** — `routeforge_detector_queue_seconds{hop}` and
+`routeforge_detector_run_seconds{hop}`, one observation per executor job
+(inline work is not observed). Buckets run to 80 s, since a queued 56k-token
+pass waits ~16 s per job ahead of it. Every executor job is observed, whether
+or not it ran inside a request.
+
 ## Quick verification checklist
 
 ```bash
-# ① metrics render with the five families
+# ① metrics render with the seven families
 curl -s http://<api>/metrics | grep -E '^# TYPE routeforge_'
 
 # ② open any Langfuse trace: root span has sp.routing_policy_version and

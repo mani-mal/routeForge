@@ -316,7 +316,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  raw_completion: str = "",
                  started_ns: int | None = None,
                  usage: dict | None = None,
-                 switchyard: dict | None = None) -> TraceExport:
+                 switchyard: dict | None = None,
+                 detector_timing: dict | None = None) -> TraceExport:
     """Export the request's decision trace as spans and return a `TraceExport`
     (url, trace_id, capture_io) for the resulting trace — `url` the Langfuse UI
     deep-link, `trace_id` the same trace's 32-hex id, `capture_io` the capture
@@ -358,7 +359,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
     `switchyard` (B104) is the Switchyard advisor's content-free record for
     this request (`Pipeline` builds it; None when the advisor did not run).
     When given, the root span carries `sp.switchyard.*` and the
-    `langfuse.trace.tags` from `SWITCHYARD_TAGS`, regardless of capture_io."""
+    `langfuse.trace.tags` from `SWITCHYARD_TAGS`, regardless of capture_io.
+
+    `detector_timing` (B119 step 1) is `DetectorTiming.attributes()` -- the
+    request's detector queue/run timings up to the moment the caller built
+    it: `sp.detector_*` rounded-ms ints and the per-hop JSON. Timings only,
+    no content, so set on the root span regardless of capture_io."""
     resolved = "off"
     try:
         # Resolved BEFORE any span is authored, and before any tracer is built:
@@ -403,6 +409,8 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
             root.set_attribute("sp.tenant_id", tenant_id)
             root.set_attribute("sp.application_id", application_id or tenant_id)
             root.set_attribute("sp.model", model)
+            for key, value in (detector_timing or {}).items():
+                root.set_attribute(key, value)
             root.set_attribute("sp.cost_total_usd", float(cost.get("total_usd", 0.0)))
             root.set_attribute("sp.cost_baseline_usd", float(cost.get("baseline_usd", 0.0)))
             root.set_attribute("sp.cost_prompt_cache_saved_usd",
