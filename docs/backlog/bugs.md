@@ -702,6 +702,44 @@ B119 (fold the view into the gate's executor job, and prioritise short passes).
   - *Low:* step-9 `verify` (and the cache re-verify) over an empty completion, i.e. a tool-call-only turn under `client_output: redact`; and the redacted export/display with an empty completion.
   - *Single-source the raw check:* B120 repeats `_tool_turn_messages`' raw/redact selection at the call site. Prefer `run_detector_for(None if raw else reps.detector, ...)` or a helper.
 
+## B123 — The request's shape isn't recorded, and non-text content parts are dropped silently  ✅ RESOLVED (2026-11-18, feat/b123-request-shape; not yet deployed)
+
+**Found 2026-11-17** during DevFoundry's lost-task investigation: OpenCode agents behaved as
+if they never got their task, and DevFoundry asked whether RouteForge changed what the model
+receives. Nothing recorded the request's shape, so we could only answer by inference. For
+req-f3f758044d454596bf4ba5c492016e70, the fact that the tool path ran had to be inferred from
+`routing_tokens` minus the text tokens. The investigation also found a real gap:
+`Message._flatten_content_parts` silently dropped every content part whose `type` was not
+`"text"`. That included the Responses-style `input_text`/`output_text` parts, which carry
+text. A message sent only as such parts reached the gate and the model as an empty string,
+with no trace of it.
+**Fix.**
+- **A content-free request shape** (`ChatRequest.shape()`), computed once per request in the
+  route from the request as received. It records `has_tools`, `n_tools`, `tool_mode` (which
+  path ran), `message_roles`, `content_parts`, `dropped_parts` and `empty_messages`. Part
+  counts are taken by a `mode="wrap"` validator on `ChatRequest`, which reads the raw
+  `messages` JSON before `Message` flattens it. It keeps counts in a private attribute: no
+  global state and no copies of text. Roles and part types map onto closed sets (anything
+  else is `other`), so a client string is never recorded.
+- **Where it is written.** The new nullable JSON column `routing_outcomes.request_shape`, on
+  every status that writes a row. The trace root span, as `sp.request.tool_mode`,
+  `sp.request.n_tools`, `sp.request.message_roles`, `sp.request.content_parts`,
+  `sp.request.dropped_parts` (only when non-empty) and `sp.request.empty_messages`, regardless
+  of `capture_io`; the B78 failure trace carries them too. When anything was dropped, one
+  `serving.api` WARNING JSON line (`event: content_parts_dropped`) with the request id and
+  the counts.
+- **Behaviour change (intended):** `input_text` and `output_text` parts are now kept as text,
+  exactly like `text`. The gate and the model now see text they previously never received.
+  Every other non-text part (images, files, audio, refusals, unknown types) is still dropped,
+  because RouteForge is text-only, but each one is now counted. Nothing else changes: routing,
+  policy, the gate's input for every other request, and which path runs are all the same.
+
+Tests: `tests/test_request_shape.py`, `tests/test_message_content_parts.py`;
+`tests/test_outcome_store.py::test_schema_is_content_free` passes unchanged.
+**Deploy:** run `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS request_shape JSON;`
+(or `scripts/migrate_app_policies.py`) before rolling the image. Otherwise every outcome write
+fails, and no outcome rows are recorded until it runs.
+
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
 **Resolved.** `Pipeline._advise` no longer calls the advisor when `ctx.requested_model` is

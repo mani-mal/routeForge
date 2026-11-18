@@ -176,6 +176,8 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("switchyard_fallback_cause", "VARCHAR(32)", "VARCHAR(32)"),
     # 2026-11-13 B108 — was the proposal passed to the router (enforce).
     ("switchyard_applied", "BOOLEAN", "BOOLEAN"),
+    # 2026-11-18 B123 — the client request's content-free shape.
+    ("request_shape", "JSON", "JSON"),
 ]
 
 APPLICATIONS_TABLE = "applications"
