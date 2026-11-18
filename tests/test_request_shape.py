@@ -312,3 +312,25 @@ def test_failure_trace_carries_request_shape(monkeypatch):
     a = _root(mem)
     assert a["sp.status"] == "error"
     assert json.loads(a["sp.request.message_roles"]) == {"user": 1}
+
+
+@pytest.mark.parametrize("bad_type", [{"a": 1}, ["x"], 5, None])
+def test_non_string_part_type_is_dropped_not_a_500(bad_type):
+    """Review of 2f47aea: an unhashable `type` (dict/list) made the set lookup
+    raise TypeError, which escapes pydantic as an unhandled 500. It must be
+    dropped (and counted as `other`) like any unknown part, as before B123."""
+    req = ChatRequest.model_validate({"messages": [{"role": "user", "content": [
+        {"type": bad_type, "text": "ignored"}, {"type": "text", "text": "hi"}]}]})
+    assert req.messages[0].content == "hi"
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json={"messages": [
+            {"role": "user", "content": [{"type": bad_type}, {"type": "text", "text": "hi"}]}]})
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("ptype", ["text", "input_text"])
+def test_non_string_text_is_a_client_error_not_a_500(ptype):
+    with _client() as c:
+        r = c.post("/v1/chat/completions", headers=DEMO, json={"messages": [
+            {"role": "user", "content": [{"type": ptype, "text": 5}]}]})
+    assert 400 <= r.status_code < 500, (r.status_code, r.text)

@@ -37,6 +37,14 @@ KNOWN_ROLES = frozenset({"system", "developer", "user", "assistant", "tool", "fu
 INSTRUCTION_ROLES = frozenset({"system", "developer", "user"})
 
 
+def is_text_part(p: object) -> bool:
+    """Is this content part one RouteForge keeps as text? `type` is
+    client-supplied and may be any JSON value, so it is checked to be a string
+    before the set lookup (an unhashable dict/list `type` must not raise)."""
+    return (isinstance(p, dict) and isinstance(p.get("type"), str)
+            and p["type"] in TEXT_PART_TYPES)
+
+
 def part_type(part) -> str:
     """A content part's type, mapped onto `KNOWN_PART_TYPES` (else "other")."""
     t = part.get("type") if isinstance(part, dict) else None
@@ -76,10 +84,17 @@ class Message(BaseModel):
         # ([{"type":"text","text":...}], as sent by Qwen Code and other
         # openai-SDK agents). See the class docstring for what is kept.
         if isinstance(v, list):
-            return "\n".join(
-                p.get("text") or "" for p in v
-                if isinstance(p, dict) and p.get("type") in TEXT_PART_TYPES
-            )
+            texts: list[str] = []
+            for p in v:
+                if not is_text_part(p):
+                    continue
+                t = p.get("text")
+                if t is not None and not isinstance(t, str):
+                    # A ValueError becomes a 422 validation error; a TypeError
+                    # from str.join would escape pydantic as an unhandled 500.
+                    raise ValueError("a text content part's 'text' must be a string")
+                texts.append(t or "")
+            return "\n".join(texts)
         return v
     # OpenAI tool-calling fields. Accepted on request messages (so a client can
     # replay an assistant/tool turn back to us) and emitted on the response
@@ -133,7 +148,7 @@ class ChatRequest(BaseModel):
                 for p in content:
                     kind = part_type(p)
                     parts[kind] += 1
-                    if not (isinstance(p, dict) and p.get("type") in TEXT_PART_TYPES):
+                    if not is_text_part(p):
                         dropped[kind] += 1
         req._part_counts = (dict(parts), dict(dropped))
         return req

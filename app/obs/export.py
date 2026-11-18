@@ -107,6 +107,7 @@ def _set_request_shape(root, shape: dict | None) -> None:
         return
     try:
         root.set_attribute("sp.request.tool_mode", bool(shape.get("tool_mode")))
+        root.set_attribute("sp.request.has_tools", bool(shape.get("has_tools")))
         root.set_attribute("sp.request.n_tools", int(shape.get("n_tools") or 0))
         root.set_attribute("sp.request.message_roles",
                            json.dumps(shape.get("message_roles") or {}, sort_keys=True))
