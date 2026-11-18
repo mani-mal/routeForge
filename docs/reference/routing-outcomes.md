@@ -145,6 +145,18 @@ ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS switchyard_applied BOOLEAN
 release adds two `app_policies` columns (`adaptive_routing`, `adaptive_routing_sample_rate`);
 see `docs/reference/per-app-config.md`.
 
+**Upgrade: `request_shape` (B123, 2026-11-18).** One nullable JSON column: the content-free
+shape of the client's request (§3.2), so "what did the model receive?" can be answered
+from the record rather than inferred. **Release note: run this ALTER before rolling this
+image**, for the same reason as `switchyard_applied` above: the ORM names the column in
+every outcome write, so on an unmigrated table no outcome rows are recorded until it runs.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS request_shape JSON;
+```
+
+(SQLite: without `IF NOT EXISTS`. `scripts/migrate_app_policies.py` adds it too.)
+
 **Upgrade: tool-argument bar counts (B69, 2026-11-11).** Three nullable columns record what
 the tool-argument bar did — `tool_arg_redactions`, `tool_arg_skipped` and
 `tool_arg_skipped_types` (§3.2). Null on older rows. Same failure mode as above if the
@@ -230,6 +242,7 @@ Enforced by:
 | `rejected` keeps `name` and `code` only, never `reason` | `tests/test_outcome_builder.py::test_build_failure_outcome_no_eligible_stores_only_name_and_code` |
 | The gate's outcome context carries no prompt text, even when the prompt has an SSN | `tests/test_outcome_ctx_pipeline.py::test_outcome_ctx_has_no_prompt_text_even_with_ssn` |
 | Feedback `comment` and `corrected_output` text is never stored locally | `tests/test_outcome_feedback.py::test_comment_and_corrected_output_text_never_stored_locally` |
+| `request_shape` keys come from closed sets: a sentinel in message text, in a part's `type` and in a role name reaches neither the row, the `sp.request.*` trace attributes nor the dropped-parts log line | `tests/test_request_shape.py` |
 | `workload` and categorical feedback values are regex-validated slugs of at most 64 characters | `tests/test_outcome_builder.py::test_parse_workload_*`, `tests/test_outcome_feedback.py::test_bad_categorical_value_is_refused` |
 
 Failure rows are built from the same outcome context as served ones, and from candidate
@@ -331,6 +344,7 @@ filled on it exactly as on an `ok` row.
 | `switchyard_agreed` | bool, nullable | `switchyard_tier` equals the **served** tier (the served router hop's `chosen_tier`). Null on a fallback and on a row where nothing was served. The agreement rate is `avg(switchyard_agreed::int)` over non-null rows. Added 2026-11-12. |
 | `switchyard_fallback_cause` | enum, nullable | Why the advisor made no proposal: `timeout` \| `error` \| `unconvertible` \| `invalid_role` \| `routing_call_refused`; `pinned` (B115): the request named a model (a slug, or a per-app alias resolved to one; `requested_model` is set), so there was no tier choice and the advisor was not called -- role and tier are null; or, under `enforce` only, `quality_floor`: the advisor did propose (role and tier are set) but a live B80 floor in `enforce` decided, so the proposal was not applied (design §2). Null otherwise. Added 2026-11-12. |
 | `switchyard_applied` | bool, nullable | True when the proposal was passed to the router (effective mode `enforce`, request inside the app's deterministic `adaptive_routing_sample_rate` sample, no fallback). False when the advisor ran but its proposal was only recorded: `shadow`, an unsampled `enforce` request, any fallback, a deciding B80 floor. Null when the advisor did not run and on rows written before the column existed. Added 2026-11-13 (B108). |
+| `request_shape` | JSON, nullable | The client request's shape as received (B123, `ChatRequest.shape()`): `has_tools` (bool), `n_tools`, `tool_mode` (bool: the client-driven tool path ran, `_is_tool_conversation`), `message_roles` (count per role; `system` \| `developer` \| `user` \| `assistant` \| `tool` \| `function`, anything else `other`), `content_parts` (count per content type across all messages: `string` for plain-string content, else the part type — `text` \| `input_text` \| `output_text` \| `image_url` \| `input_image` \| `file` \| `input_file` \| `input_audio` \| `refusal`, anything else `other`), `dropped_parts` (same keys: the non-text parts flattening discarded; `{}` when none) and `empty_messages` (system/developer/user messages with no text after flattening and no `tool_calls`). Closed-set keys and counts only — a client's role or part-type string is never stored verbatim. Written on every status that writes a row; null on older rows. The same record is on the trace root span as `sp.request.*`. Added 2026-11-18. |
 | `conflicting_core` | JSON, nullable | A `no_eligible` row's minimal conflicting core (P3b): `ConflictingCore.to_record()` — requirement ids/`security`/`source`/`detail`, endpoint state, `candidates_considered`; no `label`, no `hints`. Content-free. Null on every other status, and null when the router's own core computation failed (`core=None`). See `docs/reference/conflicting-core.md`. Added 2026-09-25 (P3b). |
 
 **`verify_mode`** is derived from the `verify` record, checking the reason first:
