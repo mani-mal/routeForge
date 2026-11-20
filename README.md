@@ -77,9 +77,27 @@ flowchart TB
 | 7 / 8 | Quotas, circuit breakers, failover; calls to onboarded on-prem or enabled cloud endpoints | `app/gateway/` |
 | 9 | Output leakage checks and verification, client-output redaction | `app/output/verify.py` |
 
+### Architecture diagrams
+
+Rendered from the editable draw.io sources in
+[`docs/architecture/diagrams/`](docs/architecture/diagrams/) (click to enlarge).
+
+**Logical architecture** — the ten steps as layers, each labelled with the library or
+component that implements it:
+
+[![RouteForge logical architecture](docs/architecture/diagrams/png/routeforge-logical-architecture.png)](docs/architecture/diagrams/png/routeforge-logical-architecture.png)
+
+**Request / response flow** — one call end to end, numbered arrows 1–14:
+
+[![RouteForge request/response flow](docs/architecture/diagrams/png/routeforge-request-flow.png)](docs/architecture/diagrams/png/routeforge-request-flow.png)
+
+**Physical architecture** — the Kubernetes pods, services and PVCs deployed; inference
+endpoints are operator-run, not RouteForge pods:
+
+[![RouteForge physical architecture](docs/architecture/diagrams/png/routeforge-physical-architecture.png)](docs/architecture/diagrams/png/routeforge-physical-architecture.png)
+
 More detail: [`docs/architecture/`](docs/architecture/) (logical and request-flow notes,
-tier selection, sample request flows) and the draw.io sources in
-[`docs/architecture/diagrams/`](docs/architecture/diagrams/).
+tier selection, sample request flows).
 
 ## How RouteForge differs from other LLM routers
 

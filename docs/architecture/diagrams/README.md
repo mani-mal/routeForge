@@ -12,7 +12,8 @@ Editable draw.io / diagrams.net files. Open any `.drawio` directly in
 ## Regenerating
 
 These are generated from declarative JSON specs in `specs/` via the
-`drawio-diagrams` skill (no hand-placed coordinates — the layout engine keeps
+`drawio-diagrams` skill (a personal Claude Code skill, not vendored in this repo — if it
+is unavailable, edit the `.drawio` directly and mirror the label change in `specs/`) (no hand-placed coordinates — the layout engine keeps
 boxes non-overlapping and routes edges through the gaps):
 
 ```bash
@@ -27,3 +28,18 @@ python3 "$SK/scripts/render_drawio.py" routeforge-request-flow.drawio preview.pn
 
 Edit the `specs/*.json` and regenerate rather than nudging boxes in draw.io.
 For a crisp export into a doc or slide, open in draw.io → File → Export As → PDF.
+
+## PNG renders
+
+`png/` holds a PNG of each diagram, embedded in the top-level `README.md`.
+**Re-render them whenever a `.drawio` changes** (headless draw.io in Docker, 1.5× scale):
+
+```bash
+cd docs/architecture/diagrams
+for f in *.drawio; do
+  docker run --rm -v "$PWD":/data -w /data rlespinasse/drawio-desktop-headless:v1.40.0 \
+    -x -f png -s 1.5 -b 10 -o "png/${f%.drawio}.png" "$f" --disable-gpu
+done
+```
+
+The container writes as root; `sudo chown $USER png/*.png` afterwards if needed.

@@ -15,7 +15,7 @@
       {"id": "taskmode", "label": "Task-mode router\nalways direct — an app's\nagent loop sends each call\nas its own request", "color": "blue"}
     ]},
     {"title": "Step 5 · Context Optimization  (per call)", "nodes": [
-      {"id": "opt", "label": "Memory recall · Semantic cache ·\nHeadroom compression", "color": "purple"}
+      {"id": "opt", "label": "Memory recall ·\nSemantic cache ·\nHeadroom compression", "color": "purple"}
     ]},
     {"title": "Step 6 / 7 / 8 · Router + Gateway", "nodes": [
       {"id": "router", "label": "Adaptive router\nscore post-compression\n(residency clamp)", "color": "orange"},
