@@ -220,13 +220,15 @@ in the standard shape:
 ```
 
 Switch on `finish_reason`: `"tool_calls"` means run your tools and replay the
-result. `"length"` means the turn was cut off: the backend stopped at its limit, or the
+result the normal way — append the assistant turn verbatim, then a
+`{"role": "tool", "tool_call_id": "call_abc", "content": "…"}` message — and send
+the whole list back as a new request.
+
+`"length"` means the turn was cut off: the backend stopped at its limit, or the
 completion used your whole `max_completion_tokens` / `max_tokens` budget. routeForge
 reports `"length"` in that case even when the backend labelled the turn `tool_calls`, and
 leaves any partial `tool_calls` in the message as received, so do not run them as if the
-turn were complete. `"content_filter"` is passed through the same way. Replay it the normal way — append the assistant turn verbatim, then a
-`{"role": "tool", "tool_call_id": "call_abc", "content": "…"}` message — and send
-the whole list back as a new request.
+turn were complete. A backend's `"content_filter"` is passed through unchanged.
 
 Three things specific to routeForge:
 
