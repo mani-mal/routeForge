@@ -190,6 +190,56 @@ the audit trail in that sweep's task report.
 > **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
 > B110 starts as soon as B100 lands. B111 is gated on B109's go decision. B112 is optional.
 
+## B124 — Fleet overview: the Saved column's percentage overflows into the PII column (looks like garbled characters)  ✅ RESOLVED (2026-11-26, fix/b124-fleet-saved-overflow)
+
+**Severity:** low (display only; the numbers themselves are right) but very visible. On the
+Applications table, the PII column looks garbled for any app with large negative savings,
+and a browser refresh doesn't fix it.
+
+**Observed (2026-11-20, 30 d window):** the `dev-foundary` row shows `$-3547.7190 (-1922%)`
+under Saved, and its PII value `21178` is drawn on top of the `(-1922%)`, giving
+`(-1921178`. The same happens for `opencode-app` (`(-25` + `7508`), `B109 arm B`, and `B109 arm C`.
+Rows with a short Saved string, like arm A `$39.9620 (70%)`, render correctly.
+
+**Root cause:** `ui/src/console/FleetOverview.tsx` — the header row and every data row share
+one fixed grid template, `GRID = grid-cols-[minmax(140px,2fr)_80px_90px_110px_56px_…]`.
+The Saved track is a fixed **110px**, but the Saved cell renders
+`formatUsd(saved_usd)` (always 4 dp, plus a sign) **and** `(saved_pct%)` inline. At `text-sm`
+monospace, `$-3547.7190 (-1922%)` is about 20 characters, roughly 170px. The cell has no
+`min-w-0`, `truncate` or `overflow-hidden`, so it spills into the 56px PII track. Data-driven,
+so refreshing doesn't help.
+
+**Related display issues in the same cell (fix together):**
+- Negative values render as `$-3547.7190`; they should read `-$3,547.72`. `formatUsd` in
+  `ui/src/components/common.tsx` puts the sign after the `$` and has no thousands separators.
+- 4 dp is right for per-request figures but too much noise for fleet totals (the
+  `$15425.4753` / `$-10604.7095` KPI cards have the same problem).
+
+**Fix sketch:**
+1. Put the percentage on its own line under the dollar amount (or in a tooltip), or widen the
+   Saved track and make it `minmax(…, auto)`. Give every cell `min-w-0 truncate` so nothing can
+   overlap a neighbouring column again, and keep the full value in a `title`.
+2. Add a fleet-level money formatter: sign before the `$`, thousands separators, 2 dp for
+   values ≥ $1. Keep `formatUsd` and `formatUsdPrecise` for per-request figures.
+3. Add a UI test that renders a row with a 5-digit negative saving and a 4-digit percentage
+   and checks that the Saved cell doesn't overflow.
+
+**Not this bug:** the large negative savings (-220% fleet-wide versus the all-frontier
+baseline) are a separate question about data and pricing that hasn't been investigated
+yet. Spend above the baseline suggests the mid-tier models are priced above the baseline
+model in `pricing.yaml`, but nobody has checked. This entry covers only the rendering.
+
+**Resolved.** The Saved cell now stacks the dollar amount over the percentage (small, gray)
+on two lines; the Saved track is 150px (Spend 110px) and every data cell is `min-w-0
+truncate` with a `title` carrying the full value, so no cell can paint over a neighbour.
+`formatUsdFleet` (`ui/src/components/common.tsx`) puts the sign before `$`, adds thousands
+separators, and uses 2 dp for |v| >= 1 (4 dp below); it drives the table's Spend/Saved
+cells and the Spend/Saved KPI cards. `formatUsd`/`formatUsdPrecise` and their other callers
+are unchanged. A percentage with |value| >= 1000 shows as `<-999%` / `>999%` (full value in
+the title). There is no UI test framework, so no automated test was added; verified by
+`npm run typecheck` and `npm run build`.
+
+
 ## B113 — A truncated completion reaches the client as `finish_reason: "stop"`  ✅ RESOLVED (2026-11-13, fix/b113-finish-reason)
 
 **Severity:** high for agent clients (an agent reads a cut-off turn as finished and acts on
@@ -2720,8 +2770,7 @@ exception handler.
 
 ---
 
-## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries
-
+## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries  ✅ RESOLVED (2026-09-19, P2a fix wave)
 **Severity:** low (coverage gap; the classifier is correct today)
 **Found:** 2026-09-19, P2a Task 9 review. **Resolved 2026-09-19 (fix wave).**
 `tests/routing/test_signal_wiring.py` now parametrizes 399 and 429 (expect `True`) and
@@ -2920,8 +2969,7 @@ it.
 should be; B37 still does. The step-7 breaker (built 2026-09-23, above) is the other answer
 to the same problem; it does not change what `/health` reports (B37).
 
-## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
-
+## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is  ✅ RESOLVED (2026-09-19, P2a fix wave)
 **Severity:** trivial (documentation of a test; no defect)
 **Found:** 2026-09-19, P2a Task 6 review. **Resolved 2026-09-19 (fix wave):** a comment
 at `tests/test_routing_strategy.py:73-80` (just inside
