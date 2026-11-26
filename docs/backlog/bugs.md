@@ -636,7 +636,7 @@ policy-compliant.
 - **Next:** DevFoundry builds a per-arm project binding with `model: "auto"` (their F-909)
   plus `run_purpose=eval` (F-214), then runs the frozen task set.
 
-## B116 — A truncated completion that the backend labels `tool_calls` reaches the client as `tool_calls`  🔴 OPEN
+## B116 — A truncated completion that the backend labels `tool_calls` reaches the client as `tool_calls`  ✅ RESOLVED (2026-11-26, fix/b116-truncated-tool-calls)
 
 **Found 2026-11-13 (DevFoundry, DGX lab).** Four `glm-5.3-flash` calls had
 `completion_tokens == max_tokens == 32000` but `finish_reason = tool_calls`:
@@ -650,6 +650,40 @@ max_tokens` (or the backend's effective cap), whatever the backend's label. Add 
 as in B113.
 
 **Timing:** not deployed during the B109 run window, to keep the system fixed.
+
+**Resolved.** `client_finish_reason` takes two keyword arguments, `completion_tokens` and
+`max_tokens`. A new rule sits between B113's rules: after a backend `length` /
+`content_filter` (still first), a completion whose `completion_tokens >= max_tokens` is
+reported `length`, whatever the backend's label (`tool_calls`, `stop`, or none). The new
+helper `app/models.py::output_cap_reached` makes that check. The cap is the client's own,
+read once by `router.client_output_cap`: `max_completion_tokens`, else `max_tokens`. If the
+client sent neither, no cap applies. RouteForge has no backend-side cap to fall back on (no
+onboarded or YAML field declares one), so none is invented. Unreported token counts never
+reach a cap. The `tool_calls` array is left as received; only the reason changes. How each
+path gets the count: `Pipeline.run` uses `result.tokens_out`, and `chunk_text`
+(`verified_then_stream`, keepalive, the stream floor fallback) inherits the response's
+already decided reason. A new `routes._stream_finish_reason` reads
+`meta["usage"]["completion_tokens"]` for the `stream_unverified` and `incremental_verify` SSE
+frames and for `_finalize_stream` (the recorded response), so the wire and the console
+agree. The semantic cache no longer stores an answer that reached the cap (a hit replays
+`stop`). The skip is recorded as `bypass_reason: "truncated"`, as in B113. The outcome row
+keeps the backend's own `finish_reason`, so the case stays visible there as
+`completion_tokens >= max_tokens`.
+
+**Tests:** in `tests/test_finish_reason_contract.py`, `test_client_finish_reason_cap_rule`
+(table, including no cap, under the cap, unreported tokens, and `content_filter` precedence),
+`test_nonstream_tool_call_at_cap_reports_length` (`max_tokens` and
+`max_completion_tokens`), `test_nonstream_max_completion_tokens_wins_over_max_tokens`,
+`test_nonstream_under_cap_or_no_cap_unchanged`, `test_nonstream_text_at_cap_reports_length`,
+`test_verified_then_stream_tool_call_at_cap_reports_length`,
+`test_keepalive_stream_at_cap_reports_length`,
+`test_live_stream_tool_call_at_cap_reports_length_and_records_it` (both cap keys, plus the
+console snapshot), `test_live_stream_under_cap_unchanged`,
+`test_live_stream_text_at_cap_reports_length` and
+`test_incremental_verify_text_at_cap_reports_length`. In
+`tests/test_semantic_cache_pipeline.py`, `test_answer_at_client_cap_is_not_stored` (both
+cap keys) and `test_answer_under_client_cap_is_still_stored`. Each at-cap test fails without
+the fix.
 
 ## B117 — `backend_failed` rows don't record why the backend call failed  🔴 OPEN
 
