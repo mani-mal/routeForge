@@ -188,7 +188,10 @@ nothing, because nothing was raised. `GET /admin/usage/by-application` rolls the
 console's Cross-app usage view sums them fleet-wide in a "Placement raised by detection"
 table, hidden when empty. A request matching two types counts once under each. This counts
 the cost of a pattern detector's false positives (random numbers read as `CREDIT_CARD`);
-it does not say whether any one detection was a false positive.
+it does not say whether any one detection was a false positive. The counts come from
+`routing_outcomes`, so they cover the outcome-retention window, while the rest of the
+rollup row is all-time `usage_records`. A DB without the two columns still serves the rollup
+(the count is omitted and a warning is logged).
 
 ```sql
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS placement_raised_by JSON;

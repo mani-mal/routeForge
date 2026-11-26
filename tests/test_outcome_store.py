@@ -387,3 +387,51 @@ def test_placement_raised_by_type_counts_per_app_and_window():
                 "CREDIT_CARD": 2, "US_BANK_NUMBER": 1}
 
     _run(go())
+
+
+def test_placement_raised_query_filters_json_null_in_sql():
+    """Rows with no raise (JSON 'null' text) must be excluded by the SQL, not
+    pulled into Python."""
+    from sqlalchemy import String, cast, func, select
+
+    async def go():
+        db = await _db()
+        async with db.session() as s:
+            await store.create_application(s, app_id="app-1", name="One")
+            for i in range(3):
+                await store.write_outcome(s, _outcome_row(
+                    request_id=f"n{i}", application_id="app-1", placement_raised_by=None))
+            await store.write_outcome(s, _outcome_row(
+                request_id="y", application_id="app-1", placement_raised_by=["US_SSN"]))
+            await s.commit()
+            O = RoutingOutcome
+            n = (await s.execute(select(func.count()).where(
+                O.placement_raised_by.is_not(None),
+                cast(O.placement_raised_by, String).notin_(("[]", "null", ""))))).scalar()
+            assert n == 1
+            assert await store.placement_raised_by_type(s) == {"app-1": {"US_SSN": 1}}
+
+    _run(go())
+
+
+def test_usage_rollup_survives_missing_placement_column():
+    from sqlalchemy import text
+
+    async def go():
+        db = await _db()
+        async with db.session() as s:
+            await store.create_application(s, app_id="app-1", name="One")
+            await store.record_usage(
+                s, application_id="app-1", request_id="r1", model="m", provider="onprem",
+                tier="cheap", prompt_tokens=1, completion_tokens=1, total_tokens=2,
+                cost_usd=0.0, baseline_usd=0.0, latency_ms=1.0, sensitivity="public",
+                onprem_only=True, status="ok")
+            await s.commit()
+            await s.execute(text("ALTER TABLE routing_outcomes DROP COLUMN placement_raised_by"))
+            await s.commit()
+        async with db.session() as s:
+            rows = await store.usage_by_application(s)
+            assert rows[0]["count"] == 1
+            assert rows[0]["placement_raised_by_type"] == {}
+
+    _run(go())

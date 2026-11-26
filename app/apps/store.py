@@ -6,6 +6,7 @@ Every function takes an `AsyncSession`; the caller owns the transaction
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 import uuid
 
@@ -701,6 +702,9 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
     }
 
 
+_log = logging.getLogger(__name__)
+
+
 async def placement_raised_by_type(session: AsyncSession, *,
                                    since: dt.datetime | None = None) -> dict[str, dict[str, int]]:
     """B71 item 7: per application, how many requests had placement tightened
@@ -710,8 +714,12 @@ async def placement_raised_by_type(session: AsyncSession, *,
     per-type counts can sum to more than the request count. Every outcome
     status counts: the placement cost is paid whether or not the call served."""
     O = RoutingOutcome
+    # The column is JSON with none_as_null=False, so "no raise" is stored as
+    # the JSON text 'null', not SQL NULL: filter on the text form too (same
+    # approach as fleet_from_usage's PII filter) or every row is pulled.
     stmt = select(O.application_id, O.placement_raised_by).where(
-        O.placement_raised_by.is_not(None))
+        O.placement_raised_by.is_not(None),
+        cast(O.placement_raised_by, String).notin_(("[]", "null", "")))
     if since is not None:
         stmt = stmt.where(O.ts >= since)
     out: dict[str, dict[str, int]] = {}
@@ -761,7 +769,17 @@ async def usage_by_application(session: AsyncSession, *,
             if val:
                 a[key][val] = a[key].get(val, 0) + 1
 
-    for app_id, by_type in (await placement_raised_by_type(session, since=since)).items():
+    # The new column may be missing on a DB that has not had the B71 item 7
+    # ALTERs yet; that must never take down the spend/tier rollup.
+    try:
+        raised = await placement_raised_by_type(session, since=since)
+    except Exception:
+        await session.rollback()
+        _log.warning("placement_raised_by_type unavailable (routing_outcomes."
+                     "placement_raised_by missing? run scripts/migrate_app_policies.py)",
+                     exc_info=True)
+        raised = {}
+    for app_id, by_type in raised.items():
         if app_id in agg:
             agg[app_id]["placement_raised_by_type"] = by_type
 

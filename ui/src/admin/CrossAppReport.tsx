@@ -169,7 +169,7 @@ export function CrossAppReport() {
               </h3>
               <p className="text-[11px] text-gray-500 mb-2">
                 Requests a detected entity type moved to a stricter residency. Pattern detectors can
-                fire on look-alike numbers; this is the cost of that fail-safe.
+                fire on look-alike numbers; this is the cost of that fail-safe. Counts cover the outcome-retention window, not all-time usage.
               </p>
               <table className="text-sm font-mono text-gray-300">
                 <thead>
