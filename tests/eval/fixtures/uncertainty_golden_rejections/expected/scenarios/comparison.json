@@ -1,11 +1,36 @@
 {
   "baseline": {
     "agreement": 0.37415,
+    "breaker_diverted": 0,
+    "breaker_diverted_by_app": {},
+    "breaker_diverted_reproduced": 0,
     "by_app": {
       "capped": 1.0,
       "pinned": 0.0,
       "safe": 0.35,
       "steady": 0.35
+    },
+    "cost_by_app": {
+      "capped": {
+        "recorded": 0.0,
+        "replayed": 0.00264
+      },
+      "pinned": {
+        "recorded": 0.0,
+        "replayed": 0.03465
+      },
+      "safe": {
+        "recorded": 0.0,
+        "replayed": 0.031864
+      },
+      "steady": {
+        "recorded": 0.0,
+        "replayed": 0.010827
+      }
+    },
+    "cost_usd": {
+      "recorded": 0.0,
+      "replayed": 0.079981
     },
     "outcome_agreement": 1.0,
     "outcome_by_app": {
@@ -41,6 +66,7 @@
     "outcome_rows_compared": 160,
     "outcome_warning": false,
     "overflow_contradicted": 0,
+    "recorded_failure_rows": 0,
     "recorded_rejected": 13,
     "recorded_rejected_but_routed": 0,
     "recorded_routed_but_rejected": 0,

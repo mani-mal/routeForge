@@ -93,7 +93,12 @@ def test_scenarios_come_back_in_file_order_with_shared_rows_and_baseline():
                                  "outcome_rows_compared", "outcome_agreement",
                                  "outcome_warning", "recorded_rejected",
                                  "recorded_rejected_but_routed",
-                                 "recorded_routed_but_rejected", "outcome_by_app"}
+                                 "recorded_routed_but_rejected", "outcome_by_app",
+                                 # B70 item 5 / B71 item 3: recorded endpoint
+                                 # state and recorded vs replayed cost
+                                 "breaker_diverted", "breaker_diverted_by_app",
+                                 "breaker_diverted_reproduced", "recorded_failure_rows",
+                                 "cost_usd", "cost_by_app"}
     for entry in cmp.scenarios:
         assert set(entry) == {"name", "edits", "assumptions", "summary"}
         assert set(entry["summary"]) == {"totals", "by_app", "by_workload", "moves",

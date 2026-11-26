@@ -20,9 +20,13 @@ Deliberate non-goals (spec §2):
   uncertainty ranges (P3c);
 - no re-running PII detection -- recorded entity TYPES are replayed as-is;
 - no daily-spend / RPM admission simulation;
-- no circuit-breaker state (both arms run with no open circuits);
-- no confidence-escalation or failover replay -- only the first decision,
-  and the overflow re-selection that is a pure function of declared data.
+- no confidence-escalation replay, and no failover beyond what the row
+  itself records -- the first decision, the overflow re-selection that is a
+  pure function of declared data, and (B70 item 5 / B71 item 3) the row's
+  RECORDED endpoint state: the circuits its first decision recorded open
+  (`recorded_open_circuits`) and the endpoints its attempt chain records as
+  failed (`recorded_failures`). Both are honoured identically in both arms,
+  per row; nothing is inferred for an endpoint the row says nothing about.
 
 Only `NoEligibleCandidate` and `ContextWindowExceeded` are recorded as
 rejections. Any other exception propagates: a simulator bug must surface,
@@ -44,7 +48,7 @@ from app.eval.proposal import apply_proposal
 from app.eval.scenario import Scenario, build_scenario, close_scenario
 from app.models import Entity
 from app.policy.context import build_context
-from app.policy.feasible import feasible_set
+from app.policy.feasible import CIRCUIT_OPEN, feasible_set
 from app.routing.pricing import price_call
 from app.routing.router import complexity_tier, expected_output_tokens
 
@@ -93,8 +97,9 @@ class ArmResult:
     # complexity was saturated, so its new complexity is an estimate.
     complexity_estimated: bool = False
     # P3c-2 spec §5: every model this arm selected, in order -- the picks
-    # that overflowed their declared context window, then (when routed) the
-    # one served. `attempted[0]` is the first routing decision.
+    # that overflowed their declared context window or (B71 item 3) failed as
+    # the row records, then (when routed) the one served. `attempted[0]` is
+    # the first routing decision.
     attempted: tuple[str, ...] = ()
     # P3c-3: the calibration set a `calibrated` quality came from
     # (`QualityScore.set_id`), None for every other source. It lets
@@ -106,12 +111,26 @@ class ArmResult:
     # into an endpoint's token demand. Serialised nowhere.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # B71 item 3: the picks in `attempted` that the row's own attempt chain
+    # records as FAILED (`recorded_failures`), in order. Each was excluded
+    # and the router re-selected, as the live gateway's failover does. Never
+    # costed: a failed call bills nothing.
+    failed: tuple[str, ...] = ()
 
     @property
     def overflow_hops(self) -> int:
         """Picks excluded because prompt + output exceeded their window."""
         served = 1 if self.outcome == "routed" else 0
-        return max(0, len(self.attempted) - served)
+        return max(0, len(self.attempted) - served - len(self.failed))
+
+    @property
+    def first_decision_routed(self) -> bool:
+        """True when the arm's FIRST routing decision picked a model: it was
+        served, or (B71 item 3) every pick failed as recorded and the chain
+        ran out -- the live `backend_failed` shape, whose first decision was
+        routed too (`RECORDED_OUTCOME`)."""
+        return self.outcome == "routed" or (self.reject_codes == (BACKEND_FAILED,)
+                                            and bool(self.attempted))
 
 
 @dataclass(frozen=True)
@@ -268,10 +287,58 @@ def observed_latencies(records: list[dict]) -> dict[str, float]:
 def _rejected(eligible: tuple[str, ...], codes: tuple[str, ...], *,
               core: tuple[str, ...] = (), core_state: tuple[str, ...] = (),
               complexity_estimated: bool = False,
-              attempted: tuple[str, ...] = ()) -> ArmResult:
+              attempted: tuple[str, ...] = (),
+              failed: tuple[str, ...] = ()) -> ArmResult:
     return ArmResult("rejected", None, None, None, eligible, codes,
                      None, None, None, None, None, core, core_state,
-                     complexity_estimated=complexity_estimated, attempted=attempted)
+                     complexity_estimated=complexity_estimated, attempted=attempted,
+                     failed=failed)
+
+
+#: The reject code of an arm whose every pick failed as the row records
+#: (B71 item 3) -- live, the exhausted 502 (`backend_failed`).
+BACKEND_FAILED = "backend_failed"
+
+
+def recorded_open_circuits(row: dict) -> frozenset[str]:
+    """The endpoints the row's FIRST routing decision excluded because the
+    step-7 breaker held their circuit open (B70 item 5): every `rejected`
+    entry with code `circuit_open`. That is all a row records of breaker
+    state -- the open candidates of the tier the router served from (or
+    stepped down from); an open circuit elsewhere, or a bypassed one
+    (`circuit_bypass`), is not named. A malformed `rejected` reads as none."""
+    rejected = row.get("rejected")
+    if not isinstance(rejected, list):
+        return frozenset()
+    return frozenset(r["name"] for r in rejected
+                     if isinstance(r, dict) and r.get("code") == CIRCUIT_OPEN
+                     and isinstance(r.get("name"), str) and r["name"])
+
+
+def recorded_failures(row: dict) -> frozenset[str]:
+    """The endpoints the row's attempt chain records as FAILED on this
+    request (B71 item 3), which replay then treats as failing on this row in
+    both arms.
+
+    - A row with `backend_errors` (B117): every entry's `model`, except a
+      `context_overflow` one -- a size refusal depends on the request's size,
+      which a `token_scale` assumption changes; replay keeps predicting it
+      from the declared `context_window` (docs/reference/policy-simulator.md
+      §6) instead of replaying it.
+    - A row from before B117 (no `backend_errors` key) that is
+      `backend_failed`: nothing was served, so every attempt failed.
+    - Anything else -- a pre-B117 `ok` row included, whose extra attempts may
+      be confidence escalations rather than failures -- reads as no failure.
+      Only a failure the row states is honoured; none is inferred."""
+    errors = row.get("backend_errors")
+    if isinstance(errors, list):
+        return frozenset(e["model"] for e in errors
+                         if isinstance(e, dict) and isinstance(e.get("model"), str)
+                         and e["model"] and e.get("kind") != "context_overflow")
+    if "backend_errors" not in row and row.get("status") == "backend_failed":
+        attempts = row.get("attempts")
+        return frozenset(attempts) if _is_str_list(attempts) else frozenset()
+    return frozenset()
 
 
 # app/pipeline.py: `complexity = min(1.0, comp.tokens_after / 2000)`. The
@@ -414,22 +481,42 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float], *,
     # DECLARED window cannot hold prompt + output is excluded and the router
     # re-selects, at most `max_failover_attempts` extra times -- the live
     # bound. An undeclared window (None) never overflows: replay cannot
-    # invent a limit. This is the only later-hop behaviour replayed.
+    # invent a limit.
+    #
+    # B70 item 5 / B71 item 3: the row's RECORDED endpoint state, honoured
+    # the same way in both arms. Its recorded open circuits go to the router
+    # as `open_circuits` -- the real breaker logic (drop, step down, or
+    # bypass within the tier) decides. A pick the row records as failed
+    # fails here too: it is excluded and the router re-selects, exactly as
+    # the live gateway's failover does, sharing the overflow bound. Only
+    # those named endpoints are affected; any other endpoint -- one a
+    # proposal adds included -- is assumed to answer.
+    open_circuits = recorded_open_circuits(row)
+    failures = recorded_failures(row)
     max_failover = int(scn.settings.routing.max_failover_attempts)
-    overflowed: list[str] = []          # picks that overflowed, in order
+    failed: list[str] = []              # picks that failed as recorded, in order
+    picks: list[str] = []               # every excluded pick (overflow or failure), in order
+
+    def exhausted() -> ArmResult:
+        # Live `_exhausted`: all refusals were for size -> 400
+        # (`context_window`); any other failure in the mix -> 502.
+        code = BACKEND_FAILED if failed else "context_window"
+        return _rejected(eligible, (code,), complexity_estimated=estimated,
+                         attempted=tuple(picks), failed=tuple(failed))
+
     while True:
         try:
             decision = scn.router.select(ctx, tokens_after=routing_tokens,
                                          complexity=complexity,
                                          output_tokens=output_tokens,
-                                         exclude=frozenset(overflowed))
+                                         exclude=frozenset(picks),
+                                         open_circuits=open_circuits)
         except NoEligibleCandidate as exc:
-            if overflowed:
-                # Every reachable candidate overflowed. The live gateway
-                # reports that as ContextWindowExceeded (400), not a 422.
-                return _rejected(eligible, ("context_window",),
-                                 complexity_estimated=estimated,
-                                 attempted=tuple(overflowed))
+            if picks:
+                # Every reachable candidate overflowed or failed. The live
+                # gateway reports that as ContextWindowExceeded (400) or the
+                # exhausted 502, never as a 422.
+                return exhausted()
             # P3b: the router attaches the minimal conflicting core to every
             # NoEligibleCandidate it raises (None only if computing the core
             # itself failed) -- carry it through so the summary can group
@@ -444,15 +531,20 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float], *,
             return _rejected(eligible, codes, core=core, core_state=core_state,
                             complexity_estimated=estimated)
         except ContextWindowExceeded:
+            if failed:
+                return exhausted()
             return _rejected(eligible, ("context_window",), complexity_estimated=estimated,
-                             attempted=tuple(overflowed))
+                             attempted=tuple(picks))
         pick = decision.chosen
-        if pick.context_window is None or prompt_tokens + output_tokens <= pick.context_window:
-            break
-        overflowed.append(pick.name)
-        if len(overflowed) > max_failover:
-            return _rejected(eligible, ("context_window",), complexity_estimated=estimated,
-                             attempted=tuple(overflowed))
+        overflows = (pick.context_window is not None
+                     and prompt_tokens + output_tokens > pick.context_window)
+        if not overflows:
+            if pick.name not in failures:
+                break
+            failed.append(pick.name)
+        picks.append(pick.name)
+        if len(picks) > max_failover:
+            return exhausted()
 
     # P3c-2: `workload.cached_share` of the (scaled) prompt is billed at the
     # endpoint's cached-input price. The ROUTER still estimates at zero
@@ -486,13 +578,15 @@ def simulate_row(scn: Scenario, row: dict, observed: dict[str, float], *,
             latency = scn.signals.latency(pick.name, pick.tier).value
             latency_source = "tier_default"
     q = scn.quality.resolve(pick.name, row.get("workload"))
-    # The endpoint served AFTER any overflow hops is the one costed.
+    # The endpoint served AFTER any overflow or recorded-failure hops is the
+    # one costed.
     return ArmResult("routed", pick.name, pick.provider, pick.tier, eligible, (),
                      cost, latency, latency_source, q.score, q.source,
                      complexity_estimated=estimated,
-                     attempted=(*overflowed, pick.name),
+                     attempted=(*picks, pick.name),
                      quality_set_id=q.set_id,
-                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                     failed=tuple(failed))
 
 
 def arm_results(records: list[dict], scn: Scenario, *,
@@ -594,8 +688,9 @@ REPORT_CAVEAT = (
     "**Simulation only.** Nothing in this report has been applied. It predicts the first routing\n"
     "decision of recorded requests under the proposal, plus deterministic context-window overflow\n"
     "re-selection predicted from each endpoint's declared context window, using the real\n"
-    "eligibility and routing code and a frozen snapshot of signals. It does not model other\n"
-    "failover, escalation, breaker state or caching."
+    "eligibility and routing code and a frozen snapshot of signals. Each row's recorded open\n"
+    "circuits and recorded failed attempts are replayed as recorded, in both arms. It does not\n"
+    "model other failover, escalation, breaker state or caching."
 )
 
 
@@ -670,10 +765,11 @@ def _bucket_stats(rows: list[RowResult]) -> dict:
 
 
 def _first_pick(arm: ArmResult) -> str | None:
-    """The model the arm's FIRST select chose, before any overflow
-    re-selection; None when the arm rejected the row. An `ArmResult` built
-    without `attempted` (older callers) reads as its served model."""
-    if arm.outcome != "routed":
+    """The model the arm's FIRST select chose, before any overflow or
+    recorded-failure re-selection; None when the arm's first decision
+    rejected the row. An `ArmResult` built without `attempted` (older
+    callers) reads as its served model."""
+    if not arm.first_decision_routed:
         return None
     return arm.attempted[0] if arm.attempted else arm.model
 
@@ -695,6 +791,15 @@ def _overflow_contradicted(r: RowResult) -> bool:
     if len(attempts) != 1 or r.row.get("chosen") != attempts[0]:
         return False
     return r.current.overflow_hops > 0
+
+
+def _breaker_diverted(r: RowResult) -> bool:
+    """B70 item 5: the row's recorded first decision excluded at least one
+    endpoint because its circuit was open (`recorded_open_circuits`). Replay
+    hands those circuits to the router, so its pick on such a row reproduces
+    the live diversion by construction -- which is why these rows are their
+    own class in `_baseline` and are left out of model agreement."""
+    return bool(recorded_open_circuits(r.row))
 
 
 def _agrees(r: RowResult) -> bool:
@@ -721,10 +826,13 @@ def _outcome_stats(rows: list[RowResult]) -> dict:
     because rejections are usually a small share of traffic and `agreement`
     alone would dilute them."""
     recorded = [RECORDED_OUTCOME[r.row["status"]] for r in rows]
-    rejected_but_routed = sum(1 for r, rec in zip(rows, recorded)
-                              if rec == "rejected" and r.current.outcome == "routed")
-    routed_but_rejected = sum(1 for r, rec in zip(rows, recorded)
-                              if rec == "routed" and r.current.outcome == "rejected")
+    # The FIRST decision's outcome on both sides: an arm whose picks all
+    # failed as recorded (B71 item 3) was routed first, like `backend_failed`.
+    replayed = ["routed" if r.current.first_decision_routed else "rejected" for r in rows]
+    rejected_but_routed = sum(1 for rec, rep in zip(recorded, replayed)
+                              if rec == "rejected" and rep == "routed")
+    routed_but_rejected = sum(1 for rec, rep in zip(recorded, replayed)
+                              if rec == "routed" and rep == "rejected")
     n = len(rows)
     return {
         "rows": n,
@@ -733,6 +841,22 @@ def _outcome_stats(rows: list[RowResult]) -> dict:
         "recorded_rejected_but_routed": rejected_but_routed,
         "recorded_routed_but_rejected": routed_but_rejected,
     }
+
+
+def _recorded_cost(row: dict) -> float:
+    """The row's recorded `cost_usd`; a missing or non-numeric value reads
+    as 0 (a failed or rejected row records 0.0)."""
+    value = row.get("cost_usd")
+    return float(value) if _is_number(value) else 0.0
+
+
+def _recorded_vs_replayed(rows: list[RowResult]) -> dict:
+    """B71 item 3: `{recorded, replayed}` cost over `rows` -- what the
+    record says was spent, beside what the `current` arm prices the same
+    rows at (its routed rows only, as `cost_usd.current`)."""
+    return {"recorded": sum(_recorded_cost(r.row) for r in rows),
+            "replayed": sum(r.current.cost_usd or 0.0 for r in rows
+                            if r.current.outcome == "routed")}
 
 
 def _baseline(results: list[RowResult]) -> dict:
@@ -752,9 +876,28 @@ def _baseline(results: list[RowResult]) -> dict:
     (§6) excludes that same pick. It is a direct fidelity check on the
     endpoint's declared `context_window` (or the default output-token
     estimate), not an ordinary routing disagreement -- but it still counts
-    toward `agreement`/`by_app`/`top_disagreements` like any other."""
-    compared = [r for r in results
-                if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
+    toward `agreement`/`by_app`/`top_disagreements` like any other.
+
+    `breaker_diverted` (B70 item 5) counts the `ok` rows with a recorded
+    first attempt whose recorded first decision excluded an open circuit
+    (`_breaker_diverted`). They are their own class: replay is handed the
+    same open circuits, so agreeing on them proves nothing about routing,
+    and before replay modelled them they were all counted as disagreement.
+    They are left out of `rows_compared`, `agreement`, `by_app`,
+    `top_disagreements` and `overflow_contradicted`;
+    `breaker_diverted_by_app` breaks the count down and
+    `breaker_diverted_reproduced` says how many of them replay's first pick
+    matches anyway (a check on the breaker modelling, never gated on).
+
+    `cost_usd` (B71 item 3) is the recorded cost beside the `current` arm's
+    replayed cost, over every simulated row (`cost_by_app` per app).
+    `recorded_failure_rows` counts the simulated rows whose attempt chain
+    records a failure (`recorded_failures`) -- honoured by replay whenever
+    an arm picks that endpoint."""
+    with_attempt = [r for r in results
+                    if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
+    diverted = [r for r in with_attempt if _breaker_diverted(r)]
+    compared = [r for r in with_attempt if not _breaker_diverted(r)]
     rows_compared = len(compared)
     agreement = None
     by_app: dict[str, float] = {}
@@ -784,6 +927,17 @@ def _baseline(results: list[RowResult]) -> dict:
         "by_app": by_app,
         "top_disagreements": top_disagreements,
         "overflow_contradicted": overflow_contradicted,
+        "breaker_diverted": len(diverted),
+        "breaker_diverted_by_app": dict(sorted(
+            Counter(r.row["application_id"] for r in diverted).items())),
+        "breaker_diverted_reproduced": sum(
+            1 for r in diverted if _first_pick(r.current) == r.row["attempts"][0]),
+        "recorded_failure_rows": sum(1 for r in results if recorded_failures(r.row)),
+        "cost_usd": _recorded_vs_replayed(results),
+        "cost_by_app": {
+            app_id: _recorded_vs_replayed([r for r in results
+                                           if r.row["application_id"] == app_id])
+            for app_id in sorted({r.row["application_id"] for r in results})},
         "outcome_rows_compared": outcome["rows"],
         "outcome_agreement": outcome["agreement"],
         "outcome_warning": outcome["agreement"] is not None and outcome["agreement"] < 0.90,
@@ -833,6 +987,10 @@ def _new_rejections(results: list[RowResult]) -> dict:
             # its own key instead of reading as "(unknown)".
             if r.proposed.reject_codes == ("context_window",):
                 by_core["(context_window)"] += 1
+            elif r.proposed.reject_codes == (BACKEND_FAILED,):
+                # B71 item 3: every pick failed as the row records -- endpoint
+                # state, not a requirement, so no conflicting core either.
+                by_core["(backend_failed)"] += 1
             else:
                 by_core[_core_key(r.proposed.core, r.proposed.core_state)] += 1
     return {"by_app": dict(by_app), "by_code": dict(by_code), "by_core": dict(by_core)}
@@ -1055,6 +1213,46 @@ def _agreement_line(baseline: dict) -> str:
             f"{baseline['outcome_rows_compared']} simulated rows.")
 
 
+def _usd(value: float) -> str:
+    return f"${value:.6f}"
+
+
+def replay_state_lines(baseline: dict) -> list[str]:
+    """B70 item 5 / B71 item 3: plain sentences every report prints under
+    the agreement banner -- how many breaker-diverted rows model agreement
+    leaves out (overall and per app; only when there are any), how many rows
+    replay a recorded failed attempt (only when there are any), and,
+    always, the recorded cost beside the replayed one, overall and per app.
+    Tolerates a baseline block from before these keys existed."""
+    lines: list[str] = []
+    diverted = baseline.get("breaker_diverted", 0)
+    if diverted:
+        per_app = " · ".join(f"{app_id} {n}" for app_id, n in
+                             sorted(baseline["breaker_diverted_by_app"].items()))
+        lines.append(
+            f"Model agreement EXCLUDES {diverted} breaker-diverted row(s) ({per_app}): the "
+            "live router passed an endpoint whose circuit was open, and replay is handed the "
+            "same open circuits, so these rows cannot test the routing. Replay's first pick "
+            f"matches the record on {baseline['breaker_diverted_reproduced']} of them.")
+    failure_rows = baseline.get("recorded_failure_rows", 0)
+    if failure_rows:
+        lines.append(
+            f"{failure_rows} simulated row(s) record a failed attempt. In both arms, replay "
+            "treats each endpoint the row records as failed as failing on that row and "
+            "fails over as the live gateway does; every other endpoint is assumed to answer.")
+    cost = baseline.get("cost_usd")
+    if cost is not None:
+        line = (f"Cost of the simulated rows: recorded {_usd(cost['recorded'])}, replayed "
+                f"(current arm) {_usd(cost['replayed'])}.")
+        by_app = baseline.get("cost_by_app") or {}
+        if by_app:
+            line += " Per app (recorded / replayed): " + " · ".join(
+                f"{app_id} {_usd(c['recorded'])} / {_usd(c['replayed'])}"
+                for app_id, c in sorted(by_app.items())) + "."
+        lines.append(line)
+    return lines
+
+
 def _fidelity_notes(baseline: dict, rows: dict) -> list[str]:
     """Plain sentences both reports print under the agreement banner (B60),
     one per condition that holds; empty when none does.
@@ -1099,6 +1297,9 @@ def render_report(sim: dict) -> str:
     baseline = sim["baseline"]
     lines.append(_agreement_line(baseline))
     lines.append("")
+    for line in replay_state_lines(baseline):
+        lines.append(line)
+        lines.append("")
     if baseline["warning"]:
         lines.append(
             f"> **Warning:** baseline agreement is only {baseline['agreement'] * 100:.1f}% "

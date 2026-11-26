@@ -41,7 +41,7 @@ from app.eval.scenario import build_scenario, close_scenario
 from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_items,
                                _excluded_lines, _fidelity_notes, _metrics_table,
                                _move_lines, _new_rejection_lines, _per_day, arm_results,
-                               run_rows, summarize)
+                               replay_state_lines, run_rows, summarize)
 from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
                                   _count_outside, app_sizes, bucket_lines, caveat_lines,
                                   cost_line, insufficient_apps_text, insufficient_text,
@@ -439,6 +439,11 @@ def _agreement_lines(doc: dict) -> list[str]:
     for note in _fidelity_notes(baseline, doc["rows"]):
         lines.append("")
         lines.append(f"**Note:** {note}")
+    # B70 item 5 / B71 item 3: breaker-diverted rows left out of model
+    # agreement, recorded failures replayed, recorded vs replayed cost.
+    for line in replay_state_lines(baseline):
+        lines.append("")
+        lines.append(line)
     since = doc["inputs"].get("since")
     if since is not None:
         lines.append("")

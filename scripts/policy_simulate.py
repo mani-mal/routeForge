@@ -259,7 +259,9 @@ def _below_min_agreement(baseline: dict, minimum: float) -> int:
     operator can tell a wrong-model replay (B55) from a wrong-outcome one
     (B60) without re-running."""
     print(f"policy_simulate: baseline agreement {_shown(baseline['agreement'])} over "
-          f"{baseline['rows_compared']} compared rows, outcome agreement "
+          f"{baseline['rows_compared']} compared rows "
+          f"({baseline.get('breaker_diverted', 0)} breaker-diverted rows excluded), "
+          "outcome agreement "
           f"{_shown(baseline['outcome_agreement'])} over "
           f"{baseline['outcome_rows_compared']} simulated rows "
           f"({baseline['recorded_rejected_but_routed']} recorded rejected but routed, "
