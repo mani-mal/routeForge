@@ -330,3 +330,20 @@ def test_residency_and_protection_axes_never_move_requirements():
                               require_no_retention=True, **{axis: value}), S)
             assert eff.allowed_regions == base.allowed_regions
             assert eff.require_no_retention == base.require_no_retention
+
+
+def test_placement_raised_by_names_only_the_rule_matched_types():
+    """B71 item 7: only a rule that MOVED placement records its entity types."""
+    rule = type("R", (), {"residency": "onprem_only", "risk_class": "high",
+                          "require_verification": False, "sensitivity": "restricted",
+                          "entities": ["CREDIT_CARD", "US_BANK_NUMBER"]})()
+    eff = compile_policy(AppPolicyView(residency="any"), S)
+    out = apply_signals(eff, ("CREDIT_CARD", "PERSON"), rule)
+    assert out.placement_raised_by == ("CREDIT_CARD",)
+    # already onprem_only: the rule fires but moves nothing -> not a raise
+    already = compile_policy(AppPolicyView(residency="onprem_only"), S)
+    assert apply_signals(already, ("CREDIT_CARD",), rule).placement_raised_by == ()
+    # escalation off: no move -> not a raise
+    off = compile_policy(AppPolicyView(residency="any",
+                                       escalate_residency_on_detection=False), S)
+    assert apply_signals(off, ("CREDIT_CARD",), rule).placement_raised_by == ()

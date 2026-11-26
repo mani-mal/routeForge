@@ -159,6 +159,9 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("routing_tokens", "INTEGER", "INTEGER"),
     ("trajectory_key", "VARCHAR(32)", "VARCHAR(32)"),
     ("inherited_entity_types", "JSON", "JSON"),
+    # 2026-11-26 B71 item 7 — detection-raised placement, entity TYPES only.
+    ("placement_raised_by", "JSON", "JSON"),
+    ("placement_raised_to", "VARCHAR(16)", "VARCHAR(16)"),
     ("finish_reason", "VARCHAR(16)", "VARCHAR(16)"),
     ("reply_has_text", "BOOLEAN", "BOOLEAN"),
     ("reply_tool_calls", "INTEGER", "INTEGER"),

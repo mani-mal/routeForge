@@ -1921,6 +1921,11 @@ spots in what is recorded).
    planted PII matched `CREDIT_CARD` + `US_BANK_NUMBER` on random numbers and were raised to
    `onprem_only`. Correct fail-safe direction; the cost is not shown anywhere. *Wanted:*
    count detection-raised placements per entity type in the usage view.
+   *Fixed 2026-11-26 (feat/b71-detection-placements): item 7.* The outcome row records
+   `placement_raised_by` (entity types) and `placement_raised_to` when a rule moved
+   placement; `GET /admin/usage/by-application` returns `placement_raised_by_type` and the
+   Cross-app usage view shows a "Placement raised by detection" table (hidden when empty).
+   Two new nullable columns (see `docs/reference/routing-outcomes.md`).
 
 ## B70 — Failover and breaker findings from live run 2 (three endpoint names, one outage)  🟡 PARTLY FIXED
 

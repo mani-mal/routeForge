@@ -177,6 +177,27 @@ ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS tool_arg_skipped INTEGER;
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS tool_arg_skipped_types JSON;
 ```
 
+**Upgrade: detection-raised placement (B71 item 7, 2026-11-26).** Two nullable columns say
+when a detection-fired `sensitivity_rules` rule *tightened* placement on this request (the
+only declared cross-axis path; see CLAUDE.md rule 2a): `placement_raised_by` (the sorted
+entity TYPES that fired the rule — types only, never values) and `placement_raised_to` (the
+residency it tightened to, e.g. `onprem_only`). Both are null when no rule moved placement:
+an app already at that residency, or with `escalate_residency_on_detection: false`, records
+nothing, because nothing was raised. `GET /admin/usage/by-application` rolls them up as
+`placement_raised_by_type` (entity type → requests, over the `hours` window, per app); the
+console's Cross-app usage view sums them fleet-wide in a "Placement raised by detection"
+table, hidden when empty. A request matching two types counts once under each. This counts
+the cost of a pattern detector's false positives (random numbers read as `CREDIT_CARD`);
+it does not say whether any one detection was a false positive. The counts come from
+`routing_outcomes`, so they cover the outcome-retention window, while the rest of the
+rollup row is all-time `usage_records`. A DB without the two columns still serves the rollup
+(the count is omitted and a warning is logged).
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS placement_raised_by JSON;
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS placement_raised_to VARCHAR(16);
+```
+
 **Upgrade: reply shape (B71 item 6, 2026-10-09).** Four nullable columns say what kind of
 reply the backend gave, without recording any of it: `finish_reason` (the backend's own:
 `stop` | `length` | `tool_calls` | `content_filter` | `function_call` | `other`; any other
