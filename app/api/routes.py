@@ -45,6 +45,7 @@ from app.errors import (
     BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate, PolicyGateError,
 )
 from app.models import ChatRequest, ExecutionPolicyContext, client_finish_reason
+from app.routing.router import client_output_cap
 from app.obs import metrics
 from app.obs.export import export_failure_trace, export_trace, resolve_capture_io
 from app.obs.redact import redacted_copy
@@ -851,6 +852,22 @@ def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
     if usage is None:
         return None
     return jsonable_encoder(_wire_usage(usage))
+
+
+def _stream_finish_reason(get_meta: Callable[[], dict], meta: dict | None,
+                          body: ChatRequest, has_tool_calls: bool) -> str:
+    """The client-facing `finish_reason` of a live-streamed turn: the one
+    `client_finish_reason` rule fed the backend's own reason
+    (`get_meta.finish_reason`, B113) and -- for B116 -- the backend-reported
+    completion tokens against the client's own output cap, so a turn that used
+    the whole budget reads `length` even when the backend labelled it
+    `tool_calls`/`stop`. Shared by the live SSE frame and the recorded
+    response so the two can never disagree."""
+    usage = (meta or {}).get("usage")
+    used = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    return client_finish_reason(
+        getattr(get_meta, "finish_reason", None), has_tool_calls,
+        completion_tokens=used, max_tokens=client_output_cap(body.generation_params()))
 
 
 @router.post("/v1/chat/completions", response_model=None)
@@ -1845,9 +1862,9 @@ def _stream_unverified_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             # B113: a truncated (or filtered) turn must not read as a clean
             # one -- text or tool call alike. `get_meta.finish_reason` is the
-            # backend's own reason, set once the stream drained.
-            finish = client_finish_reason(
-                getattr(get_meta, "finish_reason", None), streamed_tool_calls)
+            # backend's own reason, set once the stream drained. B116: a turn
+            # that used the client's whole output cap is `length` too.
+            finish = _stream_finish_reason(get_meta, meta, body, streamed_tool_calls)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -1954,9 +1971,9 @@ def _incremental_verify_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             # B113: the backend's `length`/`content_filter` reaches the client.
             # No tool calls on this path (a tool turn floors to
-            # verified_then_stream), so the fallback is "stop".
-            finish = client_finish_reason(
-                getattr(get_meta, "finish_reason", None), False)
+            # verified_then_stream), so the fallback is "stop". B116: the
+            # client's output cap reached is `length` too.
+            finish = _stream_finish_reason(get_meta, meta, body, False)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -2081,9 +2098,8 @@ async def _finalize_stream(
         if tool_calls:
             message["tool_calls"] = tool_calls
         resp["choices"] = [{"index": 0, "message": message,
-                            "finish_reason": client_finish_reason(
-                                getattr(get_meta, "finish_reason", None),
-                                bool(tool_calls))}]
+                            "finish_reason": _stream_finish_reason(
+                                get_meta, meta, body, bool(tool_calls))}]
         # Make the trace's VerificationRecord say WHY (Global Constraint 2).
         # run_stream stamps a performed=False/passed=True "waived" record; name
         # the reason + performed flag for this specific mode so the console and
