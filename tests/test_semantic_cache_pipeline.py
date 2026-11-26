@@ -456,6 +456,52 @@ def test_truncated_answer_is_not_stored_and_next_request_reaches_backend(reason)
     assert cache.size == 0
 
 
+class _AtCapBackend(_DeterministicLiteLLM):
+    """A backend that labels its reply `stop` but used `tokens_out` output
+    tokens -- the B116 shape (the backend's label hides the truncation)."""
+
+    def __init__(self, settings, tokens_out: int) -> None:
+        super().__init__(settings)
+        self._tokens_out = tokens_out
+
+    async def generate(self, model, messages, price, tier, hint, tools=None,
+                       tool_choice=None, params=None):
+        result = await super().generate(model, messages, price, tier, hint, tools)
+        return result.model_copy(update={"finish_reason": "stop",
+                                         "tokens_out": self._tokens_out})
+
+
+@pytest.mark.parametrize("cap_key", ["max_tokens", "max_completion_tokens"])
+def test_answer_at_client_cap_is_not_stored(cap_key):
+    """B116: an answer that used the client's whole output cap is truncated
+    whatever the backend's label, so it is reported `length` and never stored
+    (a hit would replay it as a complete `stop`)."""
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    rec = RecordingBackend(_AtCapBackend(settings, tokens_out=40))
+    pipe, cache = _pipeline(rec, settings, registry)
+    req = ChatRequest(messages=[Message(role="user", content="Write a long essay on rivers")],
+                      **{cap_key: 40})
+
+    out1 = asyncio.run(pipe.run("r1", "acme", req))
+    assert out1["choices"][0]["finish_reason"] == "length"
+    assert cache.size == 0
+    assert _cache_trace_records(out1)[0]["bypass_reason"] == "truncated"
+
+
+def test_answer_under_client_cap_is_still_stored():
+    settings = _base_settings()
+    registry = make_test_registry(settings)
+    rec = RecordingBackend(_AtCapBackend(settings, tokens_out=39))
+    pipe, cache = _pipeline(rec, settings, registry)
+    req = ChatRequest(messages=[Message(role="user", content="Write a long essay on rivers")],
+                      max_tokens=40)
+
+    out1 = asyncio.run(pipe.run("r1", "acme", req))
+    assert out1["choices"][0]["finish_reason"] == "stop"
+    assert cache.size == 1
+
+
 def test_normal_stop_answer_is_still_stored():
     settings = _base_settings()
     registry = make_test_registry(settings)

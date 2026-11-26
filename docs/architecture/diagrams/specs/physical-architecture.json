@@ -2,11 +2,11 @@
   "title": "RouteForge — Physical Architecture (Kubernetes pods & services)",
   "bands": [
     {"title": "Ingress", "nodes": [
-      {"id": "ingress", "label": "Istio / ezua gateway\nVirtualService (ui, langfuse)", "color": "orange", "bold": true}
+      {"id": "ingress", "label": "Istio VirtualService (ui, langfuse) — HPE/ezua chart\nor Kubernetes Ingress — generic chart", "color": "orange", "bold": true}
     ]},
     {"title": "RouteForge workloads", "nodes": [
       {"id": "ui", "label": "ui  (Deployment)\nnginx: React build + reverse-proxy", "color": "blue"},
-      {"id": "apipod", "label": "api  (Deployment + HPA)\nFastAPI / Uvicorn  :8080", "color": "orange", "bold": true}
+      {"id": "apipod", "label": "api  (Deployment, HPA optional)\nFastAPI / Uvicorn  :8080\nCCR cache in-process (TTL, no PVC)", "color": "orange", "bold": true}
     ]},
     {"title": "Langfuse application pods", "nodes": [
       {"id": "lfweb", "label": "langfuse-web\n:3000  (UI + OTLP ingest)", "color": "purple"},
@@ -19,7 +19,6 @@
       {"id": "minio", "label": "langfuse-minio (S3)  :9000\ninit Job seeds bucket", "color": "red"}
     ]},
     {"title": "Persistent volumes (PVC)", "nodes": [
-      {"id": "ccrpvc", "label": "ccr-cache PVC\n(residency-local originals, TTL)", "color": "gray"},
       {"id": "pgpvc", "label": "postgres PVC", "color": "gray"},
       {"id": "chpvc", "label": "clickhouse PVC", "color": "gray"},
       {"id": "miniopvc", "label": "minio PVC", "color": "gray"}
@@ -37,7 +36,6 @@
     {"from": "apipod", "to": "pg", "label": "app/usage", "color": "#D79B00"},
     {"from": "apipod", "to": "onprem", "label": "inference", "color": "#82B366"},
     {"from": "apipod", "to": "cloud", "label": "if allowed", "color": "#D79B00", "dashed": true},
-    {"from": "apipod", "to": "ccrpvc", "label": "mount", "color": "#999999", "dashed": true},
     {"from": "lfworker", "to": "pg", "label": "read/write", "color": "#9673A6"},
     {"from": "lfweb", "to": "pg", "color": "#9673A6"},
     {"from": "lfweb", "to": "ch", "label": "traces", "color": "#9673A6"},

@@ -409,6 +409,13 @@ class RoutingOutcome(Base):
     # other status. Added after the table shipped: a deployed DB needs
     # `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS conflicting_core JSON;`.
     conflicting_core: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # B117: one `{model, type, http_status, kind}` per FAILED attempt, in
+    # `attempts` order -- the exception class name, the status it carried and a
+    # closed kind enum (`timeout | connect | http_4xx | http_429 | http_5xx |
+    # context_overflow | local_error | other`). Never a message. Null when no
+    # attempt failed. Added after the table shipped: a deployed DB needs
+    # `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS backend_errors JSON;`.
+    backend_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # B60: the token count the router was given (`tokens_after`: RouteForge's
     # own post-gate, post-compression count), on EVERY status -- so the policy
     # simulator can replay a rejected request at its real size. Not the

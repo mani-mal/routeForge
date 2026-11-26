@@ -203,7 +203,20 @@ class Usage(BaseModel):
 TERMINAL_BACKEND_FINISH_REASONS = frozenset({"length", "content_filter"})
 
 
-def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> str:
+def output_cap_reached(completion_tokens: int | None, max_tokens: int | None) -> bool:
+    """True when a completion used the client's whole output budget (B116).
+
+    `max_tokens` is the client's own cap (`router.client_output_cap`:
+    `max_completion_tokens`, else `max_tokens`); None when it sent neither, and
+    then nothing is reached -- RouteForge invents no cap. `completion_tokens`
+    is the backend-reported count; None/0 (unreported) never reaches a cap."""
+    return (max_tokens is not None and completion_tokens is not None
+            and max_tokens > 0 and completion_tokens >= max_tokens)
+
+
+def client_finish_reason(backend_reason: str | None, has_tool_calls: bool, *,
+                         completion_tokens: int | None = None,
+                         max_tokens: int | None = None) -> str:
     """The `finish_reason` RouteForge sends the CLIENT -- the one rule every
     response path (non-stream, verified_then_stream / keepalive chunking,
     stream_unverified, incremental_verify, the recorded live-stream response)
@@ -214,8 +227,14 @@ def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> st
          with or without tool calls. A truncated tool call is still truncated
          (OpenAI reports `length` there too); an agent client that read it as
          `tool_calls`/`stop` would treat a cut-off turn as finished.
-      2. the turn ends in tool calls -> `"tool_calls"`.
-      3. otherwise -> `"stop"`.
+      2. the completion used the client's whole output cap
+         (`completion_tokens >= max_tokens`, see `output_cap_reached`) ->
+         `"length"`, whatever the backend's own label (B116). vLLM's tool
+         parser finds a call in a cut-off turn and reports `tool_calls`; the
+         token count is the only honest signal. The `tool_calls` array itself
+         is left as-is -- only the reason changes.
+      3. the turn ends in tool calls -> `"tool_calls"`.
+      4. otherwise -> `"stop"`.
 
     `backend_reason` is the backend's own, enum-normalised finish reason
     (`GenerationResult.finish_reason`; None when it reported none, `"other"`
@@ -227,10 +246,13 @@ def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> st
     still truncated), and a verification FAILURE never produces a response at
     all (it raises; the route sends an error), so there is no competing
     verifier-set reason to rank. A semantic-cache hit replays `"stop"`, which
-    is honest only because a `length`/`content_filter` answer is never stored
-    (`Pipeline.run` skips the store and records `bypass_reason: truncated`)."""
+    is honest only because a `length`/`content_filter` answer -- or one that
+    reached the client's cap -- is never stored (`Pipeline.run` skips the
+    store and records `bypass_reason: truncated`)."""
     if backend_reason in TERMINAL_BACKEND_FINISH_REASONS:
         return backend_reason
+    if output_cap_reached(completion_tokens, max_tokens):
+        return "length"
     return "tool_calls" if has_tool_calls else "stop"
 
 
@@ -240,7 +262,8 @@ class Choice(BaseModel):
     # Decided by `client_finish_reason` above: "stop" for a normal answer;
     # "tool_calls" when the assistant message carries tool_calls (OpenAI
     # clients switch on this to run their tools); the backend's "length" /
-    # "content_filter" when it reported one (B113).
+    # "content_filter" when it reported one (B113); "length" when the
+    # completion used the client's whole output cap (B116).
     finish_reason: str = "stop"
 
 
@@ -477,12 +500,20 @@ class DecisionRecord(BaseModel):
     # with `routing.switchyard.mode: off` a record serializes exactly as it
     # did before this field existed.
     advisor: dict | None = None
+    # B117: on a hop whose backend call FAILED -- `{"type", "http_status",
+    # "kind"}` from `classify_backend_error`: the exception class name, the
+    # HTTP status it carried and a closed kind enum. Never a message, URL or
+    # host. None (and dropped from the dump) on every other record.
+    backend_error: dict | None = None
 
     @model_serializer(mode="wrap")
     def _drop_absent_advisor(self, handler):
         data = handler(self)
-        if isinstance(data, dict) and data.get("advisor", ...) is None:
-            data.pop("advisor", None)
+        if isinstance(data, dict):
+            if data.get("advisor", ...) is None:
+                data.pop("advisor", None)
+            if data.get("backend_error", ...) is None:
+                data.pop("backend_error", None)
         return data
 
 

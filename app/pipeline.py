@@ -15,7 +15,7 @@ from app.models import (
     CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, TERMINAL_BACKEND_FINISH_REASONS, Usage, VerificationRecord,
-    client_finish_reason,
+    client_finish_reason, output_cap_reached,
 )
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
@@ -426,7 +426,8 @@ class Pipeline:
         try:
             return self._gate_inputs(app_policy, profile, build=False)
         except _DetectorBuildNeeded as need:
-            built = await run_detector(self._build_detector, need.mode)
+            built = await run_detector(self._build_detector, need.mode,
+                                       hop_label="warmup")
             self._detectors.setdefault(need.mode, built)
             return self._gate_inputs(app_policy, profile, build=False)
 
@@ -861,7 +862,8 @@ class Pipeline:
         # B118: the re-verify is a detector pass -- off the event loop.
         text, vrec = await run_detector_for(
             egress_detector(det, client_output), verify, det, ctx,
-            entry.response_text, client_output=client_output)
+            entry.response_text, client_output=client_output,
+            hop_label="cache_verify")
         if not vrec.passed:
             return None
         # Priced on what the MODEL would have been sent (`model_text`), not on
@@ -998,7 +1000,7 @@ class Pipeline:
                 det, self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
-                inherited_entity_types=inherited)
+                inherited_entity_types=inherited, hop_label="gate")
             if trajectory is not None:
                 await trajectory.observe(eff.trajectory_mode, ctx.request_entities)
         except PolicyGateError:
@@ -1081,7 +1083,8 @@ class Pipeline:
                 self._tool_turn_messages(reps, eff)
                 if eff.protection.model_input == "raw" else
                 await run_detector_for(
-                    reps.detector, self._tool_turn_messages, reps, eff))
+                    reps.detector, self._tool_turn_messages, reps, eff,
+                    hop_label="tool_view"))
             recall = RecallResult([], None)
             self._record_tool_arg_stats(internals, reps.tool_arg_stats())
         else:
@@ -1221,7 +1224,8 @@ class Pipeline:
         # completion -- a Presidio pass goes off the event loop, like the gate.
         text, vrec = await run_detector_for(
             egress_detector(det, client_output),
-            verify, det, ctx, result.text, client_output=client_output)
+            verify, det, ctx, result.text, client_output=client_output,
+            hop_label="verify")
         if not vrec.passed:
             if internals is not None:
                 # P2b-2 (final review #1): a model WAS served before step 9
@@ -1276,7 +1280,8 @@ class Pipeline:
         tc_redaction = await run_detector_for(
             egress_det, redact_tool_calls_with_entities,
             raw_tool_calls, egress_det,
-            eff.protection.tool_args_min_score, eff.protection.tool_args_bar_types)
+            eff.protection.tool_args_min_score, eff.protection.tool_args_bar_types,
+            hop_label="egress_redact")
         redacted_tool_calls = tc_redaction.tool_calls
         tool_args = reps.tool_arg_stats() + tc_redaction.stats
         self._record_tool_arg_stats(internals, tool_args)
@@ -1313,8 +1318,13 @@ class Pipeline:
         # complete "stop", so it would later be served as a finished answer.
         # The skip is named on the trace's CacheRecord (`truncated`, an enum
         # value, never content); a lookup refusal already recorded is kept.
+        # B116: so is an answer that used the client's whole output cap,
+        # whatever the backend labelled it (it is reported `length` below).
+        output_cap = client_output_cap(request.generation_params())
+        cap_reached = output_cap_reached(result.tokens_out, output_cap)
         store_skipped = (cache_active and cache_bypass_reason is None
-                         and result.finish_reason in TERMINAL_BACKEND_FINISH_REASONS)
+                         and (result.finish_reason in TERMINAL_BACKEND_FINISH_REASONS
+                              or cap_reached))
         if store_skipped and cache_record is not None:
             prior = cache_record.bypass_reason
             cache_record = cache_record.model_copy(update={
@@ -1382,7 +1392,8 @@ class Pipeline:
         # finish_reason is "tool_calls" (OpenAI clients switch on this to run
         # their tools and call back). Ordinary answers keep content + "stop".
         # B113: a backend `length`/`content_filter` wins over both -- one rule,
-        # `client_finish_reason`, shared with every streamed path.
+        # `client_finish_reason`, shared with every streamed path. B116: so
+        # does reaching the client's output cap (reported `length`).
         # `redacted_tool_calls` (not `result.tool_calls`): the client-facing
         # message must carry egress-redacted arguments (Task 2).
         tool_calls = redacted_tool_calls or None
@@ -1390,7 +1401,9 @@ class Pipeline:
             role="assistant",
             content=(text or None) if tool_calls else text,
             tool_calls=tool_calls)
-        finish_reason = client_finish_reason(result.finish_reason, bool(tool_calls))
+        finish_reason = client_finish_reason(
+            result.finish_reason, bool(tool_calls),
+            completion_tokens=result.tokens_out, max_tokens=output_cap)
         return {
             "id": request_id,
             "model": result.model,
@@ -1549,7 +1562,7 @@ class Pipeline:
                 det, self._gate.evaluate,
                 request_id, tenant_id, request, app_policy=app_policy,
                 detector=det, rules=rules, eff=eff, workload=workload,
-                inherited_entity_types=inherited)
+                inherited_entity_types=inherited, hop_label="gate")
             if trajectory is not None:
                 await trajectory.observe(eff.trajectory_mode, ctx.request_entities)
         except PolicyGateError:
@@ -1641,7 +1654,8 @@ class Pipeline:
                 self._tool_turn_messages(reps, eff)
                 if eff.protection.model_input == "raw" else
                 await run_detector_for(
-                    reps.detector, self._tool_turn_messages, reps, eff))
+                    reps.detector, self._tool_turn_messages, reps, eff,
+                    hop_label="tool_view"))
             recall = RecallResult([], None)
             comp = self._tool_turn_compression(san_messages, tools)
             # B69: ingress only -- a live tool turn's egress arguments are
@@ -1697,21 +1711,28 @@ class Pipeline:
             """Yields text deltas (`str`) and, on a live tool turn, tool-call
             fragments (`list[dict]`) in arrival order."""
             result: GenerationResult | None = None
-            async for chunk in stream:
-                if chunk.delta is not None:
-                    yield chunk.delta
-                if chunk.tool_calls_delta is not None:
-                    if tool_mode:
-                        yield chunk.tool_calls_delta
-                    else:
-                        # The client offered no tools and replayed none: tool
-                        # calls here are unsolicited, never forwarded.
-                        logging.getLogger("serving.pipeline").warning("dropping unsolicited tool_calls on a "
-                                    "non-tool stream request=%s", request_id)
-                if chunk.final is not None:
-                    result = chunk.final
-                    if internals is not None and "outcome_ctx" in internals:
-                        internals["outcome_ctx"].update(reply_shape(result))
+            try:
+                async for chunk in stream:
+                    if chunk.delta is not None:
+                        yield chunk.delta
+                    if chunk.tool_calls_delta is not None:
+                        if tool_mode:
+                            yield chunk.tool_calls_delta
+                        else:
+                            # The client offered no tools and replayed none: tool
+                            # calls here are unsolicited, never forwarded.
+                            logging.getLogger("serving.pipeline").warning("dropping unsolicited tool_calls on a "
+                                        "non-tool stream request=%s", request_id)
+                    if chunk.final is not None:
+                        result = chunk.final
+                        if internals is not None and "outcome_ctx" in internals:
+                            internals["outcome_ctx"].update(reply_shape(result))
+            except Exception:
+                # B117: the gateway stamped the failure's content-free class on
+                # the router record; re-dump so the `backend_failed` row sees it.
+                if internals is not None:
+                    internals["routing_trace"] = decision_trace(records)
+                raise
             # The backend stream ended normally: anything raised from here on
             # is a pipeline outcome, not a backend failure (spec §4).
             get_meta.backend_completed = True   # type: ignore[attr-defined]

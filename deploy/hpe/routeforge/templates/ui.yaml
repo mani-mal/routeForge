@@ -45,7 +45,8 @@ spec:
             httpGet:
               path: /
               port: http
-            periodSeconds: 10
+            periodSeconds: {{ .Values.probes.ui.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.ui.readiness.timeoutSeconds }}
           resources:
             {{- toYaml .Values.resources.ui | nindent 12 }}
       volumes:

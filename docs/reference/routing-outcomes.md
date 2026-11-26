@@ -110,6 +110,15 @@ rolling the image.
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS requested_alias VARCHAR(64);
 ```
 
+**Upgrade: `backend_errors` (B117, 2026-11-15).** `routing_outcomes` gained one nullable JSON
+column recording why each failed backend attempt failed (class name, HTTP status, a closed
+kind enum; never a message). Same failure mode as above if the ALTER is missed; run it before
+rolling the image.
+
+```sql
+ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS backend_errors JSON;
+```
+
 **Upgrade: Switchyard advisor columns (B104/B105, 2026-11-12).** Six nullable columns record
 what the Switchyard advisor proposed (§3.2): `switchyard_mode`, `switchyard_role`,
 `switchyard_tier`, `switchyard_confidence`, `switchyard_agreed` and
@@ -176,7 +185,12 @@ there any non-blank text), `reply_tool_calls` (how many), and `reasoning_tokens`
 backend reports them). A served row with `reply_has_text = false` and
 `reply_tool_calls = 0` is an HTTP 200 that said nothing — a reasoning model that spent its
 whole budget thinking, for example. Null on rows with no reply and on older rows. The
-`finish_reason` the *client* receives is RouteForge's own and is unchanged.
+`finish_reason` the *client* receives is decided separately by
+`app/models.py::client_finish_reason`: the backend's `length`/`content_filter` passes
+through (B113), and a completion whose `completion_tokens` reaches the client's own cap is
+reported `length` whatever the backend labelled it (B116). This column keeps the backend's
+own label, so a B116 case shows on the row as `finish_reason = tool_calls` (or `stop`) with
+`completion_tokens >= max_tokens`.
 
 ```sql
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS finish_reason VARCHAR(16);
@@ -344,6 +358,7 @@ filled on it exactly as on an `ok` row.
 | `switchyard_agreed` | bool, nullable | `switchyard_tier` equals the **served** tier (the served router hop's `chosen_tier`). Null on a fallback and on a row where nothing was served. The agreement rate is `avg(switchyard_agreed::int)` over non-null rows. Added 2026-11-12. |
 | `switchyard_fallback_cause` | enum, nullable | Why the advisor made no proposal: `timeout` \| `error` \| `unconvertible` \| `invalid_role` \| `routing_call_refused`; `pinned` (B115): the request named a model (a slug, or a per-app alias resolved to one; `requested_model` is set), so there was no tier choice and the advisor was not called -- role and tier are null; or, under `enforce` only, `quality_floor`: the advisor did propose (role and tier are set) but a live B80 floor in `enforce` decided, so the proposal was not applied (design §2). Null otherwise. Added 2026-11-12. |
 | `switchyard_applied` | bool, nullable | True when the proposal was passed to the router (effective mode `enforce`, request inside the app's deterministic `adaptive_routing_sample_rate` sample, no fallback). False when the advisor ran but its proposal was only recorded: `shadow`, an unsampled `enforce` request, any fallback, a deciding B80 floor. Null when the advisor did not run and on rows written before the column existed. Added 2026-11-13 (B108). |
+| `backend_errors` | JSON list, nullable | One entry per **failed** backend attempt, in `attempts` order: `{"model": slug, "type": exception class name, "http_status": int or null, "kind": ...}` (B117, `app/gateway/gateway.py::classify_backend_error`). `kind` is a closed enum, first match wins: `context_overflow` (`ContextWindowExceeded`), `local_error` (a local programming-error class, our bug), `timeout` (checked before `connect`: litellm's `Timeout` is also an `APIConnectionError`), `connect` (before the status, because litellm reports status 500 on a connection error that never got a response), then by status `http_429`, `http_4xx`, `http_5xx`, else `other`. Written on `backend_failed` rows (for a stream, the one streamed attempt), on buffered `context_overflow` rows (a streamed context overflow writes no outcome row at all, as before B117) and on `ok` rows that succeeded after a failover. `connect` also covers `httpx.RemoteProtocolError` ("server disconnected"). If a registered secret appeared in the upstream error text, the scrubbed exception (`UpstreamError`) replaces the original class, so only its status is kept and `kind` follows the status. Null when no attempt failed. Never the exception message, a URL or a host (§2). The failure trace carries the kinds as `sp.backend_error_kinds`, and each failed hop's span `sp.backend_error`. Added 2026-11-15 (B117). |
 | `request_shape` | JSON, nullable | The client request's shape as received (B123, `ChatRequest.shape()`): `has_tools` (bool), `n_tools`, `tool_mode` (bool: the client-driven tool path ran, `_is_tool_conversation`), `message_roles` (count per role; `system` \| `developer` \| `user` \| `assistant` \| `tool` \| `function`, anything else `other`), `content_parts` (count per content type across all messages: `string` for plain-string content, else the part type — `text` \| `input_text` \| `output_text` \| `image_url` \| `input_image` \| `file` \| `input_file` \| `input_audio` \| `refusal`, anything else `other`), `dropped_parts` (same keys: the non-text parts flattening discarded; `{}` when none) and `empty_messages` (system/developer/user messages with no text after flattening and no `tool_calls`). Closed-set keys and counts only — a client's role or part-type string is never stored verbatim. Written on every status that writes a row; null on older rows. The same record is on the trace root span as `sp.request.*`. Added 2026-11-18. |
 | `conflicting_core` | JSON, nullable | A `no_eligible` row's minimal conflicting core (P3b): `ConflictingCore.to_record()` — requirement ids/`security`/`source`/`detail`, endpoint state, `candidates_considered`; no `label`, no `hints`. Content-free. Null on every other status, and null when the router's own core computation failed (`core=None`). See `docs/reference/conflicting-core.md`. Added 2026-09-25 (P3b). |
 

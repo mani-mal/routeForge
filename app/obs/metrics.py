@@ -37,6 +37,19 @@ if AVAILABLE:
         "routeforge_breaker_transitions_total",
         "Circuit-breaker state transitions, by the state entered.",
         ["to_state"])
+    # B119 step 1: detector-executor jobs (Presidio work), by call-site hop.
+    # Buckets reach past a minute: a queued 56k-token pass waits ~16 s per job
+    # ahead of it, and the default buckets stop at 10 s.
+    _DETECTOR_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
+                         5.0, 10.0, 20.0, 40.0, 80.0)
+    _detector_queue = Histogram(
+        "routeforge_detector_queue_seconds",
+        "Time a detector-executor job waited in the queue before it started.",
+        ["hop", "outcome"], buckets=_DETECTOR_BUCKETS)
+    _detector_run = Histogram(
+        "routeforge_detector_run_seconds",
+        "Time a detector-executor job ran on the worker.",
+        ["hop", "outcome"], buckets=_DETECTOR_BUCKETS)
 
 
 def observe_request(model: str, status: str) -> None:
@@ -71,6 +84,18 @@ def time_routing():
 def observe_breaker_transition(to_state: str) -> None:
     if AVAILABLE:
         _breaker.labels(to_state=to_state).inc()
+
+
+def observe_detector_job(hop: str, outcome: str, queue_s: float,
+                         run_s: float | None) -> None:
+    """One detector-executor job (B119). `hop` is a fixed call-site label from
+    `app.policy.detector_pool`; `outcome` is `done | cancelled_queued |
+    orphaned` -- both bounded, never tenant or request data. A job cancelled
+    while queued has a queue wait (until the cancel) and no run (`None`)."""
+    if AVAILABLE:
+        _detector_queue.labels(hop=hop, outcome=outcome).observe(max(0.0, queue_s))
+        if run_s is not None:
+            _detector_run.labels(hop=hop, outcome=outcome).observe(max(0.0, run_s))
 
 
 def render() -> tuple[bytes, str]:
