@@ -72,9 +72,9 @@ def test_u7_report_prints_insufficient_data_instead_of_a_range():          # U7
     results = _synthetic() + [_result(5000 + i, "small", _arm("local-mid", 0.01), REJECTED)
                               for i in range(5)]
     text = render_uncertainty_section(_block(results))
-    section = text[text.index("#### small (n = 5)"):]
-    assert section.strip().split("\n")[-1] == "insufficient data (n = 5)"
-    assert "| figure |" not in section
+    # B65 item 4: no per-app heading for it; a count line names it.
+    assert "#### small" not in text
+    assert text.strip().split("\n")[-1] == "Insufficient data: 1 app(s): small (n = 5)."
     assert insufficient_text({"insufficient_data": True, "n": 5}) == "insufficient data (n = 5)"
     # Too few rows in all: no table anywhere, and no per-day section.
     tiny = render_uncertainty_section(_block(_synthetic(12)))
@@ -147,3 +147,15 @@ def test_u11_report_text_does_not_rank_or_recommend():                     # U11
     text = (render_uncertainty_section(_block(results, replicates=1))
             + quality_line({"current": partial, "proposed": partial})).lower()
     assert not [word for word in BANNED if word in text]
+
+
+def test_b65_the_single_proposal_report_counts_insufficient_apps_and_names_ten():
+    results = _synthetic() + [_result(5000 + 10 * a + i, f"tiny-{a:02d}",
+                                      _arm("local-mid", 0.01), REJECTED)
+                              for a in range(15) for i in range(2)]
+    text = render_uncertainty_section(_block(results))
+    assert text.strip().split("\n")[-1] == (
+        "Insufficient data: 15 app(s), the first 10: "
+        + ", ".join(f"tiny-{a:02d} (n = 2)" for a in range(10)) + ".")
+    assert "tiny-10" not in text and "#### tiny" not in text
+    assert "Insufficient data:" not in render_uncertainty_section(_block())

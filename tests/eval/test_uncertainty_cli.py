@@ -146,7 +146,8 @@ def test_proposal_report_gets_the_section_between_the_report_and_shadow_prices(t
     assert order == sorted(order)
     for line in UNCERTAINTY_CAVEAT.split("\n"):
         assert "> " + line in report
-    assert "#### few (n = 6)\n\ninsufficient data (n = 6)" in report
+    assert "#### few" not in report
+    assert "Insufficient data: 1 app(s): few (n = 6)." in report
     assert "90% percentile intervals from 60 bootstrap resamples" in report
 
 

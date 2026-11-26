@@ -44,10 +44,10 @@ from app.eval.simulate import (CACHED_SHARE_NOTE, REPORT_CAVEAT, _assumption_ite
                                run_rows, summarize)
 from app.eval.uncertainty import (OUTSIDE_FOOTNOTE, ZERO_RANGE_NOTE, UncertaintyPlan,
                                   _count_outside, app_sizes, bucket_lines, caveat_lines,
-                                  cost_line, insufficient_text, method_line, min_max_line,
-                                  outside_line, plan_block, quality_line, results_block,
-                                  strata_line, table_ranges, token_estimate_line, window_days,
-                                  with_range)
+                                  cost_line, insufficient_apps_text, insufficient_text,
+                                  method_line, min_max_line, outside_line, plan_block,
+                                  quality_line, results_block, strata_line, table_ranges,
+                                  token_estimate_line, window_days, with_range)
 
 SCHEMA = "routeforge.policy-scenarios/v1"
 COMPARISON_SCHEMA = "routeforge.scenario-comparison/v1"
@@ -519,10 +519,6 @@ def _uncertainty_lines(block: dict) -> list[str]:
     return lines
 
 
-#: How many insufficient-data applications a scenario's section names.
-_SMALL_APPS_SHOWN = 10
-
-
 def render_comparison(doc: dict) -> str:
     """`report.md` for a comparison (spec §8): the caveat, the agreement
     banner, ONE table in file order, the assumptions each scenario makes,
@@ -607,17 +603,10 @@ def render_comparison(doc: dict) -> str:
             lines.append("")
             lines += bucket_lines(ranges[entry["name"]]["totals"], uncertainty["interval"])
             lines.append("")
-            small = [f"{app_id} (n = {bucket['n']})"
-                     for app_id, bucket in sorted(ranges[entry["name"]]["by_app"].items())
-                     if bucket.get("insufficient_data")]
+            small = insufficient_apps_text(ranges[entry["name"]]["by_app"])
             if small:
-                # An export can hold thousands of small applications: the
-                # count, and at most ten names. The rest are in the JSON.
-                shown = small[:_SMALL_APPS_SHOWN]
-                head = (f"{len(small)} app(s), the first {len(shown)}: "
-                        if len(small) > len(shown) else f"{len(small)} app(s): ")
                 lines.append("Per-app ranges are in `comparison.json`. Insufficient data: "
-                             + head + ", ".join(shown) + ".")
+                             + small)
             else:
                 lines.append("Per-app ranges are in `comparison.json`.")
             lines.append("")
