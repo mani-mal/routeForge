@@ -815,6 +815,88 @@ Step 1 (2026-11-15, feat/b119-detector-timing): per-request queue-wait/run-time 
   - *Low:* step-9 `verify` (and the cache re-verify) over an empty completion, i.e. a tool-call-only turn under `client_output: redact`; and the redacted export/display with an empty completion.
   - *Single-source the raw check:* B120 repeats `_tool_turn_messages`' raw/redact selection at the call site. Prefer `run_detector_for(None if raw else reps.detector, ...)` or a helper.
 
+## B121 — Does Switchyard's escalation beat a cheap-only default?  🔴 OPEN (design agreed 2026-11-15)
+
+**Follow-up to B109.** B109 answered Switchyard (D) against the plain router (C). But the
+always-cheap arm (A) beat every arm: 37/38 at $0.26 per success against D's 35/38 at $1.06.
+The task set was too easy for escalation to matter, and most of D's extra cost came from
+the policy risk floor, not from Switchyard: 172 of D's 580 calls were floored to mid, while
+A's narrowed eligible set served its 187 floored calls on cheap. If escalation buys
+nothing, cheap-only should be the production default.
+
+**Agreed design** (with DevFoundry, which supplies the runner, task generator and blind review):
+- Arms A (cheap-only, the baseline), D (Switchyard) and B (capable-only, the ceiling).
+- About 100 harder specs, calibrated so A succeeds 50–70% (INCONCLUSIVE outside 45–75%).
+  Power: about 92 specs for +12 pp at 22% discordance, one-sided α 0.05, 80% power.
+- Risk floors off on all three arms through per-app sensitivity rules (`app/apps/privacy.py`),
+  not the deployment-global `risk_floors`. Detection and redaction are unchanged.
+  Counterfactual production floors are reported from the recorded entities.
+- Gates: D−A ≥ +10 pp with the 90% paired-bootstrap lower bound > 0, and net value
+  V = (s_D − s_A) × $20 − (c_D − c_A) with its lower bound > 0. The $20 per failed task is
+  the owner's figure. The implied cost-per-success ratio k is reported.
+- Cached input is priced explicitly and cost is reported both ways: a single-model arm keeps
+  a warm prefix all session, while D pays a cold prefix on each mid-session tier switch.
+- B109's practice carries over: durable state, `--gateway-infra`, §5a/§5e/§5g, no probes,
+  blind scoring.
+
+**Prerequisites:**
+- B117 (PR #190) and B119 step 1 (PR #191) are deployed as lab 0.44.0.
+- The B119 decision waits on the queue-wait data.
+- The HarnessLab check.py false positives are DevFoundry's to fix.
+- glm needs `--enable-prompt-tokens-details`, so cached tokens are reported.
+- Next: the protocol draft, `docs/research/switchyard-vs-cheap-protocol.md`.
+
+## B122 — Presidio false positives on code put `dev-foundary` at the medium floor  🔴 OPEN
+
+**Found 2026-11-15 (B109 analysis).** Presidio flags identifiers, dates, paths and URLs in
+source code as PERSON, LOCATION, DATE_TIME, US_DRIVER_LICENSE, NRP or URL. On a code
+workload that sets sensitivity `confidential` and risk `medium` (or higher), so the medium
+floor sends the request to mid. In B109, 172 of arm D's 580 calls were floored this way.
+Every `dev-foundary` request on 2026-11-17 that was checked carried the same six entity
+types. The floor raises cost without a real sensitivity reason.
+**Options to evaluate:** per-app `pii_entity_denylist` or `pii_score_threshold` for code apps;
+per-app sensitivity rules that don't raise risk for these types; or a code-aware recognizer
+context. Any change must keep detection for genuinely sensitive types (SSN, credit card)
+and stay explicit, per CLAUDE.md rule 2a.
+
+## B123 — The request's shape isn't recorded, and non-text content parts are dropped silently  ✅ RESOLVED (2026-11-18, feat/b123-request-shape; not yet deployed)
+
+**Found 2026-11-17** during DevFoundry's lost-task investigation: OpenCode agents behaved as
+if they never got their task, and DevFoundry asked whether RouteForge changed what the model
+receives. Nothing recorded the request's shape, so we could only answer by inference. For
+req-f3f758044d454596bf4ba5c492016e70, the fact that the tool path ran had to be inferred from
+`routing_tokens` minus the text tokens. The investigation also found a real gap:
+`Message._flatten_content_parts` silently dropped every content part whose `type` was not
+`"text"`. That included the Responses-style `input_text`/`output_text` parts, which carry
+text. A message sent only as such parts reached the gate and the model as an empty string,
+with no trace of it.
+**Fix.**
+- **A content-free request shape** (`ChatRequest.shape()`), computed once per request in the
+  route from the request as received. It records `has_tools`, `n_tools`, `tool_mode` (which
+  path ran), `message_roles`, `content_parts`, `dropped_parts` and `empty_messages`. Part
+  counts are taken by a `mode="wrap"` validator on `ChatRequest`, which reads the raw
+  `messages` JSON before `Message` flattens it. It keeps counts in a private attribute: no
+  global state and no copies of text. Roles and part types map onto closed sets (anything
+  else is `other`), so a client string is never recorded.
+- **Where it is written.** The new nullable JSON column `routing_outcomes.request_shape`, on
+  every status that writes a row. The trace root span, as `sp.request.tool_mode`,
+  `sp.request.n_tools`, `sp.request.message_roles`, `sp.request.content_parts`,
+  `sp.request.dropped_parts` (only when non-empty) and `sp.request.empty_messages`, regardless
+  of `capture_io`; the B78 failure trace carries them too. When anything was dropped, one
+  `serving.api` WARNING JSON line (`event: content_parts_dropped`) with the request id and
+  the counts.
+- **Behaviour change (intended):** `input_text` and `output_text` parts are now kept as text,
+  exactly like `text`. The gate and the model now see text they previously never received.
+  Every other non-text part (images, files, audio, refusals, unknown types) is still dropped,
+  because RouteForge is text-only, but each one is now counted. Nothing else changes: routing,
+  policy, the gate's input for every other request, and which path runs are all the same.
+
+Tests: `tests/test_request_shape.py`, `tests/test_message_content_parts.py`;
+`tests/test_outcome_store.py::test_schema_is_content_free` passes unchanged.
+**Deploy:** run `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS request_shape JSON;`
+(or `scripts/migrate_app_policies.py`) before rolling the image. Otherwise every outcome write
+fails, and no outcome rows are recorded until it runs.
+
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
 **Resolved.** `Pipeline._advise` no longer calls the advisor when `ctx.requested_model` is
