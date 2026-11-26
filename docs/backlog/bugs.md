@@ -190,6 +190,35 @@ the audit trail in that sweep's task report.
 > **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
 > B110 starts as soon as B100 lands. B111 is gated on B109's go decision (GO, 2026-11-15). B112 is optional.
 
+## B125 — Lab "Saved" is −220% because the on-prem mid model is priced above the frontier baseline, and its cached tokens bill at the full input rate  🔴 OPEN (needs owner decision)
+
+**Found 2026-11-26** while filing B124. Over 30 days the DGX lab console shows spend of $15,425
+against an all-frontier baseline of about $4,821, so Saved is −$10,605 (−220%). Every app
+except B109 arm A (cheap tier) is negative.
+
+**Cause: pricing data, not a calculation bug.** All the lab's traffic is on-prem.
+- `glm-5.3-flash` (mid, where most `dev-foundary`/`opencode` traffic lands) was onboarded
+  at **$10/M input, $10/M output**, with no `price_cached_input`. `glm-flash-east` (mid) is
+  $6/$6, and the other on-prem rows are $1/$1.
+- The baseline is `bedrock-frontier` in `config/pricing.yaml`: $3/M input, $15/M output,
+  **$0.30/M cached input**.
+- Agent traffic is overwhelmingly input tokens, much of them prefix-cached, so a mid-tier
+  call "costs" more than three times the frontier baseline for the same tokens.
+
+**The comparison is also asymmetric.** `app/routing/pricing.py:27` bills cached prompt
+tokens at the full input rate when a model has no `cached_input`. The baseline gets its
+$0.30 cache rate. So a model onboarded without a cached price is penalised against the
+baseline on every cache hit, even though vLLM prefix-caches just as Bedrock does.
+
+**To decide (owner):**
+1. Were the lab prices ($10/$6/$1) deliberate, e.g. for the B109 arms, or placeholders?
+   If placeholders, re-price the on-prem rows (Infrastructure → edit model) and set
+   `price_cached_input`.
+2. Product: should the console warn when an onboarded model's input price exceeds the
+   baseline's, or when the baseline has a cached rate and the model does not? Either way
+   the Saved figure is then explained instead of silently negative. B121 already plans to
+   report cost both ways (cached priced explicitly).
+
 ## B124 — Fleet overview: the Saved column's percentage overflows into the PII column (looks like garbled characters)  ✅ RESOLVED (2026-11-26, fix/b124-fleet-saved-overflow)
 
 **Severity:** low (display only; the numbers themselves are right) but very visible. On the
