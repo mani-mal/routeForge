@@ -173,7 +173,12 @@ there any non-blank text), `reply_tool_calls` (how many), and `reasoning_tokens`
 backend reports them). A served row with `reply_has_text = false` and
 `reply_tool_calls = 0` is an HTTP 200 that said nothing — a reasoning model that spent its
 whole budget thinking, for example. Null on rows with no reply and on older rows. The
-`finish_reason` the *client* receives is RouteForge's own and is unchanged.
+`finish_reason` the *client* receives is decided separately by
+`app/models.py::client_finish_reason`: the backend's `length`/`content_filter` passes
+through (B113), and a completion whose `completion_tokens` reaches the client's own cap is
+reported `length` whatever the backend labelled it (B116). This column keeps the backend's
+own label, so a B116 case shows on the row as `finish_reason = tool_calls` (or `stop`) with
+`completion_tokens >= max_tokens`.
 
 ```sql
 ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS finish_reason VARCHAR(16);

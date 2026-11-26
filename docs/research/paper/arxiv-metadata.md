@@ -10,13 +10,15 @@ RouteForge: Testing and Replaying Policy-Constrained LLM Routing
 
 ## Authors
 
-Mani Malarvannan
+Mani Malarvannan, Srini Ramaswamy
 
-(The PDF byline reads "Mani Malarvannan", CDW, mani.malarvannan@cdw.com.)
+(The PDF byline reads "Mani Malarvannan", CDW, mani.malarvannan@cdw.com; and "Srini Ramaswamy,
+Ph.D.", DNRS.ai, USA, srini@computer.org. arXiv's author field takes names only; enter them in
+this order, comma-separated.)
 
 ## Abstract
 
-An LLM gateway that serves several applications over on-premises and cloud endpoints must decide which endpoints may receive a request before it chooses among them. We present RouteForge, a self-hosted, OpenAI-compatible gateway that computes this eligible set for every request from operator-declared application policy, endpoint declarations and detected sensitive content, and rejects the request when the set is empty. We study three things around it. First, enforcement: a property-based harness for the policy compiler found two fail-open defects, and in two live runs with cloud endpoints none of the 945 outbound attempts made for the 987 requests confined to on-premises compute went to a cloud endpoint. Second, evaluation: a benchmark whose oracle credits only eligible endpoints showed that the length-based router paid about 6.7 times the cheapest eligible stated price when every model answered correctly. Third, replay: re-running recorded, content-free routing decisions under a proposed policy reproduced the admission decision of all 3,611 requests in four live runs, but not which endpoint served during outages, and one prospective prediction of the cloud-bound count (180) was close to the later observation (178). All traffic is synthetic. We also show a restriction lost when an agent compacts its context, and a prototype that carries detector-derived placement restrictions across related calls.
+An LLM gateway that serves several applications over on-premises and cloud endpoints must decide which endpoints may receive a request before it chooses among them. We present RouteForge, a self-hosted, OpenAI-compatible gateway that computes this eligible set for every request from operator-declared application policy, endpoint declarations and detected sensitive content, and rejects the request when the set is empty. We study three things around it. First, enforcement: a property-based harness for the policy compiler found two fail-open defects, and in two live runs with cloud endpoints none of the 945 outbound attempts made for the 987 requests confined to on-premises compute went to a cloud endpoint. Second, evaluation: a benchmark whose oracle credits only eligible endpoints showed that the length-based router paid about 6.7 times the cheapest eligible stated price when every model answered correctly. Third, replay: re-running recorded, content-free routing decisions under a proposed policy reproduced the admission decision of all 3,611 requests in four live runs, but not which endpoint served during outages, and one prospective prediction of the cloud-bound count (180) was close to the later observation (178). All traffic is synthetic. We also show a restriction lost when an agent compacts its context, and a prototype that carries detector-derived placement restrictions across related calls. Finally, building on the SMARt managed-autonomy framework, we outline a design, not yet implemented or evaluated, that extends eligibility from privacy restrictions to a task's governance state, replaces length-based tiering with calibrated suitability estimates inside the eligible set, and replays changes to expert-defined invariant anchors over ordered trajectories.
 
 ## Categories
 
@@ -27,7 +29,7 @@ An LLM gateway that serves several applications over on-premises and cloud endpo
 
 ## Comments
 
-28 pages, 1 figure, 16 tables. Code and data: https://github.com/mani-mal/routeForge (tag arxiv-v4)
+33 pages, 1 figure, 18 tables. Code and data: https://github.com/mani-mal/routeForge (tag arxiv-v4)
 
 ## Optional fields — leave blank
 

@@ -117,6 +117,26 @@ def detection_ran(det: object) -> bool:
     return not isinstance(det, NullDetector)
 
 
+def use_offline_tldextract() -> bool:
+    """B114: pin tldextract to its bundled suffix-list snapshot, no network.
+
+    Presidio's EmailRecognizer.validate_result calls the module-level
+    ``tldextract.extract``, whose default extractor tries to fetch the public
+    suffix list over HTTP when its cache is empty/unwritable (``/app/.cache``
+    under the non-root image user). An air-gapped install must never reach the
+    internet, so swap the default for one with no URLs and no disk cache.
+    ``extract`` looks up ``TLD_EXTRACTOR`` at call time, so rebinding it is
+    enough. No-op (returns False) when tldextract is not installed."""
+    try:
+        import tldextract
+        from tldextract import tldextract as _impl
+    except ImportError:
+        return False
+    _impl.TLD_EXTRACTOR = tldextract.TLDExtract(
+        suffix_list_urls=(), cache_dir=None, fallback_to_snapshot=True)
+    return True
+
+
 class PresidioDetector:
     """Real Presidio path (demo default). Lazy import so tests never need it.
 
@@ -132,6 +152,7 @@ class PresidioDetector:
 
     def __init__(self) -> None:
         from presidio_analyzer import AnalyzerEngine
+        use_offline_tldextract()  # B114: before any recognizer can call it
         self._analyzer = AnalyzerEngine()
         # B118: request-path detector work runs on the dedicated
         # single-worker detector executor (app/policy/detector_pool.py), which

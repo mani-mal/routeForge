@@ -46,6 +46,7 @@ from app.errors import (
     BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate, PolicyGateError,
 )
 from app.models import ChatRequest, ExecutionPolicyContext, client_finish_reason
+from app.routing.router import client_output_cap
 from app.obs import metrics
 from app.obs.export import export_failure_trace, export_trace, resolve_capture_io
 from app.obs.redact import redacted_copy
@@ -53,7 +54,7 @@ from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
 from app.pipeline import PipelineRejected, StreamFallback
 from app.policy.compile import compile_policy
-from app.policy.detector_pool import run_detector_for
+from app.policy.detector_pool import current_timing, run_detector_for, start_request_timing
 from app.policy.context import requestable_models
 from app.policy.enums import STREAM_MODES
 
@@ -399,6 +400,41 @@ def _core_record(core) -> dict | None:
         return None
 
 
+def _detector_timing_attributes(timing, request_id: str) -> dict | None:
+    """B119 step 1: `timing.attributes()` for a trace, or None. Guarded, so a
+    timing failure can never skip the export it would have been attached to."""
+    if timing is None:
+        return None
+    try:
+        return timing.attributes()
+    except Exception:
+        logging.getLogger("serving.obs").warning(
+            "detector timing snapshot failed request=%s", request_id, exc_info=True)
+        return None
+
+
+def _log_detector_timing(timing, request_id: str, outcome: str) -> None:
+    """B119 step 1: one structured line per request that did detector work,
+    with the request's FINAL detector timings -- on success including the
+    export and console-display hops, which run after the trace's
+    `sp.detector_*` attributes were set. Also written for cancelled, failed
+    and rejected requests (`outcome`), so a long queue wait that ended in a
+    client timeout is not lost. Content-free: counts, rounded ms, fixed hop
+    labels, an outcome enum."""
+    if timing is None or timing.empty:
+        return
+    try:
+        attrs = timing.attributes()
+        record = {"event": "detector_timing", "request_id": request_id,
+                  "outcome": outcome,
+                  **{k.removeprefix("sp."): v for k, v in attrs.items()}}
+        record["detector_by_hop"] = json.loads(record["detector_by_hop"])
+        logging.getLogger("serving.api").info(json.dumps(record, sort_keys=True))
+    except Exception:
+        logging.getLogger("serving.api").warning(
+            "detector_timing log line failed request=%s", request_id, exc_info=True)
+
+
 def _log_no_eligible(exc: BaseException, request_id: str) -> None:
     """The structured log line for a `no_eligible` request (P3b). No Langfuse
     trace is exported for a request that fails before a response exists
@@ -467,18 +503,23 @@ def _export_failure_trace(*, status: str, tenant: str, request_id: str,
                           started_ns: int | None,
                           backend_error_kinds: tuple[str, ...] = ()) -> None:
     """The minimal, content-free Langfuse trace for a `cancelled` or `error`
-    request (B78). Best effort: swallowed, never changes the response.
-    `backend_error_kinds` (B117) is the closed-enum kind of each failed attempt."""
+    request (B78), carrying the request's detector timings (B119), plus the
+    `detector_timing` log line with the same `outcome`. Best effort:
+    swallowed, never changes the response. `backend_error_kinds` (B117) is
+    the closed-enum kind of each failed attempt."""
+    timing = current_timing()
     try:
         export_failure_trace(
             request_id=request_id, application_id=tenant, status=status,
             latency_ms=(time.monotonic() - started) * 1000,
             attempts=tuple(attempts), app_langfuse=app_langfuse,
             session_id=session_id, started_ns=started_ns,
-            backend_error_kinds=backend_error_kinds)
+            backend_error_kinds=backend_error_kinds,
+            detector_timing=_detector_timing_attributes(timing, request_id))
     except Exception:
         logging.getLogger("serving.obs").warning(
             "failure trace failed request=%s", request_id, exc_info=True)
+    _log_detector_timing(timing, request_id, outcome=status)
 
 
 async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
@@ -796,6 +837,12 @@ async def _record_exception_outcome(request: Request, exc: BaseException, *,
                              started_ns=started_ns)
         return
     status = _outcome_failure_status(exc)
+    # B119: a rejected request's detector timings (BackendUnavailable logs its
+    # own via `_record_failed` -> `_export_failure_trace` above).
+    # An unmapped exception is a 500 to the client (e.g. the keepalive stream
+    # path), not a policy rejection -- label it `error` like the plain path.
+    label = status or ("rejected" if _error_status_detail(exc) is not None else "error")
+    _log_detector_timing(current_timing(), request_id, outcome=label)
     if status is None:
         return
     await _record_failure_outcome(
@@ -862,6 +909,22 @@ def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
     return jsonable_encoder(_wire_usage(usage))
 
 
+def _stream_finish_reason(get_meta: Callable[[], dict], meta: dict | None,
+                          body: ChatRequest, has_tool_calls: bool) -> str:
+    """The client-facing `finish_reason` of a live-streamed turn: the one
+    `client_finish_reason` rule fed the backend's own reason
+    (`get_meta.finish_reason`, B113) and -- for B116 -- the backend-reported
+    completion tokens against the client's own output cap, so a turn that used
+    the whole budget reads `length` even when the backend labelled it
+    `tool_calls`/`stop`. Shared by the live SSE frame and the recorded
+    response so the two can never disagree."""
+    usage = (meta or {}).get("usage")
+    used = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    return client_finish_reason(
+        getattr(get_meta, "finish_reason", None), has_tool_calls,
+        completion_tokens=used, max_tokens=client_output_cap(body.generation_params()))
+
+
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatRequest, request: Request) -> dict | StreamingResponse:
     s = request.app.state.settings
@@ -871,6 +934,13 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     request_id = f"req-{uuid.uuid4().hex}"
     started = time.monotonic()
     started_ns = time.time_ns()
+    # B119 step 1: this request's detector queue/run timings. Installed here,
+    # in the request's own task, BEFORE the pipeline task is created (a task
+    # copies the context) and before any streaming response is returned (its
+    # generator is not a context boundary: it runs in the task that iterates
+    # it, which inherits this context), so every detector hop of the request
+    # (stream feed/flush included) lands in the same accumulator.
+    start_request_timing()
     auth = await _authenticate(request)
     if auth is None:
         # Fail closed: no valid token -> reject. Never fall through to a
@@ -1090,6 +1160,7 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
         if mapped is None:
             logging.getLogger("serving.api").error(
                 "unhandled error for %s", request_id, exc_info=scrubbed_exception(e))
+            _log_detector_timing(current_timing(), request_id, outcome="error")
             metrics.observe_request("-", "error")
             raise ApiError(500, "internal error", code=CODE_INTERNAL_ERROR)
         if mapped[0] >= 500:
@@ -1285,6 +1356,10 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     # below pass it as `prepared=` to skip re-running the detector over a
     # string it has already scanned; the regex egress pass still runs.
     redacted_prompt = internals.get("redacted_prompt")
+    timing = current_timing()
+    # Snapshot taken here, guarded (B119): a timing failure must never skip
+    # the export below.
+    timing_attrs = _detector_timing_attributes(timing, request_id)
     try:
         # Eval-capture (current capture_io
         # contract in docs/reference/per-app-config.md): when capture_io is
@@ -1370,7 +1445,12 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # B104: the Switchyard advisor's content-free record, from the
             # pipeline's out-parameter (never on `resp`); None when it did
             # not run, and then nothing switchyard-shaped reaches the trace.
-            switchyard=internals.get("switchyard"))
+            switchyard=internals.get("switchyard"),
+            # B119 step 1: this request's detector timings SO FAR -- the
+            # export hop's own job is not in it (it is timed after this
+            # snapshot; it reaches the `detector_timing` log line below).
+            detector_timing=timing_attrs,
+            hop_label="export")
         # First-party console view (Phase C Part 1). Mode-appropriate bodies for
         # the admin drilldown ONLY — this is the request_snapshots cache, same
         # residency boundary as serving, NOT a telemetry egress.
@@ -1392,7 +1472,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                 detector, _redacted_display, raw_prompt=raw_prompt, prompt=prompt,
                 redacted_prompt=redacted_prompt,
                 display_completion=display_completion, detector=detector,
-                recognizers=profile.recognizers)
+                recognizers=profile.recognizers, hop_label="display")
         else:  # "off"
             resp["display"] = {"mode": "off", "input": None, "output": None}
         # Live deep-link for the UI's "Langfuse trace" button, and the raw hex
@@ -1406,6 +1486,7 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
     except Exception:  # export_trace already swallows; this is belt-and-suspenders
         logging.getLogger("serving.obs").exception(
             "export_trace raised before its own guard (swallowed)")
+    _log_detector_timing(timing, request_id, outcome="ok")
     # Onboarded on-prem models (e.g. local-8b) live only in the registry's
     # effective pool, not the static `s.routing.model_pool` -- both lookups
     # below must consult it too, or every on-prem model's tier/provider
@@ -1854,9 +1935,9 @@ def _stream_unverified_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             # B113: a truncated (or filtered) turn must not read as a clean
             # one -- text or tool call alike. `get_meta.finish_reason` is the
-            # backend's own reason, set once the stream drained.
-            finish = client_finish_reason(
-                getattr(get_meta, "finish_reason", None), streamed_tool_calls)
+            # backend's own reason, set once the stream drained. B116: a turn
+            # that used the client's whole output cap is `length` too.
+            finish = _stream_finish_reason(get_meta, meta, body, streamed_tool_calls)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -1948,14 +2029,15 @@ def _incremental_verify_response(
                 # detector executor (a chunk may wait, the loop does not);
                 # regex/off stays inline.
                 out = await run_detector_for(get_meta.detector,  # type: ignore[attr-defined]
-                                             verifier.feed, delta)
+                                             verifier.feed, delta,
+                                             hop_label="stream_feed")
                 if out:
                     released.append(out)
                     yield sse_frame(openai_chunk(request_id, model, delta=out,
                                                  created=created))
             # release the held-back window (B118: off the event loop too)
             tail = await run_detector_for(get_meta.detector,  # type: ignore[attr-defined]
-                                          verifier.flush)
+                                          verifier.flush, hop_label="stream_flush")
             if tail:
                 released.append(tail)
                 yield sse_frame(openai_chunk(request_id, model, delta=tail,
@@ -1963,9 +2045,9 @@ def _incremental_verify_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             # B113: the backend's `length`/`content_filter` reaches the client.
             # No tool calls on this path (a tool turn floors to
-            # verified_then_stream), so the fallback is "stop".
-            finish = client_finish_reason(
-                getattr(get_meta, "finish_reason", None), False)
+            # verified_then_stream), so the fallback is "stop". B116: the
+            # client's output cap reached is `length` too.
+            finish = _stream_finish_reason(get_meta, meta, body, False)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -2090,9 +2172,8 @@ async def _finalize_stream(
         if tool_calls:
             message["tool_calls"] = tool_calls
         resp["choices"] = [{"index": 0, "message": message,
-                            "finish_reason": client_finish_reason(
-                                getattr(get_meta, "finish_reason", None),
-                                bool(tool_calls))}]
+                            "finish_reason": _stream_finish_reason(
+                                get_meta, meta, body, bool(tool_calls))}]
         # Make the trace's VerificationRecord say WHY (Global Constraint 2).
         # run_stream stamps a performed=False/passed=True "waived" record; name
         # the reason + performed flag for this specific mode so the console and

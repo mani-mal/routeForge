@@ -1031,7 +1031,10 @@ file:
   `newly_rejected` leaf in `shadow_prices.uncertainty` (`n` = the rows in scope) and on an
   `onprem_share` of exactly 0 (`n` = that arm's routed rows). Under the scenario comparison
   table and the shadow "Ranges" table, where a count prints as `0 [0, 0]`, the report says:
-  "A count of 0 shows `[0, 0]` at any sample size; that is not zero risk."
+  "A count that is the same in every resample shows one value as its range (`[0, 0]` for a
+  count of 0) at any sample size; that is not certainty, and a count of 0 is not zero risk."
+  Any other share of exactly 0 (a route-changed share, an on-prem share) carries `zero_bound`
+  too, and its bucket table is followed by a sentence saying so.
 - **A share of exactly 1 is not certainty.** The mirror case: every row of a bucket newly
   rejected, or every routed row on-prem, prints `1 to 1` at any sample size. Such a leaf
   carries `one_bound = (1 − P)^(1/n)`, the smallest rate at which `n` independent rows would
@@ -1100,7 +1103,9 @@ leaves behind that scenario's comparison-table row, under the table's own column
 - **Single proposal.** The report is unchanged, followed by an **Uncertainty ranges** section:
   the caveat, one sentence on the method, the count of rows with no backend token count, the
   totals strata (with "ranges are not corrected for it"), the quality coverage, then a
-  `figure | point | range` table for the totals, the per-day figures and each app.
+  `figure | point | range` table for the totals, the per-day figures and each app. Apps with
+  insufficient data get no subsection: one line counts them and names the first ten (all are
+  in `simulation.json`).
 - **Scenario comparison.** In the comparison table each figure is followed by its range,
   `-0.02895 [-0.034024, -0.023268]`; under the table, the zero-count sentence and, when a
   cell is marked `*`, its footnote. An **Uncertainty ranges** section follows, and each

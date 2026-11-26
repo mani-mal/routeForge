@@ -64,6 +64,19 @@ export function formatUsd(v: number | null | undefined): string {
   return `$${v.toFixed(4)}`;
 }
 
+// Fleet-level totals: sign before the "$", thousands separators, 2 dp from $1 up
+// and 4 dp below (so a sub-dollar figure doesn't read as zero). Per-request
+// figures keep formatUsd / formatUsdPrecise.
+export function formatUsdFleet(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "–";
+  const dp = Math.abs(v) >= 1 ? 2 : 4;
+  const body = Math.abs(v).toLocaleString("en-US", {
+    minimumFractionDigits: dp,
+    maximumFractionDigits: dp,
+  });
+  return `${v < 0 ? "-" : ""}$${body}`;
+}
+
 // Per-request "answer" figures: a sub-$0.00005 cost rounds to "$0.0000" at 4 dp
 // and reads as *free*, which is a display artifact, not a claim. For those
 // prominent per-request lines, fall back to a sub-cent unit (e.g. "0.003¢").

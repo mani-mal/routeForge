@@ -132,12 +132,16 @@ spec:
             httpGet:
               path: /health
               port: http
-            periodSeconds: 10
+            periodSeconds: {{ .Values.probes.api.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.api.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.api.readiness.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /health
               port: http
-            periodSeconds: 30
+            periodSeconds: {{ .Values.probes.api.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.api.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.api.liveness.failureThreshold }}
           resources:
             {{- toYaml .Values.resources.api | nindent 12 }}
       volumes:
