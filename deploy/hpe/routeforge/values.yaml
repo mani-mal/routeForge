@@ -253,6 +253,15 @@ service:
     type: ClusterIP
     port: 80
 
+# Probe tuning (B114). The kubelet default timeoutSeconds of 1 s restarted the api
+# in a loop when /health queued behind detector work; /health itself takes ~2 ms.
+probes:
+  api:
+    liveness: {periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 5}
+    readiness: {periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 3}
+  ui:
+    readiness: {periodSeconds: 10, timeoutSeconds: 5}
+
 resources:
   api:
     requests: {cpu: "500m", memory: 2Gi}

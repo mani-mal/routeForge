@@ -251,7 +251,9 @@ covers `length` and `content_filter`: nothing is stored, the trace says `truncat
 repeat request reaches the backend. `test_normal_stop_answer_is_still_stored` is the
 regression guard. The truncated tests fail without the store skip.
 
-## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🟡 PARTIAL
+## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  ✅ RESOLVED (2026-11-26, fix/b114-probes-tldextract)
+
+**Resolved.** Both open parts are fixed. (1) Probes: `deploy/hpe/routeforge` now takes api liveness/readiness `periodSeconds`/`timeoutSeconds`/`failureThreshold` from `values.yaml` `probes.api.*` (defaults liveness 30/5/5, readiness 10/5/3) and the ui readiness `timeoutSeconds` from `probes.ui.readiness`; `deploy/helm/serving-plane` api probes are values-driven too (liveness timeout raised 3 to 5 s). (2) tldextract: Presidio's `EmailRecognizer.validate_result` calls the module-level `tldextract.extract`; `use_offline_tldextract()` in `app/policy/detectors.py` rebinds `tldextract.tldextract.TLD_EXTRACTOR` to `TLDExtract(suffix_list_urls=(), cache_dir=None)` (bundled snapshot, no fetch, no disk cache) before `AnalyzerEngine()` loads; it is a no-op without tldextract. Test: `tests/test_tldextract_offline.py`. **Still to do:** re-check the lab restart count after a day of traffic on the build that carries this fix.
 
 **Note 2026-11-13 21:4xZ:** the 0.42.0 api pod showed 2 restarts in about 9 h, against 48 in 13 h
 before the probe fix. Better but not zero, so re-check the cause. **Partial (2026-11-13, 0.41.0).** The DGX lab manifest now sets readiness `timeoutSeconds: 3` and liveness `timeoutSeconds: 5` with `failureThreshold: 3`, rolled out with 0.41.0. **Open:** the HPE chart probes (both still on the 1 s default) and the tldextract offline fix. Re-check the lab restart count after a day of traffic.
