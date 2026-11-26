@@ -698,14 +698,21 @@ def _nest(flat: dict[str, dict]) -> dict:
 _CONDITIONAL = frozenset({"latency_ms.p50", "latency_ms.p95", "quality_mean", "onprem_share"})
 
 
-def _routed_behind(name: str, routed: dict[str, int]) -> int | None:
-    """How many routed rows the figure `name` is computed over: that arm's
-    routed count, the smaller of the two for a delta -- or None for a figure
-    over every row of the bucket (a cost sum, a count, a count's share)."""
+def _routed_behind(name: str, routed: dict[str, int],
+                   carrying: dict[str, dict[str, int]] | None = None) -> int | None:
+    """How many rows the figure `name` is computed over: that arm's routed
+    count (for latency and quality, its routed rows that carry the figure),
+    the smaller of the two for a delta -- or None for a figure over every
+    row of the bucket (a cost sum, a count, a count's share). Replay gives
+    every routed row both a latency and a quality, so the two counts agree
+    there; they differ only for an `ArmResult` built without one (B65 item 5)."""
     head, _, last = name.rpartition(".")
     if head not in _CONDITIONAL:
         return None
-    return min(routed.values()) if last == "delta" else routed[last]
+    counts = routed
+    if carrying is not None:
+        counts = carrying.get(head.split(".")[0], routed)
+    return min(counts.values()) if last == "delta" else counts[last]
 
 
 def estimated_token_rows(rows: list[RowResult]) -> int:
@@ -732,9 +739,15 @@ def _bucket(rows: list[RowResult], samples: dict[str, list], plan: UncertaintyPl
     points = _flatten(_bucket_stats(rows), n, days)
     routed = {name: sum(1 for r in rows if getattr(r, name).outcome == "routed")
               for name in ARMS}
+    carrying = {
+        "latency_ms": {name: sum(1 for r in rows if getattr(r, name).outcome == "routed"
+                                 and getattr(r, name).latency_ms is not None) for name in ARMS},
+        "quality_mean": {name: sum(1 for r in rows if getattr(r, name).outcome == "routed"
+                                   and getattr(r, name).quality is not None) for name in ARMS},
+    }
     flat = {}
     for name, values in samples.items():
-        behind = _routed_behind(name, routed)
+        behind = _routed_behind(name, routed, carrying)
         if behind is not None and behind < plan.min_rows:
             flat[name] = _round6({"point": points[name], "lo": None, "hi": None,
                                   "insufficient_data": True, "n": behind})
