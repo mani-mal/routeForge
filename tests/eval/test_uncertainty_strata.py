@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import sys
 from pathlib import Path
 
 import pytest
@@ -86,9 +87,11 @@ def _old_leaves(block: dict) -> dict[str, dict]:
             for path, node in _leaves({k: block[k] for k in ("totals", "by_app", "per_day")})}
 
 
-def write_fixture() -> None:
-    """Run ONLY against the engine as it was at 4344546 (see module docstring)."""
-    FIXTURE.write_text(json.dumps(_old_leaves(_large_block()), sort_keys=True, indent=1) + "\n",
+def write_fixture(path: Path) -> None:
+    """Run ONLY against the engine as it was at 4344546 (see module docstring).
+    The destination is always passed in, so a test run can point it at a
+    temporary directory and never touch the committed pin."""
+    path.write_text(json.dumps(_old_leaves(_large_block()), sort_keys=True, indent=1) + "\n",
                        encoding="utf-8")
 
 
@@ -391,5 +394,26 @@ def test_f4_totals_only_computes_no_per_app_figures(monkeypatch):
     assert all(samples is None for _n, samples in only.by_app.values())
 
 
+def main(argv: list[str]) -> None:
+    """`python -m tests.eval.test_uncertainty_strata --deliberate-change` is the
+    only way to rewrite the committed pin from the current engine."""
+    if argv != ["--deliberate-change"]:
+        raise SystemExit("refusing: the pin is the engine's output at 4344546; rewriting it "
+                         "from this tree needs --deliberate-change (and a reason).")
+    write_fixture(FIXTURE)
+
+
+def test_f4_the_pin_writer_goes_where_it_is_told_and_refuses_without_the_flag(tmp_path):
+    target = tmp_path / "pin.json"
+    before = FIXTURE.read_bytes()
+    write_fixture(target)
+    assert target.read_bytes() == before            # same engine, same bytes
+    assert FIXTURE.read_bytes() == before
+    for argv in ([], ["--other"]):
+        with pytest.raises(SystemExit, match="refusing"):
+            main(argv)
+    assert FIXTURE.read_bytes() == before
+
+
 if __name__ == "__main__":
-    write_fixture()
+    main(sys.argv[1:])

@@ -2066,7 +2066,9 @@ manual and less coarse).
 See also B59 (per-app TPM / concurrency limits in the gateway — admission, out of scope for
 the simulator) and B63 (the shadow-prices-only output has no `rows` block).
 
-## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🔴 OPEN
+## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🟡 PARTIAL
+
+**Update 2026-11-26 (fix/b65-uncertainty-followups):** items 1, 2, 4, 6 fixed; 3, 5, 7 remain.
 
 **Severity:** low (edge-case presentation; no wrong number).
 **Found:** 2026-10-07, scoped re-review of the P3c-3 fix wave.

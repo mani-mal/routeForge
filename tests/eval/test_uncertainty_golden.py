@@ -316,15 +316,20 @@ def test_the_rejections_case_exercises_rejections():
 
 
 @pytest.mark.parametrize("case", sorted(CASES))
-def test_regenerating_in_a_tree_with_p3c3_code_is_refused(case):
+def test_regenerating_in_a_tree_with_p3c3_code_is_refused(case, tmp_path):
     """The files pin the output from BEFORE P3c-3. `regenerate` must not
     rewrite them from this tree unless the caller says the change is
     deliberate -- and it must refuse before it deletes anything."""
-    golden = CASES[case]
-    before = sorted(p.name for p in golden.root.rglob("*"))
+    real = CASES[case]
+    # A copy of the case rooted in a temporary directory: if the guard
+    # regressed, `regenerate` would rewrite THIS, never the committed files.
+    golden = Case(real.name, tmp_path / real.name, real.build)
+    shutil.copytree(real.root, golden.root)
+    before = sorted(p.relative_to(golden.root) for p in golden.root.rglob("*"))
     with pytest.raises(SystemExit, match="refusing"):
         regenerate(golden)
-    assert sorted(p.name for p in golden.root.rglob("*")) == before and len(before) >= 14
+    assert sorted(p.relative_to(golden.root) for p in golden.root.rglob("*")) == before
+    assert len(before) >= 14
 
 
 if __name__ == "__main__":

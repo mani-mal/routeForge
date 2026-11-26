@@ -883,7 +883,22 @@ ZERO_COUNT_NOTE = (
 )
 
 #: Under every table that prints a count as `point [lo, hi]` (spec §7.2).
-ZERO_RANGE_NOTE = "A count of 0 shows `[0, 0]` at any sample size; that is not zero risk."
+ZERO_RANGE_NOTE = (
+    "A count that is the same in every resample shows one value as its range (`[0, 0]` for a "
+    "count of 0) at any sample size; that is not certainty, and a count of 0 is not zero risk."
+)
+
+#: Under a bucket's table when a share other than `newly_rejected_share` (which has
+#: `ZERO_COUNT_NOTE`) is exactly 0.
+ZERO_SHARE_NOTE = (
+    "A share of exactly 0 shows `0 to 0` at any sample size; that is not zero risk: "
+    "`zero_bound` in the JSON is the one-sided upper limit these rows are consistent with if "
+    "they are independent draws, and it says nothing about a share a policy fixes by "
+    "construction."
+)
+
+#: How many insufficient-data applications a report names.
+SMALL_APPS_SHOWN = 10
 
 #: Under a bucket's table when a share in it is exactly 1 (spec §7.2).
 SATURATED_SHARE_NOTE = (
@@ -1049,9 +1064,27 @@ def bucket_lines(bucket: dict, level: float) -> list[str]:
     note = zero_count_note(bucket, level)
     if note:
         lines += ["", note]
+    if any("zero_bound" in _dig(bucket, path) for _label, path in _FIGURE_ROWS
+           if path != ("newly_rejected_share",)):
+        lines += ["", ZERO_SHARE_NOTE]
     if any("one_bound" in _dig(bucket, path) for _label, path in _FIGURE_ROWS):
         lines += ["", SATURATED_SHARE_NOTE]
     return lines
+
+
+def insufficient_apps_text(by_app: dict) -> str | None:
+    """`15 app(s), the first 10: a (n = 2), ...` for the applications of
+    `by_app` with insufficient data, or None when there are none. An export
+    can hold thousands of small applications: the count and at most ten
+    names; the rest are in the JSON."""
+    small = [f"{app_id} (n = {bucket['n']})" for app_id, bucket in sorted(by_app.items())
+             if bucket.get("insufficient_data")]
+    if not small:
+        return None
+    shown = small[:SMALL_APPS_SHOWN]
+    head = (f"{len(small)} app(s), the first {len(shown)}: "
+            if len(small) > len(shown) else f"{len(small)} app(s): ")
+    return head + ", ".join(shown) + "."
 
 
 def outside_line(count: int) -> str | None:
@@ -1094,7 +1127,12 @@ def render_uncertainty_section(block: dict) -> str:
     lines += ["### By app", ""]
     for app_id in sorted(block["by_app"]):
         bucket = block["by_app"][app_id]
+        if bucket.get("insufficient_data"):
+            continue
         lines += [f"#### {app_id} (n = {bucket['n']})", ""]
         lines += bucket_lines(bucket, level)
         lines.append("")
+    small = insufficient_apps_text(block["by_app"])
+    if small:
+        lines += ["Insufficient data: " + small, ""]
     return "\n".join(lines)
