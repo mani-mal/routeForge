@@ -1711,21 +1711,28 @@ class Pipeline:
             """Yields text deltas (`str`) and, on a live tool turn, tool-call
             fragments (`list[dict]`) in arrival order."""
             result: GenerationResult | None = None
-            async for chunk in stream:
-                if chunk.delta is not None:
-                    yield chunk.delta
-                if chunk.tool_calls_delta is not None:
-                    if tool_mode:
-                        yield chunk.tool_calls_delta
-                    else:
-                        # The client offered no tools and replayed none: tool
-                        # calls here are unsolicited, never forwarded.
-                        logging.getLogger("serving.pipeline").warning("dropping unsolicited tool_calls on a "
-                                    "non-tool stream request=%s", request_id)
-                if chunk.final is not None:
-                    result = chunk.final
-                    if internals is not None and "outcome_ctx" in internals:
-                        internals["outcome_ctx"].update(reply_shape(result))
+            try:
+                async for chunk in stream:
+                    if chunk.delta is not None:
+                        yield chunk.delta
+                    if chunk.tool_calls_delta is not None:
+                        if tool_mode:
+                            yield chunk.tool_calls_delta
+                        else:
+                            # The client offered no tools and replayed none: tool
+                            # calls here are unsolicited, never forwarded.
+                            logging.getLogger("serving.pipeline").warning("dropping unsolicited tool_calls on a "
+                                        "non-tool stream request=%s", request_id)
+                    if chunk.final is not None:
+                        result = chunk.final
+                        if internals is not None and "outcome_ctx" in internals:
+                            internals["outcome_ctx"].update(reply_shape(result))
+            except Exception:
+                # B117: the gateway stamped the failure's content-free class on
+                # the router record; re-dump so the `backend_failed` row sees it.
+                if internals is not None:
+                    internals["routing_trace"] = decision_trace(records)
+                raise
             # The backend stream ended normally: anything raised from here on
             # is a pipeline outcome, not a backend failure (spec §4).
             get_meta.backend_completed = True   # type: ignore[attr-defined]

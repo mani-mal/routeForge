@@ -289,6 +289,28 @@ def _attempts(trace: list[dict]) -> list[str]:
     return [name for _, name in ordered]
 
 
+_ERROR_KEYS = ("type", "http_status", "kind")
+
+
+def backend_errors(trace: list[dict]) -> list[dict] | None:
+    """B117: one `{model, type, http_status, kind}` entry per FAILED attempt, in
+    hop order (the order of `attempts`), read from the `backend_error` the
+    gateway put on each failed hop (a failed gateway hop, or a streamed
+    request's router hop). Only the four whitelisted keys are copied, so
+    nothing else a hand-built trace carries can ride along. None when no
+    attempt failed."""
+    found: list[tuple[int, dict]] = []
+    for e in trace:
+        be = e.get("backend_error")
+        if not isinstance(be, dict):
+            continue
+        model = e.get("attempted") or e.get("chosen")
+        found.append((e.get("hop_index", 0),
+                      {"model": model, **{k: be.get(k) for k in _ERROR_KEYS}}))
+    found.sort(key=lambda pair: pair[0])
+    return [entry for _, entry in found] or None
+
+
 def _verify_mode(entry: dict | None) -> str | None:
     """Map a `step == "verify"` trace entry to one of `VERIFY_MODES`, or
     `None` when no verify entry exists at all (unreachable on a real `ok`
@@ -522,6 +544,7 @@ def trace_features(trace: list[dict], complexity_tier: str | None = None,
         "verify_performed": verify_entry.get("performed") if verify_entry else None,
         "verify_passed": verify_entry.get("passed") if verify_entry else None,
         "verify_mode": _verify_mode(verify_entry),
+        "backend_errors": backend_errors(trace),
     }
 
 
@@ -615,12 +638,14 @@ def build_failure_outcome(*, status: str, request_id: str, application_id: str,
         "verify_passed": None,
         "verify_mode": None,
         "conflicting_core": conflicting_core,
+        "backend_errors": None,
     }
     if trace is None and routing_trace:
         f = trace_features(routing_trace, outcome_ctx.get("complexity_tier"),
                            applied_advisor_tier(outcome_ctx))
         row.update({k: f[k] for k in ("tier_target", "eligible", "rejected",
-                                      "scoring", "circuit_bypass")})
+                                      "scoring", "circuit_bypass",
+                                      "backend_errors")})
         if not row["attempts"]:
             row["attempts"] = f["attempts"]
     if no_failover and trace is None:

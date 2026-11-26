@@ -37,7 +37,8 @@ from app.apps.langfuse_provision import load_app_langfuse
 from app.apps.tokens import hash_token
 from app.apps.secret_box import scrub_secrets, scrubbed_exception
 from app.apps.outcomes import (
-    build_failure_outcome, build_ok_outcome, feedback_values, parse_workload,
+    backend_errors as outcome_backend_errors, build_failure_outcome, build_ok_outcome,
+    feedback_values, parse_workload,
 )
 from app.apps.policy import AppPolicyView, day_spend_usd, policy_view_from
 from app.apps.privacy import AppPrivacyProfile
@@ -499,11 +500,13 @@ async def _await_unless_disconnected(task: "asyncio.Task", is_disconnected,
 def _export_failure_trace(*, status: str, tenant: str, request_id: str,
                           started: float, attempts: tuple[str, ...],
                           app_langfuse: object | None, session_id: str | None,
-                          started_ns: int | None) -> None:
+                          started_ns: int | None,
+                          backend_error_kinds: tuple[str, ...] = ()) -> None:
     """The minimal, content-free Langfuse trace for a `cancelled` or `error`
     request (B78), carrying the request's detector timings (B119), plus the
     `detector_timing` log line with the same `outcome`. Best effort:
-    swallowed, never changes the response."""
+    swallowed, never changes the response. `backend_error_kinds` (B117) is
+    the closed-enum kind of each failed attempt."""
     timing = current_timing()
     try:
         export_failure_trace(
@@ -511,6 +514,7 @@ def _export_failure_trace(*, status: str, tenant: str, request_id: str,
             latency_ms=(time.monotonic() - started) * 1000,
             attempts=tuple(attempts), app_langfuse=app_langfuse,
             session_id=session_id, started_ns=started_ns,
+            backend_error_kinds=backend_error_kinds,
             detector_timing=_detector_timing_attributes(timing, request_id))
     except Exception:
         logging.getLogger("serving.obs").warning(
@@ -630,10 +634,15 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
         workload=workload, workload_source=workload_source,
         outcome_session=outcome_session,
         requested_alias=requested_alias)
+    try:
+        kinds = tuple(e["kind"] for e in outcome_backend_errors(
+            routing_trace or (internals or {}).get("routing_trace") or []) or ())
+    except Exception:
+        kinds = ()
     _export_failure_trace(
         status="error", tenant=tenant, request_id=request_id, started=started,
         attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
-        started_ns=started_ns)
+        started_ns=started_ns, backend_error_kinds=kinds)
 
 
 def _failed_model(exc: BaseException) -> str:

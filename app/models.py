@@ -390,12 +390,20 @@ class DecisionRecord(BaseModel):
     # with `routing.switchyard.mode: off` a record serializes exactly as it
     # did before this field existed.
     advisor: dict | None = None
+    # B117: on a hop whose backend call FAILED -- `{"type", "http_status",
+    # "kind"}` from `classify_backend_error`: the exception class name, the
+    # HTTP status it carried and a closed kind enum. Never a message, URL or
+    # host. None (and dropped from the dump) on every other record.
+    backend_error: dict | None = None
 
     @model_serializer(mode="wrap")
     def _drop_absent_advisor(self, handler):
         data = handler(self)
-        if isinstance(data, dict) and data.get("advisor", ...) is None:
-            data.pop("advisor", None)
+        if isinstance(data, dict):
+            if data.get("advisor", ...) is None:
+                data.pop("advisor", None)
+            if data.get("backend_error", ...) is None:
+                data.pop("backend_error", None)
         return data
 
 

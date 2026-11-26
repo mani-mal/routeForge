@@ -276,6 +276,7 @@ def export_failure_trace(*, request_id: str, application_id: str, status: str,
                          latency_ms: float, attempts: tuple[str, ...] = (),
                          app_langfuse=None, session_id: str | None = None,
                          started_ns: int | None = None,
+                         backend_error_kinds: tuple[str, ...] = (),
                          detector_timing: dict | None = None) -> None:
     """Export one minimal root span for a request that ended `cancelled` or
     `error` (B78) -- neither reaches `export_trace`, so without this Langfuse
@@ -303,6 +304,10 @@ def export_failure_trace(*, request_id: str, application_id: str, status: str,
             root.set_attribute("sp.latency_ms", float(latency_ms))
             root.set_attribute("sp.attempts", json.dumps(redact_tree(list(attempts))))
             root.set_attribute("sp.capture_io", "off")
+            if backend_error_kinds:
+                # B117: one kind per failed attempt, from a closed enum.
+                root.set_attribute("sp.backend_error_kinds",
+                                   json.dumps([str(k) for k in backend_error_kinds]))
             _set_detector_timing(root, detector_timing)
             if session_id:
                 root.set_attribute("langfuse.session.id", session_id)
@@ -620,6 +625,12 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                             # circuit. Tier names + a cause enum only.
                             sp.set_attribute("sp.tier_downgrade",
                                              json.dumps(redact_tree(rec["tier_downgrade"])))
+                        if isinstance(rec.get("backend_error"), dict):
+                            # B117: the hop's backend call failed. Class name,
+                            # status and a closed kind enum -- never a message.
+                            sp.set_attribute("sp.backend_error", json.dumps(
+                                {k: rec["backend_error"].get(k)
+                                 for k in ("type", "http_status", "kind")}))
                         for k in ("hop_index", "actual_cost_usd", "est_cost_usd", "latency_ms"):
                             if rec.get(k) is not None:
                                 sp.set_attribute(f"sp.{k}", float(rec[k]))
