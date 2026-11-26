@@ -132,7 +132,9 @@ def reply_shape(result) -> dict:
 
 
 def outcome_context(ctx, *, max_tokens: int | None = None,
-                    trajectory_key: str | None = None) -> dict:
+                    trajectory_key: str | None = None,
+                    placement_raised_by: tuple[str, ...] = (),
+                    placement_raised_to: str | None = None) -> dict:
     """The content-free policy features of an `ExecutionPolicyContext`,
     shared verbatim by `build_ok_outcome` and `build_failure_outcome` since
     both are known the moment the gate has run, win or lose downstream.
@@ -153,6 +155,10 @@ def outcome_context(ctx, *, max_tokens: int | None = None,
         # B72: a hash and TYPES -- content-free.
         "trajectory_key": trajectory_key,
         "inherited_entity_types": sorted(set(getattr(ctx, "inherited_entities", ()) or ())),
+        # B71 item 7: TYPES that fired a rule which tightened placement, and
+        # the residency it tightened to. Both None when placement did not move.
+        "placement_raised_by": sorted(placement_raised_by) if placement_raised_by else None,
+        "placement_raised_to": placement_raised_to if placement_raised_by else None,
     }
 
 
@@ -442,6 +448,9 @@ def _policy_features(outcome_ctx: dict) -> dict:
         "routing_tokens": outcome_ctx.get("routing_tokens"),
         "trajectory_key": outcome_ctx.get("trajectory_key"),
         "inherited_entity_types": list(outcome_ctx.get("inherited_entity_types") or []),
+        # B71 item 7: None when placement was not tightened by detection.
+        "placement_raised_by": outcome_ctx.get("placement_raised_by") or None,
+        "placement_raised_to": outcome_ctx.get("placement_raised_to"),
         # B71 item 6: absent (None) on a row whose request never got a reply.
         "finish_reason": outcome_ctx.get("finish_reason"),
         "reply_has_text": outcome_ctx.get("reply_has_text"),

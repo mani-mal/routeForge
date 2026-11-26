@@ -69,6 +69,7 @@ def test_outcome_ctx_populated_on_success():
         "detected_entity_types", "app_policy_version", "complexity",
         "complexity_tier", "requested_model", "max_tokens", "routing_tokens",
         "trajectory_key", "inherited_entity_types",
+        "placement_raised_by", "placement_raised_to",
         "finish_reason", "reply_has_text", "reply_tool_calls", "reasoning_tokens",
         "tool_arg_redactions", "tool_arg_skipped", "tool_arg_skipped_types"}
     # B69: no tool call in this request, so nothing rewritten or skipped.

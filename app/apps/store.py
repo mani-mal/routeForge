@@ -701,6 +701,27 @@ async def usage_summary(session: AsyncSession, *, application_id: str | None = N
     }
 
 
+async def placement_raised_by_type(session: AsyncSession, *,
+                                   since: dt.datetime | None = None) -> dict[str, dict[str, int]]:
+    """B71 item 7: per application, how many requests had placement tightened
+    by a detection-fired sensitivity rule, keyed by the entity TYPE that fired
+    it. Read off `routing_outcomes.placement_raised_by` (types only, never
+    values). A request matching two types counts once under each, so the
+    per-type counts can sum to more than the request count. Every outcome
+    status counts: the placement cost is paid whether or not the call served."""
+    O = RoutingOutcome
+    stmt = select(O.application_id, O.placement_raised_by).where(
+        O.placement_raised_by.is_not(None))
+    if since is not None:
+        stmt = stmt.where(O.ts >= since)
+    out: dict[str, dict[str, int]] = {}
+    for app_id, types in (await session.execute(stmt)).all():
+        for t in set(types or ()):
+            by_type = out.setdefault(app_id, {})
+            by_type[t] = by_type.get(t, 0) + 1
+    return out
+
+
 async def usage_by_application(session: AsyncSession, *,
                                since: dt.datetime | None = None) -> list[dict]:
     """App-wise rollup over UsageRecord (durable store; portable Python
@@ -717,7 +738,7 @@ async def usage_by_application(session: AsyncSession, *,
             "application_id": r.application_id, "count": 0, "rejected_count": 0,
             "error_count": 0, "total_usd": 0.0, "baseline_usd": 0.0, "total_tokens": 0, "onprem_count": 0,
             "tier_distribution": {}, "model_distribution": {}, "sensitivity_distribution": {},
-            "quality_source_distribution": {},
+            "quality_source_distribution": {}, "placement_raised_by_type": {},
         })
         if r.status == "rejected":
             a["rejected_count"] += 1
@@ -739,6 +760,10 @@ async def usage_by_application(session: AsyncSession, *,
                          ("quality_source_distribution", r.quality_source)):
             if val:
                 a[key][val] = a[key].get(val, 0) + 1
+
+    for app_id, by_type in (await placement_raised_by_type(session, since=since)).items():
+        if app_id in agg:
+            agg[app_id]["placement_raised_by_type"] = by_type
 
     # Same formula as usage_summary/app/api/history.py:145-146, computed once
     # the per-app sums are final. `quality` here is a tier-quality proxy (or

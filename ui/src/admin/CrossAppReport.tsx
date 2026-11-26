@@ -81,6 +81,14 @@ export function CrossAppReport() {
   }, []);
 
   const rows = joinRows(apps, usage);
+  // B71 item 7: fleet-wide sum of detection-raised placements per entity type.
+  const raised = new Map<string, number>();
+  for (const u of usage) {
+    for (const [t, n] of Object.entries(u.placement_raised_by_type ?? {})) {
+      raised.set(t, (raised.get(t) ?? 0) + n);
+    }
+  }
+  const raisedRows = [...raised.entries()].sort((a, b) => b[1] - a[1]);
 
   return (
     <Panel title="Cross-app usage">
@@ -154,6 +162,33 @@ export function CrossAppReport() {
             </div>
           ))}
           <p className="px-3 text-[11px] text-gray-500">* {QUALITY_CAVEAT}</p>
+          {raisedRows.length > 0 && (
+            <div className="mt-3 px-3" data-testid="placement-raised">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                Placement raised by detection
+              </h3>
+              <p className="text-[11px] text-gray-500 mb-2">
+                Requests a detected entity type moved to a stricter residency. Pattern detectors can
+                fire on look-alike numbers; this is the cost of that fail-safe.
+              </p>
+              <table className="text-sm font-mono text-gray-300">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-[0.12em] text-gray-500 text-left">
+                    <th className="pr-6 font-semibold">Entity type</th>
+                    <th className="font-semibold">Requests</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {raisedRows.map(([t, n]) => (
+                    <tr key={t}>
+                      <td className="pr-6">{t}</td>
+                      <td>{n.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </Panel>

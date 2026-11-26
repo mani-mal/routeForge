@@ -347,3 +347,43 @@ def test_outcome_feedback_has_the_app_request_composite_index():
 
     idx = {i["name"]: i["column_names"] for i in _run(_indexes())}
     assert idx.get("ix_outcome_feedback_app_request") == ["application_id", "request_id"]
+
+
+def test_placement_raised_by_type_counts_per_app_and_window():
+    """B71 item 7: per-app, per-entity-type counts of detection-raised
+    placements; rows without a raise and rows outside the window don't count."""
+    import datetime as dt
+
+    async def go():
+        db = await _db()
+        old = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=48)
+        async with db.session() as s:
+            await store.create_application(s, app_id="app-1", name="One")
+            await store.create_application(s, app_id="app-2", name="Two")
+            for rid, app, by in (("r1", "app-1", ["CREDIT_CARD", "US_BANK_NUMBER"]),
+                                 ("r2", "app-1", ["CREDIT_CARD"]),
+                                 ("r3", "app-1", None),
+                                 ("r4", "app-2", ["US_SSN"])):
+                await store.write_outcome(s, _outcome_row(
+                    request_id=rid, application_id=app, placement_raised_by=by,
+                    placement_raised_to="onprem_only" if by else None))
+            await store.write_outcome(s, _outcome_row(
+                request_id="r5", application_id="app-1", ts=old,
+                placement_raised_by=["CREDIT_CARD"]))
+            await s.commit()
+        async with db.session() as s:
+            since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
+            assert await store.placement_raised_by_type(s, since=since) == {
+                "app-1": {"CREDIT_CARD": 2, "US_BANK_NUMBER": 1}, "app-2": {"US_SSN": 1}}
+            assert (await store.placement_raised_by_type(s))["app-1"]["CREDIT_CARD"] == 3
+            await store.record_usage(
+                s, application_id="app-1", request_id="r1", model="m", provider="onprem",
+                tier="cheap", prompt_tokens=1, completion_tokens=1, total_tokens=2,
+                cost_usd=0.0, baseline_usd=0.0, latency_ms=1.0, sensitivity="public",
+                onprem_only=True, status="ok")
+            await s.commit()
+            rows = {r["application_id"]: r for r in await store.usage_by_application(s, since=since)}
+            assert rows["app-1"]["placement_raised_by_type"] == {
+                "CREDIT_CARD": 2, "US_BANK_NUMBER": 1}
+
+    _run(go())

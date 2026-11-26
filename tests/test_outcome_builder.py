@@ -182,6 +182,8 @@ def test_outcome_context_sorts_and_dedupes_entity_types():
         "max_tokens": None,
         "trajectory_key": None,
         "inherited_entity_types": [],
+        "placement_raised_by": None,
+        "placement_raised_to": None,
     }
 
 
@@ -731,3 +733,13 @@ def test_attempts_falls_back_to_first_scored_for_old_records():
             outcome_ctx=outcome_context(_ctx()), routing_policy_version="rpv-1",
             workload=None, workload_source="none")
         assert row["attempts"] == ["a", "b"]
+
+
+def test_outcome_context_records_placement_raise_types_only():
+    ctx = _ctx()
+    raised = outcome_context(ctx, placement_raised_by=("US_BANK_NUMBER", "CREDIT_CARD"),
+                             placement_raised_to="onprem_only")
+    assert raised["placement_raised_by"] == ["CREDIT_CARD", "US_BANK_NUMBER"]
+    assert raised["placement_raised_to"] == "onprem_only"
+    none = outcome_context(ctx, placement_raised_to="onprem_only")
+    assert none["placement_raised_by"] is None and none["placement_raised_to"] is None
