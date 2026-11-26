@@ -1,8 +1,9 @@
 > **Simulation only.** Nothing in this report has been applied. It predicts the first routing
 > decision of recorded requests under the proposal, plus deterministic context-window overflow
 > re-selection predicted from each endpoint's declared context window, using the real
-> eligibility and routing code and a frozen snapshot of signals. It does not model other
-> failover, escalation, breaker state or caching.
+> eligibility and routing code and a frozen snapshot of signals. Each row's recorded open
+> circuits and recorded failed attempts are replayed as recorded, in both arms. It does not
+> model other failover, escalation, breaker state or caching.
 
 # Scenario comparison: Golden rejections
 
@@ -21,6 +22,8 @@ Per app: capped 100.0% · pinned 0.0% ⚠ · safe 35.0% ⚠ · steady 35.0% ⚠
 Per app (outcome): capped 100.0% · pinned 100.0% · safe 100.0% · steady 100.0%
 
 **Note:** 13 row(s) had no backend token count (rejected, failed before a response, or served by a backend that reported no usage). Replay sizes and prices them from RouteForge's own routing token count and output-token estimate -- an estimate, not a bill.
+
+Cost of the simulated rows: recorded $0.000000, replayed (current arm) $0.079981. Per app (recorded / replayed): capped $0.000000 / $0.002640 · pinned $0.000000 / $0.034650 · safe $0.000000 / $0.031864 · steady $0.000000 / $0.010827.
 
 ## Comparison
 

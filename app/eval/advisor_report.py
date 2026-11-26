@@ -35,8 +35,8 @@ from app.config.schema import Settings
 from app.eval.outcomes import UNTAGGED_WORKLOAD, _fmt, _round6
 from app.eval.scenario import build_scenario, close_scenario
 from app.eval.simulate import (
-    ArmResult, RowResult, _baseline, _excluded_lines, _rate, observed_latencies, rows_block,
-    select_rows, simulate_row, _before_since,
+    ArmResult, RowResult, _baseline, _excluded_lines, _rate, observed_latencies,
+    replay_state_lines, rows_block, select_rows, simulate_row, _before_since,
 )
 from app.eval.uncertainty import (
     UncertaintyPlan, draw_indices, draw_pool, leaf, level_text, plan_block,
@@ -336,6 +336,8 @@ def render_advisor_report(doc: dict) -> str:
                  f"{_rate(base['outcome_agreement'])} over "
                  f"{base['outcome_rows_compared']} simulated rows.")
     lines.append("")
+    for line in replay_state_lines(base):
+        lines += [line, ""]
     if base["warning"] or base["outcome_warning"]:
         lines += ["> **Warning:** the baseline replay disagrees with the record on more than "
                   "10% of rows. Treat the counterfactual cost as noisier than usual.", ""]

@@ -1,8 +1,9 @@
 > **Simulation only.** Nothing in this report has been applied. It predicts the first routing
 > decision of recorded requests under the proposal, plus deterministic context-window overflow
 > re-selection predicted from each endpoint's declared context window, using the real
-> eligibility and routing code and a frozen snapshot of signals. It does not model other
-> failover, escalation, breaker state or caching.
+> eligibility and routing code and a frozen snapshot of signals. Each row's recorded open
+> circuits and recorded failed attempts are replayed as recorded, in both arms. It does not
+> model other failover, escalation, breaker state or caching.
 
 ## Shadow prices
 

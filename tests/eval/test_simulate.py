@@ -253,8 +253,12 @@ def test_signal_latency_rung_used_when_no_observed_rows():
                         "availability": 1.0, "availability_n": min_samples}})
     # status != "ok" so this row's own latency is never folded into
     # `observed_latencies` -- otherwise the "observed" rung would shadow
-    # the "signal" rung this test targets.
-    row = make_row("sig1", "app-a", complexity=0.05, status="backend_failed")
+    # the "signal" rung this test targets. `backend_errors: []` (B71 item
+    # 3): the row records no failed attempt (a null would read as a pre-B117
+    # row whose every attempt failed), so replay does not fail its recorded
+    # attempt on `local-cheap` over to another endpoint.
+    row = make_row("sig1", "app-a", complexity=0.05, status="backend_failed",
+                   backend_errors=[])
     results, _ = _run([row], snap, {"schema": P})
     (r,) = results
     assert r.current.model == "local-cheap"

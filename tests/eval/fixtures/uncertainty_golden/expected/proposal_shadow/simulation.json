@@ -10,10 +10,31 @@
   },
   "baseline": {
     "agreement": 0.135135,
+    "breaker_diverted": 0,
+    "breaker_diverted_by_app": {},
+    "breaker_diverted_reproduced": 0,
     "by_app": {
       "big": 0.0,
       "few": 0.0,
       "safe": 0.333333
+    },
+    "cost_by_app": {
+      "big": {
+        "recorded": 0.0,
+        "replayed": 0.018128
+      },
+      "few": {
+        "recorded": 0.0,
+        "replayed": 0.001691
+      },
+      "safe": {
+        "recorded": 0.0,
+        "replayed": 0.036945
+      }
+    },
+    "cost_usd": {
+      "recorded": 0.0,
+      "replayed": 0.056764
     },
     "outcome_agreement": 1.0,
     "outcome_by_app": {
@@ -42,6 +63,7 @@
     "outcome_rows_compared": 111,
     "outcome_warning": false,
     "overflow_contradicted": 0,
+    "recorded_failure_rows": 0,
     "recorded_rejected": 0,
     "recorded_rejected_but_routed": 0,
     "recorded_routed_but_rejected": 0,

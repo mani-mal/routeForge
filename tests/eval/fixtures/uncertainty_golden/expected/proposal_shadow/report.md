@@ -1,10 +1,13 @@
 > **Simulation only.** Nothing in this report has been applied. It predicts the first routing
 > decision of recorded requests under the proposal, plus deterministic context-window overflow
 > re-selection predicted from each endpoint's declared context window, using the real
-> eligibility and routing code and a frozen snapshot of signals. It does not model other
-> failover, escalation, breaker state or caching.
+> eligibility and routing code and a frozen snapshot of signals. Each row's recorded open
+> circuits and recorded failed attempts are replayed as recorded, in both arms. It does not
+> model other failover, escalation, breaker state or caching.
 
 Baseline agreement: model 13.5% over 111 compared rows; outcome 100.0% over 111 simulated rows.
+
+Cost of the simulated rows: recorded $0.000000, replayed (current arm) $0.056764. Per app (recorded / replayed): big $0.000000 / $0.018128 · few $0.000000 / $0.001691 · safe $0.000000 / $0.036945.
 
 > **Warning:** baseline agreement is only 13.5% across 111 compared rows (below the 90% threshold). Treat the headline diff as noisier than usual -- see spec §7 for causes.
 

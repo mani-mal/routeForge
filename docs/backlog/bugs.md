@@ -1885,6 +1885,17 @@ it and records `tier_downgrade` (cause `circuit_open`) instead of bypassing; oth
 bypasses within the tier as before. Failover after a bypass obeys the same floor (item 2;
 see B70).
 
+*Fixed 2026-11-26 (fix/b70-replay-breaker): item 3. Items 4, 5 and 7 stay open.* Replay
+honours each row's recorded failed attempts (`backend_errors`, B117) in both arms: a pick the
+row records as failed fails in replay too, is excluded, and the router re-selects as the live
+gateway's failover does (same `max_failover_attempts` bound); the endpoint served after it is
+the one costed, and an arm whose every pick fails rejects with `backend_failed`. Only the
+row's own recorded failures are honoured -- any other endpoint, including one a proposal adds,
+is assumed to answer. Conservative readings: a `context_overflow` entry is not replayed (size
+refusals stay the declared-window prediction), and a pre-B117 row (`backend_errors` null)
+honours failures only when it is `backend_failed`. `baseline.cost_usd` / `cost_by_app` put the recorded cost beside the
+replayed one, and every report prints both. See `docs/reference/policy-simulator.md` §5.1.
+
 **Severity:** medium (no request failed; these are wasted calls, a wrong prior and blind
 spots in what is recorded).
 **Found:** 2026-10-09, DGX lab (research notes
@@ -1897,7 +1908,9 @@ spots in what is recorded).
    eligible, skip the open endpoint and record the downgrade, instead of bypassing.
 2. **Failover goes down a tier** (B70 item 3, again): 13 frontier-target requests were
    served by the cheap endpoint. Recorded only by comparing `tier_target` with `chosen`.
-3. **Replay assumes every endpoint answers.** Its current arm sent 180 rows to a provider
+3. *(Fixed 2026-11-26, fix/b70-replay-breaker: recorded failed attempts are replayed and
+   the recorded cost is printed beside the replayed one -- see the note above.)*
+   **Replay assumes every endpoint answers.** Its current arm sent 180 rows to a provider
    that answered 31, and its baseline cost was 26% below the recorded cost. *Wanted:* replay
    the recorded attempt chain's failures (extends B70 item 5), and print the recorded cost
    beside the replayed one.
@@ -1941,6 +1954,16 @@ Item 2: `backend_failed`/`context_overflow` rows (streamed ones too) record the 
 set, `tier_target`, `rejected`, `scoring` and the attempt chain. Item 3: decided -- not
 allowed below the hard floor; allowed (and recorded) for a complexity-raised tier.
 
+*Fixed 2026-11-26 (fix/b70-replay-breaker): item 5. Item 4 stays open.* Replay reads the
+breaker state a row records -- the `rejected` entries of its first decision with code
+`circuit_open` -- and hands those circuits to the real router in both arms, so the router's
+own drop / step-down / bypass logic reproduces the diversion, and these rows no longer show
+as false disagreement. They stay in model agreement (so a real mis-ranking among a tier's
+closed peers still reaches `--min-agreement`) and are counted separately for visibility:
+`baseline.breaker_diverted`, `breaker_diverted_by_app` and `breaker_diverted_reproduced`,
+printed in `report.md` overall and per app. A bypassed circuit, or an open one in another tier, is not recorded and so not
+modelled. See `docs/reference/policy-simulator.md` §5.1.
+
 **Severity:** medium (two requests failed that a different ordering could have served; the
 rest are record and replay gaps that change numbers the paper reports).
 **Found:** 2026-10-08, DGX lab, 900 requests with a 181.5-second outage of one endpoint
@@ -1964,7 +1987,10 @@ rest are record and replay gaps that change numbers the paper reports).
    `circuit_open` from 19.7 s to 219.4 s after the outage began; the outage ended at
    181.5 s). Five half-open probes were seen during the outage. *To decide:* whether the
    probe interval should shorten after the first probe, or stay as it is.
-5. **Replay does not model breaker state.** All 65 model disagreements in the run (agreement
+5. *(Fixed 2026-11-26, fix/b70-replay-breaker: breaker-diverted rows are replayed with their
+   recorded open circuits, so they no longer read as disagreement, and are counted
+   separately -- see the note above.)*
+   **Replay does not model breaker state.** All 65 model disagreements in the run (agreement
    0.926 over 880 served rows) are rows the live router sent to the next endpoint because the
    breaker was open, and replay sent to the down one. Outcome agreement was 1.0. *Wanted:*
    replay reads `circuit_open` from the recorded row (it is already there) and reports
