@@ -2213,6 +2213,8 @@ the simulator) and B63 (the shadow-prices-only output has no `rows` block).
 
 **Update 2026-11-26 (fix/b65-uncertainty-followups):** items 1, 2, 4, 6 fixed; 3, 5, 7 remain.
 
+**Update 2026-11-26 (fix/b65-sim-perf):** items 5, 7 fixed; item 3 remains.
+
 **Severity:** low (edge-case presentation; no wrong number).
 **Found:** 2026-10-07, scoped re-review of the P3c-3 fix wave.
 
