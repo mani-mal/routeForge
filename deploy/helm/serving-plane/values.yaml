@@ -175,6 +175,13 @@ extraEnv: []
 #       name: routeforge-session-id-key
 #       key: SP_SESSION_ID_KEY
 
+# Probe tuning (B114): /health takes ~2 ms but was seen queued for 4.3 s behind
+# detector work, so the 1 s kubelet default restarts the pod in a loop.
+probes:
+  api:
+    liveness: {periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 5}
+    readiness: {periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+
 resources:
   api:
     requests: {cpu: 250m, memory: 512Mi}
