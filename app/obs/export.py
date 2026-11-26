@@ -96,6 +96,32 @@ def _set_switchyard(root, advice: dict) -> None:
         log.error("switchyard trace attributes dropped (%s)", type(exc).__name__)
 
 
+def _set_request_shape(root, shape: dict | None) -> None:
+    """Stamp the request's content-free shape (B123, `ChatRequest.shape()`)
+    on the root span as `sp.request.*`. Emitted regardless of `capture_io`,
+    like `sp.candidates`: a bool, counts, and JSON maps keyed by closed sets
+    (roles, content-part types) -- never a client string. `dropped_parts`
+    only when something was dropped. Isolated: a bad record logs (exception
+    type only) and never costs the rest of the trace."""
+    if not shape:
+        return
+    try:
+        root.set_attribute("sp.request.tool_mode", bool(shape.get("tool_mode")))
+        root.set_attribute("sp.request.has_tools", bool(shape.get("has_tools")))
+        root.set_attribute("sp.request.n_tools", int(shape.get("n_tools") or 0))
+        root.set_attribute("sp.request.message_roles",
+                           json.dumps(shape.get("message_roles") or {}, sort_keys=True))
+        root.set_attribute("sp.request.content_parts",
+                           json.dumps(shape.get("content_parts") or {}, sort_keys=True))
+        if shape.get("dropped_parts"):
+            root.set_attribute("sp.request.dropped_parts",
+                               json.dumps(shape["dropped_parts"], sort_keys=True))
+        root.set_attribute("sp.request.empty_messages",
+                           int(shape.get("empty_messages") or 0))
+    except Exception as exc:
+        log.error("request shape trace attributes dropped (%s)", type(exc).__name__)
+
+
 def _candidates_json(rec: dict) -> str | None:
     """Serialize a routing DecisionRecord's chosen + rejected set into an
     always-on `sp.candidates` attribute. Returns None for records that carry no
@@ -276,6 +302,7 @@ def export_failure_trace(*, request_id: str, application_id: str, status: str,
                          latency_ms: float, attempts: tuple[str, ...] = (),
                          app_langfuse=None, session_id: str | None = None,
                          started_ns: int | None = None,
+                         request_shape: dict | None = None,
                          backend_error_kinds: tuple[str, ...] = (),
                          detector_timing: dict | None = None) -> None:
     """Export one minimal root span for a request that ended `cancelled` or
@@ -304,6 +331,7 @@ def export_failure_trace(*, request_id: str, application_id: str, status: str,
             root.set_attribute("sp.latency_ms", float(latency_ms))
             root.set_attribute("sp.attempts", json.dumps(redact_tree(list(attempts))))
             root.set_attribute("sp.capture_io", "off")
+            _set_request_shape(root, request_shape)  # B123: counts only
             if backend_error_kinds:
                 # B117: one kind per failed attempt, from a closed enum.
                 root.set_attribute("sp.backend_error_kinds",
@@ -336,6 +364,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                  started_ns: int | None = None,
                  usage: dict | None = None,
                  switchyard: dict | None = None,
+                 request_shape: dict | None = None,
                  detector_timing: dict | None = None) -> TraceExport:
     """Export the request's decision trace as spans and return a `TraceExport`
     (url, trace_id, capture_io) for the resulting trace — `url` the Langfuse UI
@@ -379,6 +408,10 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
     this request (`Pipeline` builds it; None when the advisor did not run).
     When given, the root span carries `sp.switchyard.*` and the
     `langfuse.trace.tags` from `SWITCHYARD_TAGS`, regardless of capture_io.
+
+    `request_shape` (B123) is the request's content-free shape
+    (`ChatRequest.shape()`); the root span carries it as `sp.request.*`,
+    regardless of capture_io (see `_set_request_shape`).
 
     `detector_timing` (B119 step 1) is `DetectorTiming.attributes()` -- the
     request's detector queue/run timings up to the moment the caller built
@@ -557,6 +590,7 @@ def export_trace(*, request_id: str, tenant_id: str, model: str,
                 root.set_attribute("sp.prompt_version", prompt_version)
             if switchyard:
                 _set_switchyard(root, switchyard)
+            _set_request_shape(root, request_shape)
             if session_id:
                 # Langfuse groups traces sharing this attribute into one Session
                 # (B17). Opaque, client-supplied; deliberately NOT in REDACT_KEYS

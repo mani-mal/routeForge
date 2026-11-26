@@ -466,6 +466,12 @@ class RoutingOutcome(Base):
     # the proposal was only recorded. Null when the advisor did not run.
     # Deployed DBs need the ALTER in docs/reference/routing-outcomes.md.
     switchyard_applied: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # B123: the client request's content-free shape (`ChatRequest.shape()`):
+    # tools offered, the serving path taken, messages per role, content parts
+    # per type, the parts flattening dropped, empty instruction messages.
+    # Closed-set keys and counts only. Null on rows written before the column
+    # existed. Deployed DBs need the ALTER in docs/reference/routing-outcomes.md.
+    request_shape: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class OutcomeFeedback(Base):

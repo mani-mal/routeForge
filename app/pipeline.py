@@ -15,7 +15,7 @@ from app.models import (
     CacheRecord, ChatRequest, Choice, CompressionRecord, DecisionRecord,
     ExecutionPolicyContext, GenerationResult, MemoryRecord,
     Message, TERMINAL_BACKEND_FINISH_REASONS, Usage, VerificationRecord,
-    client_finish_reason,
+    client_finish_reason, output_cap_reached,
 )
 from app.output.verify import egress_detector, verify
 from app.policy.compile import APP_SOURCE, EffectivePolicy, compile_policy
@@ -1318,8 +1318,13 @@ class Pipeline:
         # complete "stop", so it would later be served as a finished answer.
         # The skip is named on the trace's CacheRecord (`truncated`, an enum
         # value, never content); a lookup refusal already recorded is kept.
+        # B116: so is an answer that used the client's whole output cap,
+        # whatever the backend labelled it (it is reported `length` below).
+        output_cap = client_output_cap(request.generation_params())
+        cap_reached = output_cap_reached(result.tokens_out, output_cap)
         store_skipped = (cache_active and cache_bypass_reason is None
-                         and result.finish_reason in TERMINAL_BACKEND_FINISH_REASONS)
+                         and (result.finish_reason in TERMINAL_BACKEND_FINISH_REASONS
+                              or cap_reached))
         if store_skipped and cache_record is not None:
             prior = cache_record.bypass_reason
             cache_record = cache_record.model_copy(update={
@@ -1387,7 +1392,8 @@ class Pipeline:
         # finish_reason is "tool_calls" (OpenAI clients switch on this to run
         # their tools and call back). Ordinary answers keep content + "stop".
         # B113: a backend `length`/`content_filter` wins over both -- one rule,
-        # `client_finish_reason`, shared with every streamed path.
+        # `client_finish_reason`, shared with every streamed path. B116: so
+        # does reaching the client's output cap (reported `length`).
         # `redacted_tool_calls` (not `result.tool_calls`): the client-facing
         # message must carry egress-redacted arguments (Task 2).
         tool_calls = redacted_tool_calls or None
@@ -1395,7 +1401,9 @@ class Pipeline:
             role="assistant",
             content=(text or None) if tool_calls else text,
             tool_calls=tool_calls)
-        finish_reason = client_finish_reason(result.finish_reason, bool(tool_calls))
+        finish_reason = client_finish_reason(
+            result.finish_reason, bool(tool_calls),
+            completion_tokens=result.tokens_out, max_tokens=output_cap)
         return {
             "id": request_id,
             "model": result.model,

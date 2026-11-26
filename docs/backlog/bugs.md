@@ -188,7 +188,57 @@ the audit trail in that sweep's task report.
 >    speculative calls (B111).
 >
 > **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
-> B110 starts as soon as B100 lands. B111 is gated on B109's go decision. B112 is optional.
+> B110 starts as soon as B100 lands. B111 is gated on B109's go decision (GO, 2026-11-15). B112 is optional.
+
+## B124 — Fleet overview: the Saved column's percentage overflows into the PII column (looks like garbled characters)  ✅ RESOLVED (2026-11-26, fix/b124-fleet-saved-overflow)
+
+**Severity:** low (display only; the numbers themselves are right) but very visible. On the
+Applications table, the PII column looks garbled for any app with large negative savings,
+and a browser refresh doesn't fix it.
+
+**Observed (2026-11-20, 30 d window):** the `dev-foundary` row shows `$-3547.7190 (-1922%)`
+under Saved, and its PII value `21178` is drawn on top of the `(-1922%)`, giving
+`(-1921178`. The same happens for `opencode-app` (`(-25` + `7508`), `B109 arm B`, and `B109 arm C`.
+Rows with a short Saved string, like arm A `$39.9620 (70%)`, render correctly.
+
+**Root cause:** `ui/src/console/FleetOverview.tsx` — the header row and every data row share
+one fixed grid template, `GRID = grid-cols-[minmax(140px,2fr)_80px_90px_110px_56px_…]`.
+The Saved track is a fixed **110px**, but the Saved cell renders
+`formatUsd(saved_usd)` (always 4 dp, plus a sign) **and** `(saved_pct%)` inline. At `text-sm`
+monospace, `$-3547.7190 (-1922%)` is about 20 characters, roughly 170px. The cell has no
+`min-w-0`, `truncate` or `overflow-hidden`, so it spills into the 56px PII track. Data-driven,
+so refreshing doesn't help.
+
+**Related display issues in the same cell (fix together):**
+- Negative values render as `$-3547.7190`; they should read `-$3,547.72`. `formatUsd` in
+  `ui/src/components/common.tsx` puts the sign after the `$` and has no thousands separators.
+- 4 dp is right for per-request figures but too much noise for fleet totals (the
+  `$15425.4753` / `$-10604.7095` KPI cards have the same problem).
+
+**Fix sketch:**
+1. Put the percentage on its own line under the dollar amount (or in a tooltip), or widen the
+   Saved track and make it `minmax(…, auto)`. Give every cell `min-w-0 truncate` so nothing can
+   overlap a neighbouring column again, and keep the full value in a `title`.
+2. Add a fleet-level money formatter: sign before the `$`, thousands separators, 2 dp for
+   values ≥ $1. Keep `formatUsd` and `formatUsdPrecise` for per-request figures.
+3. Add a UI test that renders a row with a 5-digit negative saving and a 4-digit percentage
+   and checks that the Saved cell doesn't overflow.
+
+**Not this bug:** the large negative savings (-220% fleet-wide versus the all-frontier
+baseline) are a separate question about data and pricing that hasn't been investigated
+yet. Spend above the baseline suggests the mid-tier models are priced above the baseline
+model in `pricing.yaml`, but nobody has checked. This entry covers only the rendering.
+
+**Resolved.** The Saved cell now stacks the dollar amount over the percentage (small, gray)
+on two lines; the Saved track is 150px (Spend 110px) and every data cell is `min-w-0
+truncate` with a `title` carrying the full value, so no cell can paint over a neighbour.
+`formatUsdFleet` (`ui/src/components/common.tsx`) puts the sign before `$`, adds thousands
+separators, and uses 2 dp for |v| >= 1 (4 dp below); it drives the table's Spend/Saved
+cells and the Spend/Saved KPI cards. `formatUsd`/`formatUsdPrecise` and their other callers
+are unchanged. A percentage with |value| >= 1000 shows as `<-999%` / `>999%` (full value in
+the title). There is no UI test framework, so no automated test was added; verified by
+`npm run typecheck` and `npm run build`.
+
 
 ## B113 — A truncated completion reaches the client as `finish_reason: "stop"`  ✅ RESOLVED (2026-11-13, fix/b113-finish-reason)
 
@@ -251,7 +301,9 @@ covers `length` and `content_filter`: nothing is stored, the trace says `truncat
 repeat request reaches the backend. `test_normal_stop_answer_is_still_stored` is the
 regression guard. The truncated tests fail without the store skip.
 
-## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  🟡 PARTIAL
+## B114 — Lab `routeforge-api` restarts every ~16 min on liveness-probe timeouts; startup tries a network fetch (tldextract)  ✅ RESOLVED (2026-11-26, fix/b114-probes-tldextract)
+
+**Resolved.** Both open parts are fixed. (1) Probes: `deploy/hpe/routeforge` now takes api liveness/readiness `periodSeconds`/`timeoutSeconds`/`failureThreshold` from `values.yaml` `probes.api.*` (defaults liveness 30/5/5, readiness 10/5/3) and the ui readiness `timeoutSeconds` from `probes.ui.readiness`; `deploy/helm/serving-plane` api probes are values-driven too (liveness timeout raised 3 to 5 s). (2) tldextract: Presidio's `EmailRecognizer.validate_result` calls the module-level `tldextract.extract`; `use_offline_tldextract()` in `app/policy/detectors.py` rebinds `tldextract.tldextract.TLD_EXTRACTOR` to `TLDExtract(suffix_list_urls=(), cache_dir=None)` (bundled snapshot, no fetch, no disk cache) before `AnalyzerEngine()` loads; it is a no-op without tldextract. Test: `tests/test_tldextract_offline.py`. **Still to do:** re-check the lab restart count after a day of traffic on the build that carries this fix.
 
 **Note 2026-11-13 21:4xZ:** the 0.42.0 api pod showed 2 restarts in about 9 h, against 48 in 13 h
 before the probe fix. Better but not zero, so re-check the cause. **Partial (2026-11-13, 0.41.0).** The DGX lab manifest now sets readiness `timeoutSeconds: 3` and liveness `timeoutSeconds: 5` with `failureThreshold: 3`, rolled out with 0.41.0. **Open:** the HPE chart probes (both still on the 1 s default) and the tldextract offline fix. Re-check the lab restart count after a day of traffic.
@@ -621,7 +673,18 @@ The first use is a DGX lab evaluation app for B109, set through the lab's raw ma
 A deterministic fixture also shows behaviour after an endpoint failure is
 policy-compliant.
 
-## B109 — EVAL (Switchyard P2a): go/no-go evidence  🟡 IN PROGRESS
+## B109 — EVAL (Switchyard P2a): go/no-go evidence  ✅ RESOLVED (2026-11-15, verdict GO)
+
+**Result 2026-11-15: GO** (run 5, `docs/research/switchyard-pilot-results.md`). With 38 of 40
+specs (IR-16 and CI-15 excluded for B117 glm connect errors):
+- D − C success: +2.6 pp, 90% CI [−7.9, +13.2].
+- D/C cost per success: 0.33, 90% CI [0.21, 0.49].
+- 0 violations; advisor p99 3.1 ms; 0 D fallbacks.
+
+GO holds in both sensitivity variants. Per the protocol, this justifies a shadow-monitored,
+per-app rollout only, not enforce-by-default. B111 is unblocked. Runs 1, 2 and 4 are void;
+run 3 is a reported pilot.
+
 
 **Status 2026-11-13.**
 - **Protocol:** pre-registered in `docs/research/switchyard-pilot-protocol.md`. DevFoundry
@@ -636,7 +699,7 @@ policy-compliant.
 - **Next:** DevFoundry builds a per-arm project binding with `model: "auto"` (their F-909)
   plus `run_purpose=eval` (F-214), then runs the frozen task set.
 
-## B116 — A truncated completion that the backend labels `tool_calls` reaches the client as `tool_calls`  🔴 OPEN
+## B116 — A truncated completion that the backend labels `tool_calls` reaches the client as `tool_calls`  ✅ RESOLVED (2026-11-26, fix/b116-truncated-tool-calls)
 
 **Found 2026-11-13 (DevFoundry, DGX lab).** Four `glm-5.3-flash` calls had
 `completion_tokens == max_tokens == 32000` but `finish_reason = tool_calls`:
@@ -650,6 +713,40 @@ max_tokens` (or the backend's effective cap), whatever the backend's label. Add 
 as in B113.
 
 **Timing:** not deployed during the B109 run window, to keep the system fixed.
+
+**Resolved.** `client_finish_reason` takes two keyword arguments, `completion_tokens` and
+`max_tokens`. A new rule sits between B113's rules: after a backend `length` /
+`content_filter` (still first), a completion whose `completion_tokens >= max_tokens` is
+reported `length`, whatever the backend's label (`tool_calls`, `stop`, or none). The new
+helper `app/models.py::output_cap_reached` makes that check. The cap is the client's own,
+read once by `router.client_output_cap`: `max_completion_tokens`, else `max_tokens`. If the
+client sent neither, no cap applies. RouteForge has no backend-side cap to fall back on (no
+onboarded or YAML field declares one), so none is invented. Unreported token counts never
+reach a cap. The `tool_calls` array is left as received; only the reason changes. How each
+path gets the count: `Pipeline.run` uses `result.tokens_out`, and `chunk_text`
+(`verified_then_stream`, keepalive, the stream floor fallback) inherits the response's
+already decided reason. A new `routes._stream_finish_reason` reads
+`meta["usage"]["completion_tokens"]` for the `stream_unverified` and `incremental_verify` SSE
+frames and for `_finalize_stream` (the recorded response), so the wire and the console
+agree. The semantic cache no longer stores an answer that reached the cap (a hit replays
+`stop`). The skip is recorded as `bypass_reason: "truncated"`, as in B113. The outcome row
+keeps the backend's own `finish_reason`, so the case stays visible there as
+`completion_tokens >= max_tokens`.
+
+**Tests:** in `tests/test_finish_reason_contract.py`, `test_client_finish_reason_cap_rule`
+(table, including no cap, under the cap, unreported tokens, and `content_filter` precedence),
+`test_nonstream_tool_call_at_cap_reports_length` (`max_tokens` and
+`max_completion_tokens`), `test_nonstream_max_completion_tokens_wins_over_max_tokens`,
+`test_nonstream_under_cap_or_no_cap_unchanged`, `test_nonstream_text_at_cap_reports_length`,
+`test_verified_then_stream_tool_call_at_cap_reports_length`,
+`test_keepalive_stream_at_cap_reports_length`,
+`test_live_stream_tool_call_at_cap_reports_length_and_records_it` (both cap keys, plus the
+console snapshot), `test_live_stream_under_cap_unchanged`,
+`test_live_stream_text_at_cap_reports_length` and
+`test_incremental_verify_text_at_cap_reports_length`. In
+`tests/test_semantic_cache_pipeline.py`, `test_answer_at_client_cap_is_not_stored` (both
+cap keys) and `test_answer_under_client_cap_is_still_stored`. Each at-cap test fails without
+the fix.
 
 ## B117 — `backend_failed` rows don't record why the backend call failed  ✅ RESOLVED (2026-11-15, fix/b117-backend-error-class; not yet deployed)
 
@@ -717,6 +814,88 @@ Step 1 (2026-11-15, feat/b119-detector-timing): per-request queue-wait/run-time 
   - *Medium:* the export hop (`routes.py` `_finalize`). Under resolved `capture_io: full` with a working per-app tracer it does no Presidio work but still queues. Decide the hop after tracer resolution, keeping B118's downgrade case on the executor.
   - *Low:* step-9 `verify` (and the cache re-verify) over an empty completion, i.e. a tool-call-only turn under `client_output: redact`; and the redacted export/display with an empty completion.
   - *Single-source the raw check:* B120 repeats `_tool_turn_messages`' raw/redact selection at the call site. Prefer `run_detector_for(None if raw else reps.detector, ...)` or a helper.
+
+## B121 — Does Switchyard's escalation beat a cheap-only default?  🔴 OPEN (design agreed 2026-11-15)
+
+**Follow-up to B109.** B109 answered Switchyard (D) against the plain router (C). But the
+always-cheap arm (A) beat every arm: 37/38 at $0.26 per success against D's 35/38 at $1.06.
+The task set was too easy for escalation to matter, and most of D's extra cost came from
+the policy risk floor, not from Switchyard: 172 of D's 580 calls were floored to mid, while
+A's narrowed eligible set served its 187 floored calls on cheap. If escalation buys
+nothing, cheap-only should be the production default.
+
+**Agreed design** (with DevFoundry, which supplies the runner, task generator and blind review):
+- Arms A (cheap-only, the baseline), D (Switchyard) and B (capable-only, the ceiling).
+- About 100 harder specs, calibrated so A succeeds 50–70% (INCONCLUSIVE outside 45–75%).
+  Power: about 92 specs for +12 pp at 22% discordance, one-sided α 0.05, 80% power.
+- Risk floors off on all three arms through per-app sensitivity rules (`app/apps/privacy.py`),
+  not the deployment-global `risk_floors`. Detection and redaction are unchanged.
+  Counterfactual production floors are reported from the recorded entities.
+- Gates: D−A ≥ +10 pp with the 90% paired-bootstrap lower bound > 0, and net value
+  V = (s_D − s_A) × $20 − (c_D − c_A) with its lower bound > 0. The $20 per failed task is
+  the owner's figure. The implied cost-per-success ratio k is reported.
+- Cached input is priced explicitly and cost is reported both ways: a single-model arm keeps
+  a warm prefix all session, while D pays a cold prefix on each mid-session tier switch.
+- B109's practice carries over: durable state, `--gateway-infra`, §5a/§5e/§5g, no probes,
+  blind scoring.
+
+**Prerequisites:**
+- B117 (PR #190) and B119 step 1 (PR #191) are deployed as lab 0.44.0.
+- The B119 decision waits on the queue-wait data.
+- The HarnessLab check.py false positives are DevFoundry's to fix.
+- glm needs `--enable-prompt-tokens-details`, so cached tokens are reported.
+- Next: the protocol draft, `docs/research/switchyard-vs-cheap-protocol.md`.
+
+## B122 — Presidio false positives on code put `dev-foundary` at the medium floor  🔴 OPEN
+
+**Found 2026-11-15 (B109 analysis).** Presidio flags identifiers, dates, paths and URLs in
+source code as PERSON, LOCATION, DATE_TIME, US_DRIVER_LICENSE, NRP or URL. On a code
+workload that sets sensitivity `confidential` and risk `medium` (or higher), so the medium
+floor sends the request to mid. In B109, 172 of arm D's 580 calls were floored this way.
+Every `dev-foundary` request on 2026-11-17 that was checked carried the same six entity
+types. The floor raises cost without a real sensitivity reason.
+**Options to evaluate:** per-app `pii_entity_denylist` or `pii_score_threshold` for code apps;
+per-app sensitivity rules that don't raise risk for these types; or a code-aware recognizer
+context. Any change must keep detection for genuinely sensitive types (SSN, credit card)
+and stay explicit, per CLAUDE.md rule 2a.
+
+## B123 — The request's shape isn't recorded, and non-text content parts are dropped silently  ✅ RESOLVED (2026-11-18, feat/b123-request-shape; not yet deployed)
+
+**Found 2026-11-17** during DevFoundry's lost-task investigation: OpenCode agents behaved as
+if they never got their task, and DevFoundry asked whether RouteForge changed what the model
+receives. Nothing recorded the request's shape, so we could only answer by inference. For
+req-f3f758044d454596bf4ba5c492016e70, the fact that the tool path ran had to be inferred from
+`routing_tokens` minus the text tokens. The investigation also found a real gap:
+`Message._flatten_content_parts` silently dropped every content part whose `type` was not
+`"text"`. That included the Responses-style `input_text`/`output_text` parts, which carry
+text. A message sent only as such parts reached the gate and the model as an empty string,
+with no trace of it.
+**Fix.**
+- **A content-free request shape** (`ChatRequest.shape()`), computed once per request in the
+  route from the request as received. It records `has_tools`, `n_tools`, `tool_mode` (which
+  path ran), `message_roles`, `content_parts`, `dropped_parts` and `empty_messages`. Part
+  counts are taken by a `mode="wrap"` validator on `ChatRequest`, which reads the raw
+  `messages` JSON before `Message` flattens it. It keeps counts in a private attribute: no
+  global state and no copies of text. Roles and part types map onto closed sets (anything
+  else is `other`), so a client string is never recorded.
+- **Where it is written.** The new nullable JSON column `routing_outcomes.request_shape`, on
+  every status that writes a row. The trace root span, as `sp.request.tool_mode`,
+  `sp.request.n_tools`, `sp.request.message_roles`, `sp.request.content_parts`,
+  `sp.request.dropped_parts` (only when non-empty) and `sp.request.empty_messages`, regardless
+  of `capture_io`; the B78 failure trace carries them too. When anything was dropped, one
+  `serving.api` WARNING JSON line (`event: content_parts_dropped`) with the request id and
+  the counts.
+- **Behaviour change (intended):** `input_text` and `output_text` parts are now kept as text,
+  exactly like `text`. The gate and the model now see text they previously never received.
+  Every other non-text part (images, files, audio, refusals, unknown types) is still dropped,
+  because RouteForge is text-only, but each one is now counted. Nothing else changes: routing,
+  policy, the gate's input for every other request, and which path runs are all the same.
+
+Tests: `tests/test_request_shape.py`, `tests/test_message_content_parts.py`;
+`tests/test_outcome_store.py::test_schema_is_content_free` passes unchanged.
+**Deploy:** run `ALTER TABLE routing_outcomes ADD COLUMN IF NOT EXISTS request_shape JSON;`
+(or `scripts/migrate_app_policies.py`) before rolling the image. Otherwise every outcome write
+fails, and no outcome rows are recorded until it runs.
 
 ## B115 — Switchyard advice is recorded on pinned requests, where it can't apply  ✅ RESOLVED (2026-11-13, fix/b115-switchyard-pinned)
 
@@ -1996,7 +2175,9 @@ manual and less coarse).
 See also B59 (per-app TPM / concurrency limits in the gateway — admission, out of scope for
 the simulator) and B63 (the shadow-prices-only output has no `rows` block).
 
-## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🔴 OPEN
+## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🟡 PARTIAL
+
+**Update 2026-11-26 (fix/b65-uncertainty-followups):** items 1, 2, 4, 6 fixed; 3, 5, 7 remain.
 
 **Severity:** low (edge-case presentation; no wrong number).
 **Found:** 2026-10-07, scoped re-review of the P3c-3 fix wave.
@@ -2736,8 +2917,7 @@ exception handler.
 
 ---
 
-## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries
-
+## B46 — `counts_as_endpoint_unhealth` is tested in the interior of every branch and at none of its boundaries  ✅ RESOLVED (2026-09-19, P2a fix wave)
 **Severity:** low (coverage gap; the classifier is correct today)
 **Found:** 2026-09-19, P2a Task 9 review. **Resolved 2026-09-19 (fix wave).**
 `tests/routing/test_signal_wiring.py` now parametrizes 399 and 429 (expect `True`) and
@@ -2936,8 +3116,7 @@ it.
 should be; B37 still does. The step-7 breaker (built 2026-09-23, above) is the other answer
 to the same problem; it does not change what `/health` reports (B37).
 
-## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is
-
+## B44 — `test_default_strategy_matches_pre_refactor_scoring` is an ordering-only oracle and reads like a stronger guarantee than it is  ✅ RESOLVED (2026-09-19, P2a fix wave)
 **Severity:** trivial (documentation of a test; no defect)
 **Found:** 2026-09-19, P2a Task 6 review. **Resolved 2026-09-19 (fix wave):** a comment
 at `tests/test_routing_strategy.py:73-80` (just inside

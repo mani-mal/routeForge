@@ -14,6 +14,7 @@ range would mislead.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 
 import pytest
@@ -197,8 +198,9 @@ def test_f3_a_relaxation_with_no_new_rejection_carries_the_zero_bound():
     report = render_shadow_section(block)
     ranges = report[report.index("### Ranges"):]
     assert ranges.count(uncertainty_mod.ZERO_RANGE_NOTE) == 1
-    assert uncertainty_mod.ZERO_RANGE_NOTE == (
-        "A count of 0 shows `[0, 0]` at any sample size; that is not zero risk.")
+    # B65 item 1: any count the same in every resample, not only 0.
+    assert "same in every resample" in uncertainty_mod.ZERO_RANGE_NOTE
+    assert "`[0, 0]` for a count of 0" in uncertainty_mod.ZERO_RANGE_NOTE
 
 
 def test_f3_the_comparison_table_is_followed_by_the_zero_sentence():
@@ -367,3 +369,23 @@ def test_f3_leaf_bounds():
         "point": 1.0, "lo": 1.0, "hi": 1.0, "one_bound": round(0.5 ** 0.1, 6)}
     assert leaf(0, [0] * 4, plan, zero_n=10) == {
         "point": 0, "lo": 0, "hi": 0, "zero_bound": round(1 - 0.5 ** 0.1, 6)}
+
+
+def test_b65_a_share_of_zero_other_than_newly_rejected_gets_a_sentence():
+    rows = [_result(i, "app-a", _arm("azure-big", 0.01 + 0.0001 * i, provider="azure"),
+                    _arm("local-mid", 0.004)) for i in range(50)]
+    totals = results_block(rows, UncertaintyPlan(replicates=30))["totals"]
+    assert "zero_bound" in totals["onprem_share"]["current"]
+    lines = bucket_lines(totals, 0.90)
+    assert lines.count(uncertainty_mod.ZERO_SHARE_NOTE) == 1
+    assert "zero_bound" in uncertainty_mod.ZERO_SHARE_NOTE
+    # newly_rejected_share alone is covered by the zero-count note, not this one.
+    only = copy.deepcopy(
+        results_block(_partly_routed(40), UncertaintyPlan(replicates=30))["totals"])
+    for name in [k for k in only if k.endswith("_share")]:
+        only[name].pop("zero_bound", None)
+    for arm in ("current", "proposed"):
+        only["onprem_share"][arm].pop("zero_bound", None)
+    only["newly_rejected_share"]["zero_bound"] = 0.02
+    assert uncertainty_mod.ZERO_SHARE_NOTE not in bucket_lines(only, 0.90)
+

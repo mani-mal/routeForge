@@ -46,12 +46,13 @@ from app.errors import (
     BackendUnavailable, ContextWindowExceeded, NoEligibleCandidate, PolicyGateError,
 )
 from app.models import ChatRequest, ExecutionPolicyContext, client_finish_reason
+from app.routing.router import client_output_cap
 from app.obs import metrics
 from app.obs.export import export_failure_trace, export_trace, resolve_capture_io
 from app.obs.redact import redacted_copy
 from app.obs.scores import SCORE_NAMES, ensure_score_config, post_score
 from app.output.streaming_verify import StreamingVerifier
-from app.pipeline import PipelineRejected, StreamFallback
+from app.pipeline import PipelineRejected, StreamFallback, _is_tool_conversation
 from app.policy.compile import compile_policy
 from app.policy.detector_pool import current_timing, run_detector_for, start_request_timing
 from app.policy.context import requestable_models
@@ -453,6 +454,20 @@ def _log_no_eligible(exc: BaseException, request_id: str) -> None:
             "no_eligible log line failed request=%s", request_id, exc_info=True)
 
 
+def _log_dropped_parts(request_id: str, shape: dict) -> None:
+    """One WARNING line when flattening discarded content parts (B123): a
+    message sent as images/files/unknown parts reaches the gate and the model
+    without them, so the loss must be visible. Counts by closed-set type
+    only -- never a part's text or its client-supplied type string."""
+    dropped = shape.get("dropped_parts")
+    if not dropped:
+        return
+    logging.getLogger("serving.api").warning(json.dumps(
+        {"event": "content_parts_dropped", "request_id": request_id,
+         "dropped_parts": dropped, "empty_messages": shape.get("empty_messages", 0)},
+        sort_keys=True))
+
+
 class ClientDisconnected(Exception):
     """The client went away before a complete answer was ready."""
 
@@ -500,12 +515,13 @@ def _export_failure_trace(*, status: str, tenant: str, request_id: str,
                           started: float, attempts: tuple[str, ...],
                           app_langfuse: object | None, session_id: str | None,
                           started_ns: int | None,
+                          request_shape: dict | None = None,
                           backend_error_kinds: tuple[str, ...] = ()) -> None:
     """The minimal, content-free Langfuse trace for a `cancelled` or `error`
     request (B78), carrying the request's detector timings (B119), plus the
     `detector_timing` log line with the same `outcome`. Best effort:
-    swallowed, never changes the response.
-    `backend_error_kinds` (B117) is the closed-enum kind of each failed attempt."""
+    swallowed, never changes the response. `backend_error_kinds` (B117) is
+    the closed-enum kind of each failed attempt."""
     timing = current_timing()
     try:
         export_failure_trace(
@@ -513,6 +529,7 @@ def _export_failure_trace(*, status: str, tenant: str, request_id: str,
             latency_ms=(time.monotonic() - started) * 1000,
             attempts=tuple(attempts), app_langfuse=app_langfuse,
             session_id=session_id, started_ns=started_ns,
+            request_shape=request_shape,
             backend_error_kinds=backend_error_kinds,
             detector_timing=_detector_timing_attributes(timing, request_id))
     except Exception:
@@ -567,7 +584,7 @@ async def _record_cancelled(request: Request, *, tenant: str, request_id: str,
     _export_failure_trace(
         status="cancelled", tenant=tenant, request_id=request_id, started=started,
         attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
-        started_ns=started_ns)
+        started_ns=started_ns, request_shape=(internals or {}).get("request_shape"))
 
 
 async def _record_failed(request: Request, *, tenant: str, request_id: str,
@@ -641,7 +658,8 @@ async def _record_failed(request: Request, *, tenant: str, request_id: str,
     _export_failure_trace(
         status="error", tenant=tenant, request_id=request_id, started=started,
         attempts=attempts, app_langfuse=app_langfuse, session_id=session_id,
-        started_ns=started_ns, backend_error_kinds=kinds)
+        started_ns=started_ns, backend_error_kinds=kinds,
+        request_shape=(internals or {}).get("request_shape"))
 
 
 def _failed_model(exc: BaseException) -> str:
@@ -796,6 +814,7 @@ async def _record_failure_outcome(request: Request, status: str, *, tenant: str,
             workload=workload, workload_source=workload_source,
             outcome_session=outcome_session,
             requested_alias=requested_alias,
+            request_shape=internals.get("request_shape"),
             attempts=tuple(attempts), rejected=tuple(rejected),
             latency_ms=(time.monotonic() - started) * 1000,
             conflicting_core=_core_record(core),
@@ -906,6 +925,22 @@ def _stream_usage(body: ChatRequest, usage: object) -> dict | None:
     if usage is None:
         return None
     return jsonable_encoder(_wire_usage(usage))
+
+
+def _stream_finish_reason(get_meta: Callable[[], dict], meta: dict | None,
+                          body: ChatRequest, has_tool_calls: bool) -> str:
+    """The client-facing `finish_reason` of a live-streamed turn: the one
+    `client_finish_reason` rule fed the backend's own reason
+    (`get_meta.finish_reason`, B113) and -- for B116 -- the backend-reported
+    completion tokens against the client's own output cap, so a turn that used
+    the whole budget reads `length` even when the backend labelled it
+    `tool_calls`/`stop`. Shared by the live SSE frame and the recorded
+    response so the two can never disagree."""
+    usage = (meta or {}).get("usage")
+    used = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    return client_finish_reason(
+        getattr(get_meta, "finish_reason", None), has_tool_calls,
+        completion_tokens=used, max_tokens=client_output_cap(body.generation_params()))
 
 
 @router.post("/v1/chat/completions", response_model=None)
@@ -1043,6 +1078,13 @@ async def chat_completions(body: ChatRequest, request: Request) -> dict | Stream
     # only ever one forgotten `pop` from leaking. Whichever pipeline call below
     # actually serves the request fills it before any `_finalize` runs.
     internals: dict = {}
+    # B123: the request's content-free shape, computed ONCE here (a
+    # stream-fallback runs the pipeline twice) from the request as received:
+    # counts and closed-set names only, a local computation that sends
+    # nothing anywhere. The outcome row and the trace read it off
+    # `internals`; a discarded content part is also logged.
+    internals["request_shape"] = body.shape(tool_mode=_is_tool_conversation(body))
+    _log_dropped_parts(request_id, internals["request_shape"])
     try:
         # Per-app privacy profile (custom recognizers + sensitivity rules,
         # Task 7), now cache-aware (Task 9): app.state.profile_cache is
@@ -1429,6 +1471,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
             # pipeline's out-parameter (never on `resp`); None when it did
             # not run, and then nothing switchyard-shaped reaches the trace.
             switchyard=internals.get("switchyard"),
+            # B123: the request's content-free shape (counts, closed sets).
+            request_shape=internals.get("request_shape"),
             # B119 step 1: this request's detector timings SO FAR -- the
             # export hop's own job is not in it (it is timed after this
             # snapshot; it reaches the `detector_timing` log line below).
@@ -1563,7 +1607,8 @@ async def _finalize(request: Request, resp: dict, *, body: ChatRequest,
                 routing_policy_version=s.routing_policy_version,
                 workload=workload, workload_source=workload_source,
                 outcome_session=outcome_session,
-                requested_alias=requested_alias)
+                requested_alias=requested_alias,
+                request_shape=internals.get("request_shape"))
         except Exception:
             logging.getLogger("serving.obs").warning(
                 "outcome record failed request=%s", request_id, exc_info=True)
@@ -1918,9 +1963,9 @@ def _stream_unverified_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             # B113: a truncated (or filtered) turn must not read as a clean
             # one -- text or tool call alike. `get_meta.finish_reason` is the
-            # backend's own reason, set once the stream drained.
-            finish = client_finish_reason(
-                getattr(get_meta, "finish_reason", None), streamed_tool_calls)
+            # backend's own reason, set once the stream drained. B116: a turn
+            # that used the client's whole output cap is `length` too.
+            finish = _stream_finish_reason(get_meta, meta, body, streamed_tool_calls)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -2028,9 +2073,9 @@ def _incremental_verify_response(
             meta = get_meta()  # valid only now that `deltas` is fully drained
             # B113: the backend's `length`/`content_filter` reaches the client.
             # No tool calls on this path (a tool turn floors to
-            # verified_then_stream), so the fallback is "stop".
-            finish = client_finish_reason(
-                getattr(get_meta, "finish_reason", None), False)
+            # verified_then_stream), so the fallback is "stop". B116: the
+            # client's output cap reached is `length` too.
+            finish = _stream_finish_reason(get_meta, meta, body, False)
             yield sse_frame(openai_chunk(request_id, model, finish_reason=finish,
                                          created=created))
             usage = _stream_usage(body, meta.get("usage") if meta else None)
@@ -2155,9 +2200,8 @@ async def _finalize_stream(
         if tool_calls:
             message["tool_calls"] = tool_calls
         resp["choices"] = [{"index": 0, "message": message,
-                            "finish_reason": client_finish_reason(
-                                getattr(get_meta, "finish_reason", None),
-                                bool(tool_calls))}]
+                            "finish_reason": _stream_finish_reason(
+                                get_meta, meta, body, bool(tool_calls))}]
         # Make the trace's VerificationRecord say WHY (Global Constraint 2).
         # run_stream stamps a performed=False/passed=True "waived" record; name
         # the reason + performed flag for this specific mode so the console and

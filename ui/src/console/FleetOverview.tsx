@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { api, adminApi, TIER_COLOR } from "../api";
 import type { AdminApp, FleetRow } from "../api";
-import { Panel, StatTile, TierDot, formatUsd, formatMs } from "../components/common";
+import { Panel, StatTile, TierDot, formatUsd, formatUsdFleet, formatMs } from "../components/common";
 
 const POLL_MS = 3000;
 const TIER_ORDER = ["cheap", "mid", "frontier", "?"];
@@ -84,6 +84,14 @@ function sortRows(rows: JoinedRow[], key: SortKey, dir: "asc" | "desc"): JoinedR
   });
 }
 
+// Cap the displayed percentage so a runaway ratio can't blow the column out.
+function formatSavedPct(p: number): string {
+  if (!Number.isFinite(p)) return "–";
+  if (p <= -1000) return "<-999%";
+  if (p >= 1000) return ">999%";
+  return `${p.toFixed(0)}%`;
+}
+
 function TierMiniBar({ dist }: { dist: Record<string, number> }) {
   const total = Object.values(dist).reduce((a, b) => a + b, 0);
   if (total === 0) return <span className="text-xs text-gray-600">–</span>;
@@ -134,9 +142,10 @@ function Th({
 }
 
 // Fixed grid template shared by the header row and every data row so columns
-// line up. Buttons render `display: grid` fine via these classes.
+// line up. Every data cell is `min-w-0 truncate` so a long value can never
+// paint over a neighbouring column (B124). Buttons render `display: grid` fine via these classes.
 const GRID =
-  "grid grid-cols-[minmax(140px,2fr)_80px_90px_110px_56px_72px_80px_88px_28px] items-center gap-3";
+  "grid grid-cols-[minmax(140px,2fr)_80px_110px_150px_56px_72px_80px_88px_28px] items-center gap-3";
 
 export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => void }) {
   const [apps, setApps] = useState<AdminApp[]>([]);
@@ -230,10 +239,10 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
       <div className="flex justify-end">{windowPicker}</div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatTile label="Requests" value={totalRequests.toLocaleString()} />
-        <StatTile label="Spend" value={formatUsd(totalSpend)} />
+        <StatTile label="Spend" value={formatUsdFleet(totalSpend)} />
         <StatTile
           label="Saved"
-          value={formatUsd(totalSaved)}
+          value={formatUsdFleet(totalSaved)}
           sub={totalBaseline > 0 ? `${savedPct.toFixed(1)}% vs. all-frontier` : undefined}
         />
         <StatTile
@@ -274,15 +283,32 @@ export function FleetOverview({ onOpenApp }: { onOpenApp: (appId: string) => voi
                   <div className="truncate text-sm font-medium text-gray-100">{row.app.name}</div>
                   <div className="truncate text-xs font-mono text-gray-500">{row.app.id}</div>
                 </div>
-                <span className="text-sm font-mono text-gray-300">{row.count.toLocaleString()}</span>
-                <span className="text-sm font-mono text-gray-300">{formatUsd(row.total_usd)}</span>
-                <span className="text-sm font-mono text-gray-300">
-                  {formatUsd(row.saved_usd)}
-                  <span className="ml-1 text-xs text-gray-500">({row.saved_pct.toFixed(0)}%)</span>
+                <span className="min-w-0 truncate text-sm font-mono text-gray-300" title={String(row.count)}>
+                  {row.count.toLocaleString()}
                 </span>
-                <span className="text-sm font-mono text-gray-300">{row.pii_count}</span>
-                <span className="text-sm font-mono text-gray-300">{row.served_onprem_count}</span>
-                <span className="text-sm font-mono text-gray-300">{formatMs(row.latency_p50_ms)}</span>
+                <span className="min-w-0 truncate text-sm font-mono text-gray-300" title={formatUsd(row.total_usd)}>
+                  {formatUsdFleet(row.total_usd)}
+                </span>
+                <div
+                  className="min-w-0"
+                  title={`${formatUsd(row.saved_usd)} (${row.saved_pct.toFixed(2)}%)`}
+                >
+                  <div className="truncate text-sm font-mono text-gray-300">
+                    {formatUsdFleet(row.saved_usd)}
+                  </div>
+                  <div className="truncate text-xs font-mono text-gray-500">
+                    {formatSavedPct(row.saved_pct)}
+                  </div>
+                </div>
+                <span className="min-w-0 truncate text-sm font-mono text-gray-300" title={String(row.pii_count)}>
+                  {row.pii_count}
+                </span>
+                <span className="min-w-0 truncate text-sm font-mono text-gray-300" title={String(row.served_onprem_count)}>
+                  {row.served_onprem_count}
+                </span>
+                <span className="min-w-0 truncate text-sm font-mono text-gray-300" title={formatMs(row.latency_p50_ms)}>
+                  {formatMs(row.latency_p50_ms)}
+                </span>
                 <TierMiniBar dist={row.tier_distribution} />
                 {row.warn ? (
                   <span

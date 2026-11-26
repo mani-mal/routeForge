@@ -178,6 +178,8 @@ OUTCOMES_COLUMNS: list[tuple[str, str, str]] = [
     ("switchyard_applied", "BOOLEAN", "BOOLEAN"),
     # 2026-11-15 B117 — content-free error class per failed attempt.
     ("backend_errors", "JSON", "JSON"),
+    # 2026-11-18 B123 — the client request's content-free shape.
+    ("request_shape", "JSON", "JSON"),
 ]
 
 APPLICATIONS_TABLE = "applications"

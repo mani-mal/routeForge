@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
+from collections import Counter
+
+from pydantic import (
+    BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer,
+    model_validator,
+)
 
 RISK_CLASSES = ("low", "medium", "high")
 RESIDENCIES = ("any", "private_cloud_ok", "onprem_only")
@@ -14,7 +19,56 @@ FORWARDED_PARAMS = (
 )
 
 
+# B123: content-part types, a CLOSED set. A part's `type` is a client-supplied
+# string, so it is never recorded verbatim: anything outside this set counts as
+# "other". The three text types carry their text in `text` (`input_text` and
+# `output_text` are the OpenAI Responses-API spellings); every other type is
+# non-text and is dropped -- RouteForge is a text-only router.
+TEXT_PART_TYPES = frozenset({"text", "input_text", "output_text"})
+KNOWN_PART_TYPES = TEXT_PART_TYPES | frozenset({
+    "image_url", "input_image", "file", "input_file", "input_audio", "refusal",
+})
+STRING_CONTENT = "string"   # the shape bucket for plain-string content
+OTHER = "other"
+# Message roles, a CLOSED set for the same reason; anything else is "other".
+KNOWN_ROLES = frozenset({"system", "developer", "user", "assistant", "tool", "function"})
+# Roles that carry the client's instruction: one of these that arrives empty
+# (no text, no tool_calls) is counted in the shape's `empty_messages`.
+INSTRUCTION_ROLES = frozenset({"system", "developer", "user"})
+
+
+def is_text_part(p: object) -> bool:
+    """Is this content part one RouteForge keeps as text? `type` is
+    client-supplied and may be any JSON value, so it is checked to be a string
+    before the set lookup (an unhashable dict/list `type` must not raise)."""
+    return (isinstance(p, dict) and isinstance(p.get("type"), str)
+            and p["type"] in TEXT_PART_TYPES)
+
+
+def part_type(part) -> str:
+    """A content part's type, mapped onto `KNOWN_PART_TYPES` (else "other")."""
+    t = part.get("type") if isinstance(part, dict) else None
+    return t if isinstance(t, str) and t in KNOWN_PART_TYPES else OTHER
+
+
+def role_bucket(role) -> str:
+    """A message role, mapped onto `KNOWN_ROLES` (else "other")."""
+    return role if isinstance(role, str) and role in KNOWN_ROLES else OTHER
+
+
 class Message(BaseModel):
+    """One chat message. Text-only by design.
+
+    `content` arrives as a string or as a list of OpenAI content parts. A list
+    is flattened to ONE string (parts joined by newlines) so every consumer --
+    the PII gate first -- sees plain text. Parts of type `text`, `input_text`
+    and `output_text` (`TEXT_PART_TYPES`) contribute their `text`. Every other
+    part -- images, files, audio, refusals, unknown types -- is DROPPED:
+    RouteForge routes text and invents no handling for the rest. A drop is
+    never silent: `ChatRequest.shape()` counts it in `dropped_parts`, and the
+    route logs one WARNING with the counts (B123). Extra keys on a part, like
+    `cache_control`, are ignored."""
+
     role: str
     # Optional so an OpenAI tool-calling round-trip parses: an assistant turn
     # that ONLY requested tools carries `content: null` + `tool_calls`, and a
@@ -28,14 +82,19 @@ class Message(BaseModel):
     def _flatten_content_parts(cls, v):
         # OpenAI also allows content as a list of parts
         # ([{"type":"text","text":...}], as sent by Qwen Code and other
-        # openai-SDK agents). Join the text parts into one string so every
-        # consumer -- including the PII gate -- still sees plain text. Non-text
-        # parts (images) are dropped; extra keys like cache_control are ignored.
+        # openai-SDK agents). See the class docstring for what is kept.
         if isinstance(v, list):
-            return "\n".join(
-                p.get("text") or "" for p in v
-                if isinstance(p, dict) and p.get("type") == "text"
-            )
+            texts: list[str] = []
+            for p in v:
+                if not is_text_part(p):
+                    continue
+                t = p.get("text")
+                if t is not None and not isinstance(t, str):
+                    # A ValueError becomes a 422 validation error; a TypeError
+                    # from str.join would escape pydantic as an unhandled 500.
+                    raise ValueError("a text content part's 'text' must be a string")
+                texts.append(t or "")
+            return "\n".join(texts)
         return v
     # OpenAI tool-calling fields. Accepted on request messages (so a client can
     # replay an assistant/tool turn back to us) and emitted on the response
@@ -64,6 +123,57 @@ class ChatRequest(BaseModel):
     # `ge=1` makes every bad value a clean request-validation 4xx.
     max_tokens: int | None = Field(None, ge=1)
     max_completion_tokens: int | None = Field(None, ge=1)
+    # B123: per content-part-type counts of the messages AS RECEIVED, taken
+    # before `Message` flattens them (flattening is where non-text parts are
+    # lost). `(content_parts, dropped_parts)`; closed-set keys, counts only.
+    _part_counts: tuple[dict, dict] = PrivateAttr(default=({}, {}))
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _count_content_parts(cls, data, handler):
+        """Count the raw content parts on the way in. Runs once, over the
+        client's own JSON, and keeps no text: one pass, two Counters. A
+        request built from `Message` objects in code (already flattened) is
+        counted from those -- strings only, nothing can have been dropped."""
+        req = handler(data)
+        raw = data.get("messages") if isinstance(data, dict) else None
+        parts: Counter = Counter()
+        dropped: Counter = Counter()
+        for m in raw if isinstance(raw, list) else req.messages:
+            content = (m.get("content") if isinstance(m, dict)
+                       else getattr(m, "content", None))
+            if isinstance(content, str):
+                parts[STRING_CONTENT] += 1
+            elif isinstance(content, list):
+                for p in content:
+                    kind = part_type(p)
+                    parts[kind] += 1
+                    if not is_text_part(p):
+                        dropped[kind] += 1
+        req._part_counts = (dict(parts), dict(dropped))
+        return req
+
+    def shape(self, *, tool_mode: bool) -> dict:
+        """The request's content-free shape (B123): did it offer tools and how
+        many, which serving path it takes (`tool_mode`, the caller's
+        `_is_tool_conversation` result), messages per role, content parts per
+        type, the parts flattening dropped, and how many instruction messages
+        (system/developer/user) are empty after flattening. Every key is from a
+        closed set (`KNOWN_ROLES`, `KNOWN_PART_TYPES`, "string", "other") and
+        every value a count or a bool -- never a client string."""
+        parts, dropped = self._part_counts
+        return {
+            "has_tools": bool(self.tools),
+            "n_tools": len(self.tools or []),
+            "tool_mode": bool(tool_mode),
+            "message_roles": dict(Counter(role_bucket(m.role) for m in self.messages)),
+            "content_parts": dict(parts),
+            "dropped_parts": dict(dropped),
+            "empty_messages": sum(
+                1 for m in self.messages
+                if m.role in INSTRUCTION_ROLES and not (m.content or "").strip()
+                and not m.tool_calls),
+        }
 
     def generation_params(self) -> dict:
         """The client's sampling/length parameters, to pass to the model."""
@@ -93,7 +203,20 @@ class Usage(BaseModel):
 TERMINAL_BACKEND_FINISH_REASONS = frozenset({"length", "content_filter"})
 
 
-def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> str:
+def output_cap_reached(completion_tokens: int | None, max_tokens: int | None) -> bool:
+    """True when a completion used the client's whole output budget (B116).
+
+    `max_tokens` is the client's own cap (`router.client_output_cap`:
+    `max_completion_tokens`, else `max_tokens`); None when it sent neither, and
+    then nothing is reached -- RouteForge invents no cap. `completion_tokens`
+    is the backend-reported count; None/0 (unreported) never reaches a cap."""
+    return (max_tokens is not None and completion_tokens is not None
+            and max_tokens > 0 and completion_tokens >= max_tokens)
+
+
+def client_finish_reason(backend_reason: str | None, has_tool_calls: bool, *,
+                         completion_tokens: int | None = None,
+                         max_tokens: int | None = None) -> str:
     """The `finish_reason` RouteForge sends the CLIENT -- the one rule every
     response path (non-stream, verified_then_stream / keepalive chunking,
     stream_unverified, incremental_verify, the recorded live-stream response)
@@ -104,8 +227,14 @@ def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> st
          with or without tool calls. A truncated tool call is still truncated
          (OpenAI reports `length` there too); an agent client that read it as
          `tool_calls`/`stop` would treat a cut-off turn as finished.
-      2. the turn ends in tool calls -> `"tool_calls"`.
-      3. otherwise -> `"stop"`.
+      2. the completion used the client's whole output cap
+         (`completion_tokens >= max_tokens`, see `output_cap_reached`) ->
+         `"length"`, whatever the backend's own label (B116). vLLM's tool
+         parser finds a call in a cut-off turn and reports `tool_calls`; the
+         token count is the only honest signal. The `tool_calls` array itself
+         is left as-is -- only the reason changes.
+      3. the turn ends in tool calls -> `"tool_calls"`.
+      4. otherwise -> `"stop"`.
 
     `backend_reason` is the backend's own, enum-normalised finish reason
     (`GenerationResult.finish_reason`; None when it reported none, `"other"`
@@ -117,10 +246,13 @@ def client_finish_reason(backend_reason: str | None, has_tool_calls: bool) -> st
     still truncated), and a verification FAILURE never produces a response at
     all (it raises; the route sends an error), so there is no competing
     verifier-set reason to rank. A semantic-cache hit replays `"stop"`, which
-    is honest only because a `length`/`content_filter` answer is never stored
-    (`Pipeline.run` skips the store and records `bypass_reason: truncated`)."""
+    is honest only because a `length`/`content_filter` answer -- or one that
+    reached the client's cap -- is never stored (`Pipeline.run` skips the
+    store and records `bypass_reason: truncated`)."""
     if backend_reason in TERMINAL_BACKEND_FINISH_REASONS:
         return backend_reason
+    if output_cap_reached(completion_tokens, max_tokens):
+        return "length"
     return "tool_calls" if has_tool_calls else "stop"
 
 
@@ -130,7 +262,8 @@ class Choice(BaseModel):
     # Decided by `client_finish_reason` above: "stop" for a normal answer;
     # "tool_calls" when the assistant message carries tool_calls (OpenAI
     # clients switch on this to run their tools); the backend's "length" /
-    # "content_filter" when it reported one (B113).
+    # "content_filter" when it reported one (B113); "length" when the
+    # completion used the client's whole output cap (B116).
     finish_reason: str = "stop"
 
 

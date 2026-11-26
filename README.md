@@ -38,33 +38,7 @@ endpoints is derived from the compiled application policy and the operator's end
 declarations *before* any scoring, and an empty set rejects the request instead of
 falling through to the nearest alternative.
 
-```mermaid
-flowchart TB
-    APP["Application<br/>(any OpenAI SDK,<br/>rf_live_ token)"] --> S1
-
-    subgraph RF["RouteForge (self-hosted)"]
-        direction TB
-        S1["1 · API<br/>/v1/chat/completions"] --> S2["2 · Policy gate<br/>identity · PII/PHI detect<br/>compile policy"]
-        S2 --> S3["3 · Execution context<br/>immutable, per request"]
-        S3 --> S4["4 · Task mode<br/>(always direct)"]
-        S4 --> S5["5 · Context optimisation<br/>Headroom + local CCR<br/>(opt-in)"]
-        S5 --> E{"Eligible set E(r)<br/>residency · regions · retention<br/>allowlists · cost cap"}
-        E -- "non-empty" --> S6["6 · Router<br/>score only inside E(r)"]
-        S6 --> S7["7 · Gateway<br/>quotas · breakers · failover<br/>(re-checks E on every attempt)"]
-        S7 --> S9["9 · Output controls<br/>leakage check · verification"]
-        S9 --> S10["10 · Governed response<br/>+ decision trace"]
-    end
-
-    S2 -- "gate error" --> REJ["Reject (fail closed)"]
-    E -- "empty" --> CORE["422 + minimal<br/>conflicting core"]
-    S7 --> ONP["8 · On-prem endpoints<br/>vLLM · Dynamo · NIM<br/>(onboarded at runtime)"]
-    S7 -. "only if policy allows" .-> CLD["8 · Cloud providers<br/>Azure · Bedrock · aggregators"]
-    S10 --> APP
-
-    REG[("Model registry<br/>endpoint declarations")] --> E
-    S10 -. "content-free record" .-> DB[("Routing outcomes<br/>→ replay simulator")]
-    S10 -. "redacted on export" .-> LF[("Langfuse / OTel")]
-```
+[![RouteForge ten-step overview](docs/architecture/diagrams/png/routeforge-ten-step-overview.png)](docs/architecture/diagrams/png/routeforge-ten-step-overview.png)
 
 | Step | What it decides | Module |
 |---|---|---|
@@ -77,9 +51,27 @@ flowchart TB
 | 7 / 8 | Quotas, circuit breakers, failover; calls to onboarded on-prem or enabled cloud endpoints | `app/gateway/` |
 | 9 | Output leakage checks and verification, client-output redaction | `app/output/verify.py` |
 
+### Architecture diagrams
+
+Rendered from the editable draw.io sources in
+[`docs/architecture/diagrams/`](docs/architecture/diagrams/) (click to enlarge).
+
+**Logical architecture** — the ten steps as layers, each labelled with the library or
+component that implements it:
+
+[![RouteForge logical architecture](docs/architecture/diagrams/png/routeforge-logical-architecture.png)](docs/architecture/diagrams/png/routeforge-logical-architecture.png)
+
+**Request / response flow** — one call end to end, numbered arrows 1–14:
+
+[![RouteForge request/response flow](docs/architecture/diagrams/png/routeforge-request-flow.png)](docs/architecture/diagrams/png/routeforge-request-flow.png)
+
+**Physical architecture** — the Kubernetes pods, services and PVCs deployed; inference
+endpoints are operator-run, not RouteForge pods:
+
+[![RouteForge physical architecture](docs/architecture/diagrams/png/routeforge-physical-architecture.png)](docs/architecture/diagrams/png/routeforge-physical-architecture.png)
+
 More detail: [`docs/architecture/`](docs/architecture/) (logical and request-flow notes,
-tier selection, sample request flows) and the draw.io sources in
-[`docs/architecture/diagrams/`](docs/architecture/diagrams/).
+tier selection, sample request flows).
 
 ## How RouteForge differs from other LLM routers
 

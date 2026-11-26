@@ -21,7 +21,9 @@
 \newcommand{\repourl}{\url{https://github.com/mani-mal/routeForge}}
 
 \title{RouteForge: Testing and Replaying\\Policy-Constrained LLM Routing}
-\author{Mani Malarvannan\\CDW\\\texttt{mani.malarvannan@cdw.com}}
+\author{Mani Malarvannan\\CDW\\\texttt{mani.malarvannan@cdw.com}
+  \and
+  Srini Ramaswamy, Ph.D.\\DNRS.ai, USA\\\texttt{srini@computer.org}}
 \date{}
 
 \begin{document}
@@ -43,7 +45,10 @@ decision of all 3{,}611 requests in four live runs, but not which endpoint serve
 and one prospective prediction of the cloud-bound count (180) was close to the later observation
 (178). All traffic is synthetic. We also show a restriction lost when an agent compacts its
 context, and a prototype that carries detector-derived placement restrictions across related
-calls.
+calls. Finally, building on the SMARt managed-autonomy framework, we outline a design, not yet
+implemented or evaluated, that extends eligibility from privacy restrictions to a task's
+governance state, replaces length-based tiering with calibrated suitability estimates inside the
+eligible set, and replays changes to expert-defined invariant anchors over ordered trajectories.
 \end{abstract}
 
 \noindent\textbf{Keywords:} LLM routing, data residency, policy compilation, replay,
@@ -99,9 +104,15 @@ and cloud endpoints:
     records, with scenario comparison, minimal conflicting cores, empirical prices of single
     requirements and bootstrap ranges, and its fidelity measured on live runs, including where it
     fails (Sections~\ref{sec:sim} and~\ref{sec:exp}).
+  \item \textbf{A design for governed autonomy (not evaluated).} An integration of the SMARt
+    managed-autonomy hierarchy~\cite{smartma,smartbounded} with eligibility, routing and replay:
+    a persistent authority state that can only narrow the eligible set, calibrated suitability
+    routing inside it, and replay of versioned invariant anchors, with the properties and
+    experiments that would test it (Section~\ref{sec:smart}). It adds no experimental results.
 \end{enumerate}
 Section~\ref{sec:traj} is a bounded extension to agent trajectories: a live counterexample and a
-prototype. Feasible oracles, hitting-set explanations, bootstrap intervals and persistent labels
+prototype. Section~\ref{sec:smart} carries the trajectory idea from \emph{where} a call may
+run to \emph{what} an agent may do. Feasible oracles, hitting-set explanations, bootstrap intervals and persistent labels
 are established ideas; we adapt and evaluate them here. We do not claim a better routing
 algorithm. Section~\ref{sec:neg} collects the limitations.
 
@@ -1071,7 +1082,7 @@ paid about 6.7 times the cheapest eligible stated price for the same answers.
 benchmark runs suggested the cheap model was better than the mid one. A larger suite of
 well-posed cases removed the gap.
 
-\paragraph{Not measured.} A baseline written without knowledge of the shipped code
+\paragraph{Not measured.} Any part of the design of Section~\ref{sec:smart}. A baseline written without knowledge of the shipped code
 (Section~\ref{sec:baseline}). A saving
 against a frontier-only baseline: the lab has no paid prices. Any difference in quality between
 the models: the larger suite is at ceiling. The database's share of gateway overhead
@@ -1273,6 +1284,266 @@ cost of a task; a per-call router against a switch-aware one on cost per complet
 regret against a feasible trajectory oracle once it is defined.
 
 % ---------------------------------------------------------------------------
+\section{Governed autonomy along a trajectory: a design}
+\label{sec:smart}
+
+The envelope of Section~\ref{sec:traj} constrains \emph{where} the next call of a task may run.
+It says nothing about \emph{what} the agent may do when the evidence it is acting on
+deteriorates. Consider a procurement assistant preparing a purchase order when a trusted
+inventory tool and a trusted vendor record disagree about the required part. Nothing sensitive
+was detected, so the envelope does not move, and the assistant keeps the authority to place the
+order. Routing the next call to an on-premises model does not help by itself; what matters is
+that the purchase is withheld until the evidence is adequate.
+
+The SMARt framework~\cite{smartma} treats this as a question of managed autonomy. It defines
+four governance modes---Stable, Meta-cognitive, Assisted and Regulated---with transitions driven
+by domain-specific evidence, and limits authoritative external output to Stable mode.
+Bounded Autonomy~\cite{smartbounded} adds invariant anchors defined by subject-matter experts
+(SMEs) and a finite governance abstraction over which it states convergence under explicit
+assumptions; it also discusses external enforcement for black-box deployments, which is the
+position a gateway is in. Managed Autonomy at Runtime~\cite{smartgears} distinguishes execution
+gears from the four governance states. This section describes how these concepts map onto
+RouteForge's eligibility, routing and replay.
+
+\textbf{Nothing in this section is implemented in the tagged revision or evaluated.} It is a
+design, with the properties and experiments that would test it. Throughout, we separate what a
+gateway can enforce deterministically from what remains empirical: a gateway can enforce a
+decision about permissions even when the evidence behind that decision is uncertain, but it
+cannot infer what an agent knows, guarantee factual answers, or make a probabilistic model
+reliable by routing it locally. We keep three variables apart that are easily conflated: a
+\emph{governance state}, an \emph{execution permission}, and a \emph{model tier}. In particular,
+moving down the hierarchy means \emph{less autonomous authority}, not a smaller or cheaper
+model; investigating a hard case may need a more capable local model.
+
+\subsection{Authority as part of the envelope}
+\label{sec:smart-state}
+
+\begin{table}[t]
+\centering
+\small
+\caption{A proposed RouteForge policy for the four SMARt states. The particular restrictions and
+recovery limits are deployment choices, not requirements of SMARt.}
+\label{tab:smart}
+\begin{tabular}{@{}p{2.3cm}p{5.4cm}p{6.2cm}@{}}
+\toprule
+state & gateway behaviour & permission boundary \\
+\midrule
+S: Stable & select an eligible model and run the configured checks &
+  approved actions and authoritative output proceed; existing placement and protection apply \\
+M: Meta-cognitive & bounded internal diagnosis, optionally on a designated local recovery model &
+  the contested external action and authoritative answer are held; internal drafts are marked
+  as such \\
+A: Assisted & request approved evidence, tools or expert assistance &
+  only separately authorised recovery operations; the contested action does not resume
+  automatically \\
+R: Regulated & stop contested autonomous execution; create a human-review item &
+  no automatic model or tool call for the contested action \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{State.} Each server-bound task carries a record with its application, an opaque task
+key, a state $\sigma_t \in \{S, M, A, R\}$, a state version, the active anchor-bundle version,
+reason codes, deadlines and a count of recovery attempts. A pure transition function
+\begin{equation}
+  \sigma_t = \delta\bigl(\sigma_{t-1},\, \mathrm{evidence}_t,\, \mathcal{A}\bigr)
+  \label{eq:smartdelta}
+\end{equation}
+maps the previous state, the evidence observed so far and the active anchor bundle
+$\mathcal{A}$ to the current state (Table~\ref{tab:smart}). The first triggers are observable:
+missing required fields, disagreeing trusted tool results, failed validators, stale evidence,
+repeated failed attempts and explicit human revocation. Model-derived uncertainty is added only
+once it is calibrated, and no hidden chain of thought is collected. Example rules: missing
+evidence moves S to M; a bounded diagnosis that does not succeed moves M to A; a critical
+anchor breach or an unanswered request for assistance moves the task to R, from any state. As
+with Eq.~\eqref{eq:envelope}, the state is updated from evidence already available
+\emph{before} the call it affects is dispatched; a new restriction never waits for the next
+request.
+
+\paragraph{Permissions.} At each mediated dispatch the permitted endpoints become an
+intersection,
+\begin{equation}
+  \E_t^{\mathrm{dispatch}} = \E_t^{\mathrm{policy}} \cap \E^{\mathrm{gov}}(\sigma_t) \cap
+  \E_t^{\mathrm{cap}} \cap \E_t^{\mathrm{adm}},
+  \label{eq:smartdispatch}
+\end{equation}
+of the eligible set of Section~\ref{sec:eligibility} (here $\E_t^{\mathrm{policy}}$, including
+the envelope), the projection of the governance state, the endpoints that meet any hard
+capability requirement, and those runtime admission can currently reserve. An analogous set
+$\mathcal{T}_t$ holds the permitted tool actions, so that a held purchase can coexist with a
+permitted local recovery call or a read-only evidence lookup; these are different operations,
+and a hold is not encoded as ``no model exists''. Because the governance term is intersected,
+it can only narrow: it never grants a cloud endpoint that policy excludes, and it is an explicit
+named input to the compiler, not a hidden coupling that moves a protection axis
+(Table~\ref{tab:axes}). If a hard capability requirement leaves no local endpoint, the request
+is rejected with that requirement in its conflicting core rather than clamped downward.
+
+\paragraph{Where it must be enforced.} Model dispatch, failover, cache hits, output release,
+tool execution and resume. A model gateway cannot stop a client from executing a tool outside
+its control, so tool actions need a harness or tool-gateway adapter. Output that must be checked
+before release is buffered; a streamed token cannot be recalled. Revocation prevents future
+mediated effects; it does not retract a prompt already sent to a cloud endpoint or an order
+already placed. Intervention \emph{during} inference needs serving-engine instrumentation that
+an OpenAI-compatible gateway does not have.
+
+\paragraph{What the prototype does not provide.} The append-only store of
+Section~\ref{sec:envelope} prevents lost updates but has no serialisation point, and its
+\code{header} mode lets a client reset its envelope by changing an identifier
+(Table~\ref{tab:envelope}). Authority needs both. Transitions are persisted transactionally with
+a version that acts as a fencing token, rechecked before dispatch and again before any external
+effect. The task key is bound by the server, and a child or resumed task inherits its parent's
+restrictions; a new identifier is not evidence of a clean task. A human release is
+authenticated, scoped to one task, action and anchor version, expiring and recorded, and a
+timeout is never an approval. In a first version automatic transitions only restrict; restoring
+authority needs an explicit release, and returning to S never removes an inherited placement
+restriction.
+
+\subsection{Calibrated suitability instead of length}
+\label{sec:smart-route}
+
+Section~\ref{sec:bench} measured the weakness of the length rule: a long request may be a simple
+extraction and a one-line request may need difficult judgement. A tempting replacement is an
+entropy score, but entropy is neither task difficulty nor business risk: a hard task can produce
+a confident wrong answer, and a creative one many valid answers. The design keeps three
+questions apart---how large the request is (context window and cost), which model is likely to
+succeed (selection), and what consequence is permitted (governance, Section~\ref{sec:smart-state})---and
+lets an uncertainty estimate inform only the second.
+
+Each candidate signal has a cost. Token entropy needs an inference pass and probability
+information; it is not a property of the prompt. Semantic entropy~\cite{semanticentropy}
+clusters sampled answers by meaning and computes
+$H_{\mathrm{sem}} = -\sum_k p_k \log p_k$ over the clusters; it detects a subset of unreliable
+answers, and several samples agreeing on the same false answer still give low entropy. A learned
+pre-dispatch predictor estimates suitability from task features before the main call; it is
+cheaper but needs labels and calibration. None observes an unrun cloud model's uncertainty for
+free, so we call the strategy \emph{uncertainty-aware}, not entropy-gated, until a specific
+measure is implemented and evaluated.
+
+The proposed selection is
+\begin{equation}
+  e^{*} = \arg\min_{e \in \E_t^{\mathrm{dispatch}}} \widehat{C}_{\mathrm{total}}(x, e)
+  \quad \text{s.t.} \quad
+  \widehat{P}(\mathrm{success} \mid x, e) \ge \tau_{\mathrm{workload}},
+  \label{eq:smartselect}
+\end{equation}
+with $\widehat{C}_{\mathrm{total}}$ including probes, verifiers, failed attempts and retries as
+well as the final generation, and the risk floor, escalation floor and explicit model pin kept
+as constraints. If no candidate qualifies, the task asks for assistance or returns an explicit
+hold. Probes are themselves dispatches, so they are drawn from the same
+$\E_t^{\mathrm{dispatch}}$ and stay inside the same privacy boundary and task budget. The
+property the code can guarantee is narrow: \emph{given} the eligible set and the suitability
+decisions supplied to it, it returns the cheapest qualifying candidate under the declared cost
+model. Whether the suitability decisions are right is empirical, and calibration on one
+distribution does not survive shift. Uncertainty-based routing has prior
+work~\cite{uncertaintyrouting}, and router evaluations can mislead with weak
+baselines~\cite{misguided}; the contribution to test is the integration with governed
+eligibility, against the length rule, the cheapest eligible endpoint, a fixed eligible pair and
+a cheap-first verifier cascade, on cases that include confidently wrong and validly diverse
+answers.
+
+\subsection{Replaying changes to invariant anchors}
+\label{sec:smart-anchor}
+
+An anchor is made operational as a versioned, executable check over identified evidence: an
+identifier and version, an application scope, an owner, an evidence source, a predicate drawn
+from an allowlisted checker type with structured parameters (never an expression pasted into
+configuration), units, behaviour on missing or invalid evidence, and the governance response it
+triggers. The approved artifact is stored immutably with its hash. Calling a rule an anchor does
+not make it safer; its predicate, evidence, scope and response have to be defined and validated.
+An example, in a schema that is proposed rather than shipped:
+\begin{verbatim}
+anchor_id: procurement.supplier_evidence_freshness
+version: 2
+scope: {application_id: procurement-assistant}
+checker: numeric_upper_bound
+input_feature: supplier_evidence_age_seconds
+parameters: {maximum: 14400}        # was 86400 in version 1
+missing_evidence: hold
+on_failure: {target_state: ASSISTED,
+             action: refresh_from_approved_supplier_source}
+owner_role: procurement-sme
+\end{verbatim}
+Suppose an SME proposes tightening the freshness limit from 24 hours to four. Before deployment,
+the replay of Section~\ref{sec:sim} should say how many tasks would lack fresh evidence, how many
+would enter M, A or R, which calls would move on-premises under the recovery policy, and how
+much additional checking, model use and human review would follow. That needs three extensions.
+Records must keep the anchor's inputs (here the evidence age at decision time, with source and
+validator versions), not only its verdict. Replay must group records by authenticated task,
+order them, initialise the state and run the production checker, transition, permission and
+routing code under the current and the proposed bundle. And, as in
+Table~\ref{tab:fidelity}, the current arm must reproduce the recorded transitions, holds and
+routes before the proposed arm is trusted.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Three kinds of claim a replay of an anchor change can support.}
+\label{tab:smartreplay}
+\begin{tabular}{@{}p{3.3cm}p{5.2cm}p{5.4cm}@{}}
+\toprule
+kind & what is available & defensible conclusion \\
+\midrule
+fixed-feature rule replay & recorded feature values and the checker and transition code &
+  exact checker, state and selection decisions for the recorded events \\
+frozen-trajectory scenario & recorded later events held fixed after an earlier decision changes &
+  conditional estimates, under the stated assumption that the future is unchanged \\
+closed-loop evaluation & new model, tool or human outcomes, generated or from a validated simulator &
+  measured outcomes of that experiment, with its own validity limits \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:smartreplay} separates what such a replay can claim. Changing an early state can
+prevent later events or cause different ones, which a row-wise replay cannot know. A new
+predicate that needs evidence the records do not hold requires recollection or a separate
+evaluation, and content-free records may not suffice for a semantic anchor: a hash identifies
+an artifact, it does not let its meaning be recomputed. Budgets and capacity follow the same
+split as the rest of the paper. Replay \emph{estimates} the effect of a change on recorded demand
+under declared profiles; it cannot prove that tomorrow's traffic, output lengths or review
+workload will match. The guarantee that a call cannot exceed the remaining task budget or an
+endpoint's concurrency allowance comes only from runtime admission---atomic reservations that
+cover probes, retries and output caps, reconciled against reported usage---which is the
+$\E_t^{\mathrm{adm}}$ term of Eq.~\eqref{eq:smartdispatch}. An approved anchor version then
+moves through shadow and canary stages, with a rule for whether active tasks keep their version.
+
+\subsection{Properties and experiments}
+\label{sec:smart-props}
+
+The properties to check, over generated event sequences in the manner of
+Section~\ref{sec:envelope}, are:
+\begin{enumerate}
+  \item every mediated endpoint attempt lies in $\E_t^{\mathrm{dispatch}}$;
+  \item a contested action cannot execute in R without a separately authenticated release that
+    satisfies the current policy;
+  \item changing the client's task identifier does not remove a restriction on inherited
+    context;
+  \item recovery terminates or escalates within its declared attempt and time limits, assuming
+    the scheduler and timeouts make progress;
+  \item missing or invalid required evidence never becomes a low-risk estimate;
+  \item an approval does not authorise changed arguments, a changed anchor version or a
+    different action;
+  \item replaying identical sufficient events and snapshots yields identical checker, transition
+    and selection decisions;
+  \item atomic reservations preserve the declared budget and resource invariants under
+    concurrent calls, within the accounting assumptions.
+\end{enumerate}
+These do not prove that every hazardous situation is detected. Detector completeness, validator
+soundness, honest input provenance and mediation of every effect remain assumptions or
+questions for evaluation, and the finite-abstraction result of~\cite{smartbounded} is not a
+statement about arbitrary model behaviour.
+
+Three experiments would test the design. \emph{Authority:} the entity-only envelope against the
+controller, measuring contested actions blocked, useful actions allowed, false holds, time to
+escalation and bounded recovery, with identity-reset and concurrency cases. \emph{Routing:} the
+baselines above against Eq.~\eqref{eq:smartselect}, measuring useful success, calibration,
+coverage, all-in cost including monitoring, latency and GPU time on held-out tasks, with
+thresholds fitted on separate data. \emph{Anchor replay:} fidelity of the current arm first,
+then predicted against observed changes in states, routes, rejections, load and review volume
+for several held-out rule changes. A model failure or a human hold stays in the denominator,
+tasks rather than turns are the unit of analysis, and directly replayable rule changes are
+reported apart from counterfactuals that need assumptions.
+
+% ---------------------------------------------------------------------------
 \section{Related work}
 \label{sec:related}
 
@@ -1373,6 +1644,17 @@ OCELOT~\cite{ocelot} budgets what an adversary can infer about a secret across a
 prototype of Section~\ref{sec:envelope} is a much coarser instance of the same idea---a label
 carried across calls---applied to a different decision: which endpoints may serve the next call.
 
+\paragraph{Managed autonomy and uncertainty-aware routing.} The governance states, triggers and
+invariant anchors of Section~\ref{sec:smart} are those of the SMARt
+framework~\cite{smartma,smartbounded}, and the separation of execution gears from governance
+states is from~\cite{smartgears}; the design contributes their mapping onto a gateway's eligible
+set, router and replay, not the states themselves. Semantic entropy~\cite{semanticentropy}
+estimates uncertainty over the meanings of sampled answers; Zhang et al.~\cite{uncertaintyrouting}
+route on uncertainty estimates, and Wang et al.~\cite{misguided} caution, for the benchmark and
+routers they study, that dynamic routers' gains can depend on weak baselines. AutoMix~\cite{automix}
+escalates on a model's self-verification. None of these restricts the candidate set by policy
+or governance state before selection.
+
 \paragraph{Policy languages, analysis and compilation.} XACML~\cite{xacml} and Open Policy
 Agent~\cite{opa} evaluate declarative policy before an action. Zelkova~\cite{zelkova} proves
 properties of access policies with an SMT solver; we check properties of a policy
@@ -1442,7 +1724,10 @@ good enough, it paid several times the cheapest eligible stated price. Replay of
 content-free decisions reproduced every admission decision but not the serving endpoint during
 outages. For agent trajectories, a restriction was lost to context compaction, and a small
 prototype carried detector-derived placement restrictions across calls; the broader provenance,
-identity, expiry and cost questions remain open.
+identity, expiry and cost questions remain open. With SMARt we outlined how a task's governance
+state, calibrated suitability estimates and versioned invariant anchors could enter the same
+order of operations---eligibility first, optimisation only inside it---and what would have to
+be measured before any of it is claimed.
 
 % ---------------------------------------------------------------------------
 \begin{thebibliography}{99}
@@ -1568,6 +1853,26 @@ Unsatisfiable Subsets of Constraints. Journal of Automated Reasoning 40(1):1--33
 
 \bibitem{efron} B.~Efron. Bootstrap Methods: Another Look at the Jackknife. Annals of Statistics
 7(1):1--26, 1979.
+
+\bibitem{smartma} S.~Ramaswamy. Intelligence as Managed Autonomy: Failure, Escalation, and
+Governance for Agentic AI Systems. Journal of Intelligent \& Robotic Systems 112, 89, 2026.
+arXiv:2605.27628.
+
+\bibitem{smartbounded} S.~Ramaswamy, D.~Nayak. Bounded Autonomy and Verifiable Safety for Agentic
+AI Enabled Automation. Journal of Intelligent \& Robotic Systems 112, 93, 2026.
+arXiv:2610.08815.
+
+\bibitem{smartgears} S.~Ramaswamy, W.~Miaosheng. Managed Autonomy at Runtime: Gear-Based Safety
+and Governance for Single- and Multi-Agent Cyber-Physical Systems. arXiv:2607.00334, 2026.
+
+\bibitem{semanticentropy} S.~Farquhar, J.~Kossen, L.~Kuhn, Y.~Gal. Detecting Hallucinations in
+Large Language Models Using Semantic Entropy. Nature 630, 625--630, 2024.
+
+\bibitem{uncertaintyrouting} T.~Zhang et al. Leveraging Uncertainty Estimation for Efficient LLM
+Routing. arXiv:2502.11021, 2025.
+
+\bibitem{misguided} S.~Wang et al. Dynamic LLM Routers are Often Misguided. arXiv:2610.02762,
+2026.
 
 \bibitem{goguen} J.~A.~Goguen, J.~Meseguer. Security Policies and Security Models. IEEE Symposium
 on Security and Privacy, pp.~11--20, 1982.

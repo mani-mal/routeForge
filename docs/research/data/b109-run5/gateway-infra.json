@@ -1,0 +1,6 @@
+{
+ "sessions": {
+  "att-5851cca4c6584bd5b5adf14c17fa90a6": "IR-16/B: no pod kill (0 restarts); 1x 502 backend_failed 18:39:39Z req-b1de46e6508d4f4e85669a6bd8d02ca2 (glm-5.3-flash Connection error after 4.9 s; sole eligible endpoint, no failover; upstream connect failure, B117). Listed unconditionally; the export (DevFoundry ada2f92) applies §5a last bullet.",
+  "att-05755c8e21824c9c85e20d0e1a1e14a4": "CI-15/C: no pod kill (0 restarts); 3x 502 backend_failed 22:55:47Z req-c96c56fc2ef241c3ab0ff76bb186137a, 22:56:00Z req-17741cae0ee243adb754bc0233eb4c1b, 22:57:03Z req-9ad6e85e397a4834b76541e01a2968b0 (glm-5.3-flash Connection error after ~4.9 s each; sole eligible endpoint, no failover; B/D glm calls in the same window ok; intermittent upstream connect failure, B117). Listed unconditionally; the export (DevFoundry ada2f92) applies §5a last bullet to the CI pair."
+ }
+}
