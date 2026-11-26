@@ -188,7 +188,7 @@ the audit trail in that sweep's task report.
 >    speculative calls (B111).
 >
 > **Order:** B101 → B100 → B102 → (B103 ∥ B104 ∥ B107) → B105 → B106 → B109 → B108.
-> B110 starts as soon as B100 lands. B111 is gated on B109's go decision. B112 is optional.
+> B110 starts as soon as B100 lands. B111 is gated on B109's go decision (GO, 2026-11-15). B112 is optional.
 
 ## B124 — Fleet overview: the Saved column's percentage overflows into the PII column (looks like garbled characters)  ✅ RESOLVED (2026-11-26, fix/b124-fleet-saved-overflow)
 
@@ -673,7 +673,18 @@ The first use is a DGX lab evaluation app for B109, set through the lab's raw ma
 A deterministic fixture also shows behaviour after an endpoint failure is
 policy-compliant.
 
-## B109 — EVAL (Switchyard P2a): go/no-go evidence  🟡 IN PROGRESS
+## B109 — EVAL (Switchyard P2a): go/no-go evidence  ✅ RESOLVED (2026-11-15, verdict GO)
+
+**Result 2026-11-15: GO** (run 5, `docs/research/switchyard-pilot-results.md`). With 38 of 40
+specs (IR-16 and CI-15 excluded for B117 glm connect errors):
+- D − C success: +2.6 pp, 90% CI [−7.9, +13.2].
+- D/C cost per success: 0.33, 90% CI [0.21, 0.49].
+- 0 violations; advisor p99 3.1 ms; 0 D fallbacks.
+
+GO holds in both sensitivity variants. Per the protocol, this justifies a shadow-monitored,
+per-app rollout only, not enforce-by-default. B111 is unblocked. Runs 1, 2 and 4 are void;
+run 3 is a reported pilot.
+
 
 **Status 2026-11-13.**
 - **Protocol:** pre-registered in `docs/research/switchyard-pilot-protocol.md`. DevFoundry
