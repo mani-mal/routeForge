@@ -69,6 +69,7 @@ def test_outcome_ctx_populated_on_success():
         "detected_entity_types", "app_policy_version", "complexity",
         "complexity_tier", "requested_model", "max_tokens", "routing_tokens",
         "trajectory_key", "inherited_entity_types",
+        "placement_raised_by", "placement_raised_to",
         "finish_reason", "reply_has_text", "reply_tool_calls", "reasoning_tokens",
         "tool_arg_redactions", "tool_arg_skipped", "tool_arg_skipped_types"}
     # B69: no tool call in this request, so nothing rewritten or skipped.
@@ -112,3 +113,54 @@ def test_outcome_ctx_has_no_prompt_text_even_with_ssn():
     dumped = json.dumps(internals["outcome_ctx"])
     assert SSN not in dumped
     assert "US_SSN" in internals["outcome_ctx"]["detected_entity_types"]
+
+
+def _raised_policy():
+    return AppPolicyView(residency="any", escalate_residency_on_detection=True)
+
+
+def test_outcome_ctx_records_detection_raised_placement_run():
+    """B71 item 7: a detected SSN under a rule that raises residency lands in
+    the outcome ctx as types + target residency (never the value)."""
+    s = load_settings()
+    reg = make_test_registry(s)
+    pipe = _pipeline(s, reg)
+    req = ChatRequest(messages=[Message(role="user", content=f"my ssn is {SSN}")])
+    internals: dict = {}
+    try:
+        asyncio.run(pipe.run("rid-r1", "acme", req, app_policy=_raised_policy(),
+                             internals=internals))
+    except NoEligibleCandidate:
+        pass
+    oc = internals["outcome_ctx"]
+    assert oc["placement_raised_by"] == ["US_SSN"]
+    assert oc["placement_raised_to"] == "onprem_only"
+    assert SSN not in json.dumps(oc)
+
+
+def test_outcome_ctx_no_raise_when_not_detected():
+    s = load_settings()
+    pipe = _pipeline(s, make_test_registry(s))
+    req = ChatRequest(messages=[Message(role="user", content="capital of France?")])
+    internals: dict = {}
+    asyncio.run(pipe.run("rid-r2", "acme", req, app_policy=_raised_policy(),
+                         internals=internals))
+    assert internals["outcome_ctx"]["placement_raised_by"] is None
+
+
+def test_outcome_ctx_records_detection_raised_placement_stream():
+    from app.pipeline import StreamFallback
+    s = load_settings()
+    pipe = _pipeline(s, make_test_registry(s))
+    req = ChatRequest(messages=[Message(role="user", content=f"my ssn is {SSN}")])
+    internals: dict = {}
+
+    async def go():
+        try:
+            await pipe.run_stream("rid-r3", "acme", req, app_policy=_raised_policy(),
+                                  internals=internals)
+        except (NoEligibleCandidate, StreamFallback):
+            pass
+
+    asyncio.run(go())
+    assert internals["outcome_ctx"]["placement_raised_by"] == ["US_SSN"]

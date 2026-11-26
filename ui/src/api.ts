@@ -465,6 +465,9 @@ export interface UsageByApp {
   token_intelligence_density: number;
   cost_intelligence_density: number;
   quality_source_distribution: Record<string, number>;
+  // B71 item 7: entity type -> requests whose placement a detection-fired rule
+  // tightened (types and counts only).
+  placement_raised_by_type?: Record<string, number>;
 }
 
 // Admin routes use a session cookie; same-origin (Vite proxies /admin) so the

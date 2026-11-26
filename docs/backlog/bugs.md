@@ -1934,6 +1934,11 @@ spots in what is recorded).
    planted PII matched `CREDIT_CARD` + `US_BANK_NUMBER` on random numbers and were raised to
    `onprem_only`. Correct fail-safe direction; the cost is not shown anywhere. *Wanted:*
    count detection-raised placements per entity type in the usage view.
+   *Fixed 2026-11-26 (feat/b71-detection-placements): item 7.* The outcome row records
+   `placement_raised_by` (entity types) and `placement_raised_to` when a rule moved
+   placement; `GET /admin/usage/by-application` returns `placement_raised_by_type` and the
+   Cross-app usage view shows a "Placement raised by detection" table (hidden when empty).
+   Two new nullable columns (see `docs/reference/routing-outcomes.md`).
 
 ## B70 — Failover and breaker findings from live run 2 (three endpoint names, one outage)  🟡 PARTLY FIXED
 
@@ -2232,6 +2237,8 @@ the simulator) and B63 (the shadow-prices-only output has no `rows` block).
 ## B65 — Uncertainty ranges: presentation and test-safety follow-ups from the P3c-3 re-review  🟡 PARTIAL
 
 **Update 2026-11-26 (fix/b65-uncertainty-followups):** items 1, 2, 4, 6 fixed; 3, 5, 7 remain.
+
+**Update 2026-11-26 (fix/b65-sim-perf):** items 5, 7 fixed; item 3 remains.
 
 **Severity:** low (edge-case presentation; no wrong number).
 **Found:** 2026-10-07, scoped re-review of the P3c-3 fix wave.

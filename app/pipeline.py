@@ -1016,7 +1016,9 @@ class Pipeline:
             internals["outcome_ctx"] = outcome_context(
                 ctx, max_tokens=client_output_cap(request.generation_params()),
                 trajectory_key=(trajectory.recorded_key(eff.trajectory_mode)
-                                if trajectory is not None else None))
+                                if trajectory is not None else None),
+                placement_raised_by=eff.placement_raised_by,
+                placement_raised_to=eff.placement.residency)
         # B69: zero until a tool-call argument is actually rewritten/skipped.
         self._record_tool_arg_stats(internals, ToolArgStats())
         self._publish_telemetry_views(internals, reps)
@@ -1576,7 +1578,9 @@ class Pipeline:
             internals["outcome_ctx"] = outcome_context(
                 ctx, max_tokens=client_output_cap(request.generation_params()),
                 trajectory_key=(trajectory.recorded_key(eff.trajectory_mode)
-                                if trajectory is not None else None))
+                                if trajectory is not None else None),
+                placement_raised_by=eff.placement_raised_by,
+                placement_raised_to=eff.placement.residency)
         # B69: zero until a tool-call argument is actually rewritten/skipped.
         self._record_tool_arg_stats(internals, ToolArgStats())
         self._publish_telemetry_views(internals, reps)

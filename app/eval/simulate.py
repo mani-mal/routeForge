@@ -859,6 +859,16 @@ def _recorded_vs_replayed(rows: list[RowResult]) -> dict:
                             if r.current.outcome == "routed")}
 
 
+def _group_by_app(results: list[RowResult]) -> dict[str, list[RowResult]]:
+    """Rows per application id, each list in input order, in ONE pass. The
+    callers sort the keys; re-filtering `results` once per application is
+    O(applications x rows) (B65 item 7)."""
+    groups: dict[str, list[RowResult]] = {}
+    for r in results:
+        groups.setdefault(r.row["application_id"], []).append(r)
+    return groups
+
+
 def _baseline(results: list[RowResult]) -> dict:
     """Fidelity check (spec §7): does the `current` arm's pick agree with the
     recorded first attempt, over simulated `ok` rows with a recorded
@@ -906,8 +916,9 @@ def _baseline(results: list[RowResult]) -> dict:
     if rows_compared:
         agree_count = sum(1 for r in compared if _agrees(r))
         agreement = agree_count / rows_compared
-        for app_id in sorted({r.row["application_id"] for r in compared}):
-            sub = [r for r in compared if r.row["application_id"] == app_id]
+        compared_by_app = _group_by_app(compared)
+        for app_id in sorted(compared_by_app):
+            sub = compared_by_app[app_id]
             by_app[app_id] = sum(1 for r in sub if _agrees(r)) / len(sub)
         for r in compared:
             if _agrees(r):
@@ -920,6 +931,7 @@ def _baseline(results: list[RowResult]) -> dict:
     top_disagreements = [{"recorded": rec, "simulated": sim, "count": n}
                          for (rec, sim), n in top]
     outcome = _outcome_stats(results)
+    results_by_app = _group_by_app(results)
     return {
         "rows_compared": rows_compared,
         "agreement": agreement,
@@ -934,19 +946,16 @@ def _baseline(results: list[RowResult]) -> dict:
             1 for r in diverted if _first_pick(r.current) == r.row["attempts"][0]),
         "recorded_failure_rows": sum(1 for r in results if recorded_failures(r.row)),
         "cost_usd": _recorded_vs_replayed(results),
-        "cost_by_app": {
-            app_id: _recorded_vs_replayed([r for r in results
-                                           if r.row["application_id"] == app_id])
-            for app_id in sorted({r.row["application_id"] for r in results})},
+        "cost_by_app": {app_id: _recorded_vs_replayed(results_by_app[app_id])
+                        for app_id in sorted(results_by_app)},
         "outcome_rows_compared": outcome["rows"],
         "outcome_agreement": outcome["agreement"],
         "outcome_warning": outcome["agreement"] is not None and outcome["agreement"] < 0.90,
         "recorded_rejected": outcome["recorded_rejected"],
         "recorded_rejected_but_routed": outcome["recorded_rejected_but_routed"],
         "recorded_routed_but_rejected": outcome["recorded_routed_but_rejected"],
-        "outcome_by_app": {
-            app_id: _outcome_stats([r for r in results if r.row["application_id"] == app_id])
-            for app_id in sorted({r.row["application_id"] for r in results})},
+        "outcome_by_app": {app_id: _outcome_stats(results_by_app[app_id])
+                           for app_id in sorted(results_by_app)},
     }
 
 
@@ -1061,8 +1070,12 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
     simulation_id = hashlib.sha256(
         json.dumps(full_inputs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
-    by_app_ids = sorted({r.row["application_id"] for r in results})
-    by_workload_labels = sorted({r.row.get("workload") or UNTAGGED_WORKLOAD for r in results})
+    rows_by_app = _group_by_app(results)
+    by_app_ids = sorted(rows_by_app)
+    rows_by_workload: dict[str, list[RowResult]] = {}
+    for r in results:
+        rows_by_workload.setdefault(r.row.get("workload") or UNTAGGED_WORKLOAD, []).append(r)
+    by_workload_labels = sorted(rows_by_workload)
     totals = _bucket_stats(results)
 
     sim = {
@@ -1074,12 +1087,8 @@ def summarize(results: list[RowResult], excluded: dict[str, int], *, inputs: dic
         "rows": rows_block([r.row for r in results], excluded),
         "baseline": _baseline(results),
         "totals": totals,
-        "by_app": {app_id: _bucket_stats([r for r in results
-                                          if r.row["application_id"] == app_id])
-                  for app_id in by_app_ids},
-        "by_workload": {wl: _bucket_stats([r for r in results
-                                           if (r.row.get("workload") or UNTAGGED_WORKLOAD) == wl])
-                       for wl in by_workload_labels},
+        "by_app": {app_id: _bucket_stats(rows_by_app[app_id]) for app_id in by_app_ids},
+        "by_workload": {wl: _bucket_stats(rows_by_workload[wl]) for wl in by_workload_labels},
         "moves": _moves(results),
         "new_rejections": _new_rejections(results),
         "affected_apps": sorted({r.row["application_id"] for r in results

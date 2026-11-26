@@ -192,6 +192,11 @@ class EffectivePolicy:
     #: Every declared cross-axis rule that fired, whether or not it was allowed
     #: to move placement — the certificate's `sp.cross_axis_rules_fired`.
     cross_axis_rules_fired: tuple[str, ...] = ()
+    #: B71 item 7: the entity TYPES (never values) that fired a rule which
+    #: actually MOVED placement (`placement.sources` names it). Empty when no
+    #: rule fired, or it fired without tightening residency. Recorded on the
+    #: outcome row so the usage view can count detection-raised placements.
+    placement_raised_by: tuple[str, ...] = ()
     #: `(axis, offending_value)` for every stored value that could not be
     #: parsed and was denied to the safe default. Compilation still fails
     #: closed; this is the evidence that survives it, so a validator can tell a
@@ -631,6 +636,7 @@ def apply_signals(eff: EffectivePolicy, detected_entity_types: tuple[str, ...],
     fired = eff.cross_axis_rules_fired + (f"rule:{sensitivity}",)
 
     placement = eff.placement
+    raised_by: tuple[str, ...] = ()
     if eff.escalate_residency_on_detection:
         rule_residency = getattr(rule, "residency", None)
         if (rule_residency in _RESIDENCY_RANK
@@ -645,6 +651,9 @@ def apply_signals(eff: EffectivePolicy, detected_entity_types: tuple[str, ...],
                 residency=rule_residency,   # tighten only; never the other way
                 sources=placement.sources + (f"rule:{sensitivity}",),
             )
+            matched = (set(detected_entity_types)
+                       & set(getattr(rule, "entities", ()) or ()))
+            raised_by = tuple(sorted(matched or detected_entity_types))
 
     return replace(
         eff,
@@ -656,6 +665,7 @@ def apply_signals(eff: EffectivePolicy, detected_entity_types: tuple[str, ...],
         # matched rule decides the label). Not a monotonicity bug.
         sensitivity=sensitivity if sensitivity is not None else eff.sensitivity,
         cross_axis_rules_fired=fired,
+        placement_raised_by=raised_by or eff.placement_raised_by,
     )
 
 

@@ -432,6 +432,12 @@ class RoutingOutcome(Base):
     # docs/reference/routing-outcomes.md.
     trajectory_key: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     inherited_entity_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # B71 item 7: the entity TYPES that fired a sensitivity rule which
+    # tightened placement, and the residency it tightened to. Null when
+    # detection did not move placement. Content-free. Deployed DBs need the
+    # two ALTERs in docs/reference/routing-outcomes.md.
+    placement_raised_by: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    placement_raised_to: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # B71 item 6: the content-free shape of the backend's reply. An HTTP 200
     # with no text and no tool call is a served row; these say so. Null on a
     # row with no reply and on rows written before the columns existed.
