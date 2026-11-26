@@ -73,12 +73,26 @@ def test_recorded_failures_from_backend_errors_skips_size_refusals():
 def test_recorded_failures_infers_only_where_the_record_is_unambiguous():
     """Before B117 a `backend_failed` row served nothing, so every attempt
     failed; an `ok` row's extra attempts may be escalations, so none is
-    inferred. A row WITH the key (even null) is never inferred from."""
+    inferred. A recorded list (even empty) is never inferred from."""
     assert recorded_failures(_row(status="backend_failed", chosen=None,
                                   attempts=["m1", "m2"])) == frozenset({"m1", "m2"})
     assert recorded_failures(_row(attempts=["m1", "m2"], chosen="m2")) == frozenset()
-    assert recorded_failures(_row(status="backend_failed", chosen=None, attempts=["m1"],
+    assert recorded_failures(_row(attempts=["m1", "m2"], chosen="m2",
                                   backend_errors=None)) == frozenset()
+    assert recorded_failures(_row(status="backend_failed", chosen=None, attempts=["m1"],
+                                  backend_errors=[])) == frozenset()
+
+
+def test_a_pre_b117_row_as_the_admin_export_writes_it_has_backend_errors_null():
+    """Review fix: `_export_outcome_dict` emits every column, so a pre-B117
+    `backend_failed` row arrives with the key PRESENT and null -- the
+    attempts must still be read as failed."""
+    row = _row(status="backend_failed", chosen=None, attempts=["m1"],
+               completion_tokens=0, backend_errors=None)
+    assert "backend_errors" in row
+    assert recorded_failures(row) == frozenset({"m1"})
+    (r,), _ = _run([row], _mids())
+    assert (r.current.model, r.current.failed) == ("m2", ("m1",))
 
 
 # --- B70 item 5: breaker state ------------------------------------------------
@@ -96,9 +110,10 @@ def test_recorded_open_circuit_is_handed_to_the_router_in_both_arms():
     assert r.current.attempted == ("m2",) and r.current.failed == ()
 
 
-def test_breaker_diverted_rows_are_their_own_class_and_left_out_of_agreement():
+def test_breaker_diverted_rows_stay_in_agreement_and_are_counted_separately():
     """Two diverted rows (one per app) and two ordinary ones, one of which
-    disagrees. Model agreement is over the two ordinary rows only."""
+    disagrees. Replay reproduces both diversions, so model agreement over
+    all four rows is 3/4; the diverted count is informational only."""
     snap = _mids(3, apps=("app-a", "app-b"))
     rows = [_row("d1", "app-a", attempts=["m2"], chosen="m2", rejected=_open("m1")),
             _row("d2", "app-b", attempts=["m2"], chosen="m2", rejected=_open("m1")),
@@ -109,22 +124,27 @@ def test_breaker_diverted_rows_are_their_own_class_and_left_out_of_agreement():
     assert b["breaker_diverted"] == 2
     assert b["breaker_diverted_by_app"] == {"app-a": 1, "app-b": 1}
     assert b["breaker_diverted_reproduced"] == 2
-    assert b["rows_compared"] == 2 and b["agreement"] == 0.5
-    assert b["by_app"] == {"app-a": 1.0, "app-b": 0.0}
+    assert b["rows_compared"] == 4 and b["agreement"] == 0.75
+    assert b["by_app"] == {"app-a": 1.0, "app-b": 0.5}
     assert b["top_disagreements"] == [{"recorded": "m3", "simulated": "m1", "count": 1}]
     # Outcome agreement still covers every simulated row.
     assert b["outcome_rows_compared"] == 4 and b["outcome_agreement"] == 1.0
     report = render_report(sim)
-    assert ("Model agreement EXCLUDES 2 breaker-diverted row(s) (app-a 1 · app-b 1)"
-            in report)
-    assert "matches the record on 2 of them" in report
+    assert ("2 breaker-diverted row(s) (app-a 1 · app-b 1), replayed with their recorded "
+            "open circuits; 2 reproduced." in report)
 
 
-def test_an_app_whose_rows_are_all_diverted_has_no_model_agreement():
-    rows = [_row("d1", attempts=["m2"], chosen="m2", rejected=_open("m1"))]
-    _results, sim = _summary(rows, _mids())
-    assert (sim["baseline"]["rows_compared"], sim["baseline"]["agreement"]) == (0, None)
-    assert sim["baseline"]["by_app"] == {}
+def test_a_diverted_row_replay_gets_wrong_is_a_real_disagreement():
+    """The record: m1 open, m3 served. Replay, given m1 open, picks the
+    cheaper closed peer m2 -- a mis-ranking among the closed peers. It must
+    show in agreement, by_app and top_disagreements (and so the gate)."""
+    rows = [_row("d", attempts=["m3"], chosen="m3", rejected=_open("m1"))]
+    _results, sim = _summary(rows, _mids(3))
+    b = sim["baseline"]
+    assert (b["rows_compared"], b["agreement"]) == (1, 0.0)
+    assert b["by_app"] == {"app-a": 0.0}
+    assert b["top_disagreements"] == [{"recorded": "m3", "simulated": "m2", "count": 1}]
+    assert (b["breaker_diverted"], b["breaker_diverted_reproduced"]) == (1, 0)
 
 
 def test_no_diverted_rows_prints_no_breaker_sentence():

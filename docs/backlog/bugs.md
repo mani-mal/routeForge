@@ -1892,8 +1892,8 @@ gateway's failover does (same `max_failover_attempts` bound); the endpoint serve
 the one costed, and an arm whose every pick fails rejects with `backend_failed`. Only the
 row's own recorded failures are honoured -- any other endpoint, including one a proposal adds,
 is assumed to answer. Conservative readings: a `context_overflow` entry is not replayed (size
-refusals stay the declared-window prediction), and a pre-B117 row honours failures only when
-it is `backend_failed`. `baseline.cost_usd` / `cost_by_app` put the recorded cost beside the
+refusals stay the declared-window prediction), and a pre-B117 row (`backend_errors` null)
+honours failures only when it is `backend_failed`. `baseline.cost_usd` / `cost_by_app` put the recorded cost beside the
 replayed one, and every report prints both. See `docs/reference/policy-simulator.md` §5.1.
 
 **Severity:** medium (no request failed; these are wasted calls, a wrong prior and blind
@@ -1957,11 +1957,11 @@ allowed below the hard floor; allowed (and recorded) for a complexity-raised tie
 *Fixed 2026-11-26 (fix/b70-replay-breaker): item 5. Item 4 stays open.* Replay reads the
 breaker state a row records -- the `rejected` entries of its first decision with code
 `circuit_open` -- and hands those circuits to the real router in both arms, so the router's
-own drop / step-down / bypass logic reproduces the diversion. Such `ok` rows are their own
-class, `baseline.breaker_diverted` (with `breaker_diverted_by_app` and
-`breaker_diverted_reproduced`), left out of model agreement (`rows_compared`, `agreement`,
-`by_app`, `top_disagreements`); `report.md` states how many were excluded, overall and per
-app. A bypassed circuit, or an open one in another tier, is not recorded and so not
+own drop / step-down / bypass logic reproduces the diversion, and these rows no longer show
+as false disagreement. They stay in model agreement (so a real mis-ranking among a tier's
+closed peers still reaches `--min-agreement`) and are counted separately for visibility:
+`baseline.breaker_diverted`, `breaker_diverted_by_app` and `breaker_diverted_reproduced`,
+printed in `report.md` overall and per app. A bypassed circuit, or an open one in another tier, is not recorded and so not
 modelled. See `docs/reference/policy-simulator.md` §5.1.
 
 **Severity:** medium (two requests failed that a different ordering could have served; the
@@ -1988,7 +1988,8 @@ rest are record and replay gaps that change numbers the paper reports).
    181.5 s). Five half-open probes were seen during the outage. *To decide:* whether the
    probe interval should shorten after the first probe, or stay as it is.
 5. *(Fixed 2026-11-26, fix/b70-replay-breaker: breaker-diverted rows are replayed with their
-   recorded open circuits and reported as their own class -- see the note above.)*
+   recorded open circuits, so they no longer read as disagreement, and are counted
+   separately -- see the note above.)*
    **Replay does not model breaker state.** All 65 model disagreements in the run (agreement
    0.926 over 880 served rows) are rows the live router sent to the next endpoint because the
    breaker was open, and replay sent to the down one. Outcome agreement was 1.0. *Wanted:*

@@ -325,8 +325,13 @@ def recorded_failures(row: dict) -> frozenset[str]:
       which a `token_scale` assumption changes; replay keeps predicting it
       from the declared `context_window` (docs/reference/policy-simulator.md
       §6) instead of replaying it.
-    - A row from before B117 (no `backend_errors` key) that is
-      `backend_failed`: nothing was served, so every attempt failed.
+    - A row from before B117 that is `backend_failed`: nothing was served,
+      so every attempt is read as failed. `backend_errors` is then null or
+      absent -- the admin export writes every column, so a pre-B117 row
+      exports it as null. (Rare over-read: the gateway can exhaust on the
+      failover cap after a served answer when a later escalation hop keeps
+      failing, so one of those attempts may have answered.) A post-B117
+      `backend_failed` row always carries its list.
     - Anything else -- a pre-B117 `ok` row included, whose extra attempts may
       be confidence escalations rather than failures -- reads as no failure.
       Only a failure the row states is honoured; none is inferred."""
@@ -335,7 +340,7 @@ def recorded_failures(row: dict) -> frozenset[str]:
         return frozenset(e["model"] for e in errors
                          if isinstance(e, dict) and isinstance(e.get("model"), str)
                          and e["model"] and e.get("kind") != "context_overflow")
-    if "backend_errors" not in row and row.get("status") == "backend_failed":
+    if errors is None and row.get("status") == "backend_failed":
         attempts = row.get("attempts")
         return frozenset(attempts) if _is_str_list(attempts) else frozenset()
     return frozenset()
@@ -796,9 +801,9 @@ def _overflow_contradicted(r: RowResult) -> bool:
 def _breaker_diverted(r: RowResult) -> bool:
     """B70 item 5: the row's recorded first decision excluded at least one
     endpoint because its circuit was open (`recorded_open_circuits`). Replay
-    hands those circuits to the router, so its pick on such a row reproduces
-    the live diversion by construction -- which is why these rows are their
-    own class in `_baseline` and are left out of model agreement."""
+    hands those circuits to the router, so such a row is modelled, and it
+    stays in model agreement like any other; `_baseline` only counts these
+    rows separately, for visibility."""
     return bool(recorded_open_circuits(r.row))
 
 
@@ -888,26 +893,24 @@ def _baseline(results: list[RowResult]) -> dict:
     estimate), not an ordinary routing disagreement -- but it still counts
     toward `agreement`/`by_app`/`top_disagreements` like any other.
 
-    `breaker_diverted` (B70 item 5) counts the `ok` rows with a recorded
-    first attempt whose recorded first decision excluded an open circuit
-    (`_breaker_diverted`). They are their own class: replay is handed the
-    same open circuits, so agreeing on them proves nothing about routing,
-    and before replay modelled them they were all counted as disagreement.
-    They are left out of `rows_compared`, `agreement`, `by_app`,
-    `top_disagreements` and `overflow_contradicted`;
-    `breaker_diverted_by_app` breaks the count down and
-    `breaker_diverted_reproduced` says how many of them replay's first pick
-    matches anyway (a check on the breaker modelling, never gated on).
+    `breaker_diverted` (B70 item 5) counts the compared rows whose recorded
+    first decision excluded an open circuit (`_breaker_diverted`). Replay is
+    handed the same open circuits, so these rows no longer show as false
+    disagreement; they STAY in `rows_compared`, `agreement`, `by_app`,
+    `top_disagreements` and `overflow_contradicted` -- excluding them could
+    hide a real disagreement (replay mis-ranking the closed peers of a tier
+    with a flapping circuit) from the `--min-agreement` gate. The count,
+    `breaker_diverted_by_app` and `breaker_diverted_reproduced` (how many of
+    them agree, by `_agrees`) are informational only.
 
     `cost_usd` (B71 item 3) is the recorded cost beside the `current` arm's
     replayed cost, over every simulated row (`cost_by_app` per app).
     `recorded_failure_rows` counts the simulated rows whose attempt chain
     records a failure (`recorded_failures`) -- honoured by replay whenever
     an arm picks that endpoint."""
-    with_attempt = [r for r in results
-                    if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
-    diverted = [r for r in with_attempt if _breaker_diverted(r)]
-    compared = [r for r in with_attempt if not _breaker_diverted(r)]
+    compared = [r for r in results
+                if r.row.get("status") == "ok" and (r.row.get("attempts") or [])]
+    diverted = [r for r in compared if _breaker_diverted(r)]
     rows_compared = len(compared)
     agreement = None
     by_app: dict[str, float] = {}
@@ -942,8 +945,7 @@ def _baseline(results: list[RowResult]) -> dict:
         "breaker_diverted": len(diverted),
         "breaker_diverted_by_app": dict(sorted(
             Counter(r.row["application_id"] for r in diverted).items())),
-        "breaker_diverted_reproduced": sum(
-            1 for r in diverted if _first_pick(r.current) == r.row["attempts"][0]),
+        "breaker_diverted_reproduced": sum(1 for r in diverted if _agrees(r)),
         "recorded_failure_rows": sum(1 for r in results if recorded_failures(r.row)),
         "cost_usd": _recorded_vs_replayed(results),
         "cost_by_app": {app_id: _recorded_vs_replayed(results_by_app[app_id])
@@ -1228,8 +1230,9 @@ def _usd(value: float) -> str:
 
 def replay_state_lines(baseline: dict) -> list[str]:
     """B70 item 5 / B71 item 3: plain sentences every report prints under
-    the agreement banner -- how many breaker-diverted rows model agreement
-    leaves out (overall and per app; only when there are any), how many rows
+    the agreement banner -- how many compared rows were breaker-diverted and
+    replayed with their recorded open circuits, and how many of those replay
+    reproduced (overall and per app; only when there are any), how many rows
     replay a recorded failed attempt (only when there are any), and,
     always, the recorded cost beside the replayed one, overall and per app.
     Tolerates a baseline block from before these keys existed."""
@@ -1239,10 +1242,9 @@ def replay_state_lines(baseline: dict) -> list[str]:
         per_app = " · ".join(f"{app_id} {n}" for app_id, n in
                              sorted(baseline["breaker_diverted_by_app"].items()))
         lines.append(
-            f"Model agreement EXCLUDES {diverted} breaker-diverted row(s) ({per_app}): the "
-            "live router passed an endpoint whose circuit was open, and replay is handed the "
-            "same open circuits, so these rows cannot test the routing. Replay's first pick "
-            f"matches the record on {baseline['breaker_diverted_reproduced']} of them.")
+            f"{diverted} breaker-diverted row(s) ({per_app}), replayed with their recorded "
+            f"open circuits; {baseline['breaker_diverted_reproduced']} reproduced. They are "
+            "included in model agreement.")
     failure_rows = baseline.get("recorded_failure_rows", 0)
     if failure_rows:
         lines.append(

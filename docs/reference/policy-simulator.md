@@ -323,7 +323,7 @@ the export window).
 | `inputs` | `export_sha256`, `snapshot_sha256`, `proposal_sha256`, `proposal_title`, `routing_policy_version`, `registry_version`, `snapshot_generated_at`, `serving_policy` (the four posture values every app was compiled under — the snapshot's), `window` (`{start, end}` over the simulated rows' `ts`, or `null`), `since` (the `--since` cut as an ISO string, or `null`). With `--uncertainty` only: `uncertainty` (§10.7); the key is absent otherwise. With a stated capacity only: `capacity` (§11.8); absent otherwise |
 | `edits` | the proposal, minus `schema`/`title`, keys sorted — exactly what was asked for |
 | `rows` | `simulated` (count), `estimated_tokens` (simulated rows with no backend token count, sized and priced from `routing_tokens` — §6) and `excluded` (count per reason, first match wins: `before_since`, `cache_hit`, `unknown_status`, `unknown_app`, `missing_features`, `missing_routing_tokens`). `missing_routing_tokens` counts a well-formed row that records no size: not `ok`, no `routing_tokens`, and `prompt_tokens` zero — a rejected or failed row from before B60. A mistyped `routing_tokens` (anything but an integer ≥ 0 or null) is `missing_features`. `missing_features` counts a row whose `request_id`, `complexity`, `prompt_tokens` (numeric), `completion_tokens` (numeric or null), `detected_entity_types` (list of strings or null; the key must be present), `workload`, `attempts` or `ts` is missing or mistyped, or whose `requested_model` (non-empty string or null) or `max_tokens` (integer > 0 or null) is mistyped — these two may be absent (an older export) — a malformed row is counted, never a crash. A non-object export line is a skipped-line warning. |
-| `baseline` | the fidelity check (§5). Model agreement: `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted` — all over rows that are **not** breaker-diverted. Breaker-diverted rows (B70 item 5, §5.1): `breaker_diverted` (count), `breaker_diverted_by_app` (`{app: count}`, apps with none omitted), `breaker_diverted_reproduced` (how many of them replay's first pick matches anyway). Recorded endpoint state and cost (B71 item 3, §5.1): `recorded_failure_rows` (simulated rows whose attempt chain records a failure, which replay honours whenever an arm picks that endpoint), `cost_usd` (`{recorded, replayed}` over every simulated row — the rows' recorded `cost_usd` beside the `current` arm's replayed cost) and `cost_by_app.<id>` (same shape). Outcome agreement: `outcome_rows_compared`, `outcome_agreement`, `outcome_warning`, `recorded_rejected`, `recorded_rejected_but_routed`, `recorded_routed_but_rejected`, and `outcome_by_app.<id>` (`rows`, `agreement` and the same three counts) |
+| `baseline` | the fidelity check (§5). Model agreement: `rows_compared`, `agreement`, `warning`, `by_app`, `top_disagreements`, `overflow_contradicted`. Breaker-diverted rows (B70 item 5, §5.1), informational and **included** in model agreement: `breaker_diverted` (compared rows whose first decision recorded an open circuit), `breaker_diverted_by_app` (`{app: count}`, apps with none omitted), `breaker_diverted_reproduced` (how many of them agree). Recorded endpoint state and cost (B71 item 3, §5.1): `recorded_failure_rows` (simulated rows whose attempt chain records a failure, which replay honours whenever an arm picks that endpoint), `cost_usd` (`{recorded, replayed}` over every simulated row — the rows' recorded `cost_usd` beside the `current` arm's replayed cost) and `cost_by_app.<id>` (same shape). Outcome agreement: `outcome_rows_compared`, `outcome_agreement`, `outcome_warning`, `recorded_rejected`, `recorded_rejected_but_routed`, `recorded_routed_but_rejected`, and `outcome_by_app.<id>` (`rows`, `agreement` and the same three counts) |
 | `totals`, `by_app.<id>`, `by_workload.<label>` | each the same block: `requests`, `route_changed`, `newly_rejected`, `newly_served`, `cost_usd` (`{current, proposed, delta}` — each arm's routed rows), `cost_usd_both_routed` (same shape, over only the rows routed in **both** arms), `latency_ms.p50`/`.p95` (same shape), `quality_mean` (same shape), `onprem_share` (`{current, proposed}`), `overflow_hops` (`{current, proposed}`) |
 | `moves` | top 20 `{from, to, count}` model-pair moves; `(rejected)` is a legal `from`/`to` value |
 | `new_rejections` | `{by_app: {...}, by_code: {...}, by_core: {...}}` — rows that were `routed` under `current` and `rejected` under `proposed`. A row whose every proposed pick failed as the row records (§5.1) has code `backend_failed` and `by_core` key `"(backend_failed)"`, as a context-window rejection has `"(context_window)"`. `by_core` (P3b) groups by the `proposed` arm's minimal conflicting core: requirement ids joined with `+` (e.g. `"residency+requested_model"`), in `REQUIREMENT_ORDER`; when the core itself is empty it falls back to `"(state:" + ",".join(core_state) + ")"`; when both are empty (the router's own core computation failed) it is `"(unknown)"`. See `docs/reference/conflicting-core.md`. |
@@ -346,8 +346,9 @@ Opens with the caveat, verbatim, as a blockquote:
 > model other failover, escalation, breaker state or caching.
 
 Then, in order: one line stating both baseline agreements (always printed); when there are
-any, a line saying how many breaker-diverted rows model agreement **excludes**, overall and
-per app (§5.1), and a line saying how many rows replay a recorded failed attempt; the
+any, a line saying how many compared rows were breaker-diverted and replayed with their
+recorded open circuits, overall and per app, and how many of them replay reproduced (§5.1),
+and a line saying how many rows replay a recorded failed attempt; the
 recorded cost beside the replayed cost, overall and per app (always printed); a baseline
 warning for each agreement that is below 0.90, a note for every recorded outcome replay
 does not reproduce and for rows sized from an estimate (§5), an **Assumptions** section
@@ -373,8 +374,8 @@ Simulation reconstructs context and re-runs real code, so it can drift from what
 actually served. The baseline check (spec §7, `app/eval/simulate.py::_baseline`) is that
 fidelity check — **not** the headline result.
 
-For every simulated `ok` row that carries a recorded first attempt (`row["attempts"]`) and is
-not breaker-diverted (§5.1), the `current` arm's pick is compared with `attempts[0]`. The report shows the overall agreement
+For every simulated `ok` row that carries a recorded first attempt (`row["attempts"]`), the
+`current` arm's pick is compared with `attempts[0]`. The report shows the overall agreement
 rate, the rate per app, and the top 10 `recorded → simulated` disagreement pairs by count.
 Agreement below 90% prints a warning at the top of `report.md`.
 
@@ -432,7 +433,7 @@ diluted as described above; `--min-agreement 1.0` refuses any disagreement.
   agreement for exactly this reason: Qwen Code pins its model, and 190 of 194 rows were
   replayed unpinned to a different model.
 - **Circuit-breaker state the row does not record** — a row records only the open circuits its
-  first decision excluded (§5.1). Rows that record one are left out of model agreement.
+  first decision excluded (§5.1); those are replayed with them, nothing else is.
 - **A budget, a declared context window or an endpoint's state changed since the traffic was
   recorded** — a request rejected then can route now, and the reverse. This lowers *outcome*
   agreement.
@@ -479,21 +480,27 @@ http_status, kind}` per failed attempt, in the order of `attempts`; null when no
   "context_overflow"`**: a size refusal depends on the request's size, which a
   `workload.token_scale` assumption changes, so replay keeps predicting it from the declared
   `context_window` (§6) instead of replaying it.
-- A row from **before B117** (no `backend_errors` key) honours failures only when it is
-  `backend_failed`: nothing was served, so every attempt failed. A pre-B117 `ok` row's extra
-  attempts may be confidence escalations, not failures, so none is inferred.
+- A row from **before B117** honours failures only when it is `backend_failed`: nothing was
+  served, so every attempt is read as failed. Its `backend_errors` is null (the admin export
+  writes every column, so a pre-B117 row exports the key as null) or absent; a post-B117
+  `backend_failed` row always carries its list. A pre-B117 `ok` row's extra attempts may be
+  confidence escalations, not failures, so none is inferred.
+- **That reading can over-fail an endpoint, rarely.** A pre-B117 `backend_failed` row may
+  include an attempt that *answered*: the gateway can exhaust on the failover cap after a
+  served answer when a later escalation hop keeps failing. Treating all its attempts as
+  failed then marks an endpoint failed that answered on that row.
 - A breaker-diverted row is any `ok` row with a recorded first attempt whose `rejected` list
   names a `circuit_open` endpoint — whether or not that endpoint would have won the score.
 
-**Breaker-diverted rows are their own class.** Because replay is handed the same open
-circuits, agreeing on them proves nothing about routing (and before this fix they were all
-disagreements). They are **left out** of `rows_compared`, `agreement`, `by_app`,
-`top_disagreements` and `overflow_contradicted`, and reported as `breaker_diverted` (with
-`breaker_diverted_by_app`). `breaker_diverted_reproduced` says how many of them replay's first
-pick matches anyway — a check on the breaker modelling, never gated on. `report.md` states the
-excluded count, overall and per app, next to the agreement line. Outcome agreement still covers
-every simulated row. Rows that only record a failed attempt are *not* excluded: their first
-decision is replayed unchanged and compared as before.
+**Breaker-diverted rows stay in model agreement, and are counted separately.** Because replay
+is handed each row's recorded open circuits, these rows are modelled and no longer show as
+false disagreement (before this fix every one of them did). They stay **in** `rows_compared`,
+`agreement`, `by_app`, `top_disagreements`, `overflow_contradicted` and the `--min-agreement`
+gate: excluding them could hide a real disagreement — replay mis-ranking the closed peers in a
+tier with a flapping circuit, say. For visibility they are also counted: `breaker_diverted`
+(with `breaker_diverted_by_app`) and `breaker_diverted_reproduced` (how many of them agree),
+informational only. `report.md` prints "N breaker-diverted row(s) (app n · …), replayed with
+their recorded open circuits; M reproduced" next to the agreement line.
 
 **Recorded cost beside replayed cost.** `baseline.cost_usd` is `{recorded, replayed}` over
 every simulated row: the sum of the rows' recorded `cost_usd` (a missing or non-numeric value
@@ -503,9 +510,8 @@ exactly: replay prices at the snapshot's prices, does not replay confidence esca
 recorded escalation's extra hops are in the recorded cost), and prices a row with no backend
 token count at its admission estimate (§6).
 
-Every new key is additive, so `schema` stays `routeforge.simulation/v1` (as for `rows` in §8.5).
-One existing figure changes meaning on an export with breaker-diverted rows: `rows_compared`
-(and so `agreement`) no longer counts them. Replayed figures change too, for every caller of
+Every new key is additive, so `schema` stays `routeforge.simulation/v1` (as for `rows` in §8.5),
+and no existing key changes meaning. Replayed figures do change, for every caller of
 the replay (proposal, shadow prices, scenarios, uncertainty, capacity, the advisor report),
 on any export whose rows record an open circuit or a failed attempt.
 
