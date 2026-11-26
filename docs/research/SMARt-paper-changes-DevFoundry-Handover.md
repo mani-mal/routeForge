@@ -5,7 +5,7 @@
 **To:** DevFoundry
 **Paper:** `docs/research/paper/main.tex` (and `main.pdf`, `arxiv-submission.tar.gz`), new section
 "Governed autonomy along a trajectory: a design" (`\label{sec:smart}`)
-**Read with:** [`SMARt-DevFoundry-Handoff.md`](./SMARt-DevFoundry-Handoff.md) (2026-11-10). That note
+**Read with:** `SMARt-DevFoundry-Handoff.md` (2026-11-10; kept out of the repo, see `.gitignore`). That note
 settled **who owns what**; this one records **what the paper now says**, so that what DevFoundry
 builds matches the published design.
 
